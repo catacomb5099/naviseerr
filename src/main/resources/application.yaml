@@ -1,3 +1,7 @@
 spring:
   application:
     name: naviseerr
+
+last-fm-service:
+    url: http://ws.audioscrobbler.com/2.0
+    api_key: f72e6119180c02c7c3dec26be56ff0dd
