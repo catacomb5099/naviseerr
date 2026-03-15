@@ -1,4 +1,4 @@
-package com.catacomb5099.naviseerr.services;
+package com.catacomb5099.naviseerr.services.lastfm;
 
 import com.catacomb5099.naviseerr.util.LastFMAPIMethod;
 import com.catacomb5099.naviseerr.util.LastFMAPIMethodHelper;

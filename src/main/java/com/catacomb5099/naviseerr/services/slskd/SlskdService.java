@@ -1,4 +1,4 @@
-package com.catacomb5099.naviseerr.services;
+package com.catacomb5099.naviseerr.services.slskd;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;

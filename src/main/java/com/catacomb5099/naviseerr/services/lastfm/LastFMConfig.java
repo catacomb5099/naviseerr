@@ -1,4 +1,4 @@
-package com.catacomb5099.naviseerr.services;
+package com.catacomb5099.naviseerr.services.lastfm;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;

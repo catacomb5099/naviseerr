@@ -1,4 +1,4 @@
-package com.catacomb5099.naviseerr.services;
+package com.catacomb5099.naviseerr.services.slskd;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
@@ -13,11 +13,11 @@ import java.util.List;
 import java.util.Map;
 
 @Component
-public class SearchResultProcessor {
+public class SlskdSearchResultProcessor {
     private final SlskdService slskdService;
     private final TrackMatchingService trackMatchingService;
 
-    public SearchResultProcessor(SlskdService slskdService, TrackMatchingService trackMatchingService) {
+    public SlskdSearchResultProcessor(SlskdService slskdService, TrackMatchingService trackMatchingService) {
         this.slskdService = slskdService;
         this.trackMatchingService = trackMatchingService;
     }
@@ -26,12 +26,16 @@ public class SearchResultProcessor {
         return pollUntilComplete(searchId, 500L);
     }
 
+    // polling with exponential backoff until SearchState.isComplete = true
     private Mono<SearchState> pollUntilComplete(String searchId, long delay) {
         return slskdService.getSearchResultsProgress(searchId)
-                .flatMap(state -> state.getIsComplete() ? Mono.just(state) : Mono.delay(Duration.ofMillis(delay)).then(pollUntilComplete(searchId, Math.min(delay * 2, 30000L))));
+                .flatMap(state ->
+                        state.getIsComplete() ?
+                                Mono.just(state) :
+                                Mono.delay(Duration.ofMillis(delay))
+                                        .then(pollUntilComplete(searchId, Math.min(delay * 2, 30000L))));
     }
 
-    // polling with exponential backoff until SearchState.isComplete = true
     // filter songs that are not relevant
     // filter songs that are not flac, or above 320 bit rate
     // sort by relevance, SearchResponseItem.uploadSpeed
