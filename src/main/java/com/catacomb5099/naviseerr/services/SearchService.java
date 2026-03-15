@@ -3,21 +3,22 @@ package com.catacomb5099.naviseerr.services;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.util.LastFMAPIMethod;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
-
 @RestController
 public class SearchService {
     private final LastFMService lastFMService;
     private final SlskdService slskdService;
+    private final SearchResultProcessor searchResultProcessor;
 
-    public SearchService(LastFMService lastFMService, SlskdService slskdService) {
+    public SearchService(LastFMService lastFMService, SlskdService slskdService, SearchResultProcessor searchResultProcessor) {
         this.lastFMService = lastFMService;
         this.slskdService = slskdService;
+        this.searchResultProcessor = searchResultProcessor;
     }
 
     @RequestMapping("/search/{query}")
@@ -26,14 +27,11 @@ public class SearchService {
     }
 
     @RequestMapping("/download/{query}")
-    Mono<Boolean> downloadSearch(@PathVariable String query) {
+    Mono<String> downloadSearch(@PathVariable String query) {
         return slskdService.searchResults(query)
-                .delayElement(Duration.ofSeconds(30))
-                .flatMap(searchState -> slskdService.getSearchResultsProgress(searchState.getId()))
-                .flatMap(finishedSearchState -> {
-                    SearchResponseItem responseItem = finishedSearchState.getResponses().getFirst();
-                    return slskdService.enqueueDownload(responseItem.getUsername(), responseItem.getFiles().getFirst());
-                });
+            .flatMap(searchState -> searchResultProcessor.pollUntilComplete(searchState.getId()))
+            .flatMap(finishedState -> searchResultProcessor.selectBestFile(finishedState, query))
+            .flatMap(entry -> slskdService.enqueueDownload(entry.getKey().getUsername(), entry.getValue()));
     }
 
     @RequestMapping("/download/search/progress/{searchId}")

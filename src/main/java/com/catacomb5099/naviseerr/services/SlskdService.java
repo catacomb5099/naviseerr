@@ -48,20 +48,12 @@ public class SlskdService {
                 .bodyToMono(SearchState.class);
     }
 
-    public Mono<Boolean> enqueueDownload(String username, SearchFile file) {
-        // The slskd API expects a JSON array of file objects with keys "filename" and "size".
-        Map<String, Object> fileObject = Map.of(
-                "filename", file.getFilename(),
-                "size", file.getSize()
-        );
-
-        List<Map<String, Object>> requestBody = List.of(fileObject);
-
+    public Mono<String> enqueueDownload(String username, SearchFile file) {
         return webClient
                 .post()
                 .uri(TRANSFERS_ENDPOINT + "/" + username)
-                .bodyValue(requestBody)
+                .bodyValue(List.of(file))
                 .retrieve()
-                .bodyToMono(Boolean.class);
+                .bodyToMono(String.class);
     }
 }
