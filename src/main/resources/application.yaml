@@ -5,3 +5,8 @@ spring:
 last-fm-service:
     url: http://ws.audioscrobbler.com/2.0
     api_key: f72e6119180c02c7c3dec26be56ff0dd
+
+slskd-service:
+    url: http://192.168.0.2:5030/api/v0/
+    api_key: vKXTHrYfQXj8Riqzk57zJm6zhSN88gPjc2xfJSXZnCatPI3s72pHyATAJKuNLq7R
+    timeout: 10000
