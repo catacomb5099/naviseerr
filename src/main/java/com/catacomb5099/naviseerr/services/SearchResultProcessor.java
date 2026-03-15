@@ -48,7 +48,7 @@ public class SearchResultProcessor {
     }
 
     private boolean isRelevant(SearchFile file, String trackTitle) {
-        return trackMatchingService.isMatch(file.getFilename(), trackTitle);
+        return trackMatchingService.isMatch(trackTitle, file.getFilename());
     }
 
     private boolean isFlacAndHighBitrate(SearchFile file) {
