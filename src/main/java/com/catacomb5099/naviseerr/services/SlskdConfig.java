@@ -8,7 +8,6 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Configuration
 public class SlskdConfig {
     private final static String API_KEY_HEADER = "X-API-Key";
-    private final static String SEARCHES_ENDPOINT = "/searches";
 
     @Value("${slskd-service.url}")
     private String url;
@@ -18,7 +17,7 @@ public class SlskdConfig {
     @Bean
     public WebClient slskdWebClient() {
         return WebClient.builder()
-                .baseUrl(url + SEARCHES_ENDPOINT)
+                .baseUrl(url)
                 .defaultHeader(API_KEY_HEADER, apiKey)
                 .build();
     }
