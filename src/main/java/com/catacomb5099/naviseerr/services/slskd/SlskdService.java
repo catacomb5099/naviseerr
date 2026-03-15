@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services.slskd;
 
+import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,12 +49,12 @@ public class SlskdService {
                 .bodyToMono(SearchState.class);
     }
 
-    public Mono<String> enqueueDownload(String username, SearchFile file) {
+    public Mono<QueueDownloadResponse> enqueueDownload(String username, SearchFile file) {
         return webClient
                 .post()
                 .uri(TRANSFERS_ENDPOINT + "/" + username)
                 .bodyValue(List.of(file))
                 .retrieve()
-                .bodyToMono(String.class);
+                .bodyToMono(QueueDownloadResponse.class);
     }
 }

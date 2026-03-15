@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services;
 
+import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.services.lastfm.LastFMService;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
@@ -28,7 +29,7 @@ public class SearchService {
     }
 
     @RequestMapping("/download/{query}")
-    Mono<String> downloadSearch(@PathVariable String query) {
+    Mono<QueueDownloadResponse> downloadSearch(@PathVariable String query) {
         return slskdService.searchResults(query)
             .flatMap(searchState -> slskdSearchResultProcessor.pollUntilComplete(searchState.getId()))
             .flatMap(finishedState -> slskdSearchResultProcessor.selectBestFile(finishedState, query))
