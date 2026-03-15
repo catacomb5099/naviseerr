@@ -28,7 +28,7 @@ public class SearchResultProcessor {
 
     private Mono<SearchState> pollUntilComplete(String searchId, long delay) {
         return slskdService.getSearchResultsProgress(searchId)
-                .flatMap(state -> state.getComplete() ? Mono.just(state) : Mono.delay(Duration.ofMillis(delay)).then(pollUntilComplete(searchId, Math.min(delay * 2, 30000L))));
+                .flatMap(state -> state.getIsComplete() ? Mono.just(state) : Mono.delay(Duration.ofMillis(delay)).then(pollUntilComplete(searchId, Math.min(delay * 2, 30000L))));
     }
 
     // polling with exponential backoff until SearchState.isComplete = true
