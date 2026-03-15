@@ -3,6 +3,7 @@ package com.catacomb5099.naviseerr.services.slskd;
 import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -56,5 +57,13 @@ public class SlskdService {
                 .bodyValue(List.of(file))
                 .retrieve()
                 .bodyToMono(QueueDownloadResponse.class);
+    }
+
+    public Mono<TransferedFile> getDownloadProgress(String username, String downloadId) {
+        return webClient
+                .get()
+                .uri(TRANSFERS_ENDPOINT + "/" + username + "/" + downloadId)
+                .retrieve()
+                .bodyToMono(TransferedFile.class);
     }
 }

@@ -1,27 +1,25 @@
 package com.catacomb5099.naviseerr.services;
 
-import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.lastfm.LastFMService;
+import com.catacomb5099.naviseerr.services.slskd.SlskdDownloadProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.util.LastFMAPIMethod;
+import lombok.AllArgsConstructor;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
 @RestController
+@AllArgsConstructor
 public class SearchService {
     private final LastFMService lastFMService;
     private final SlskdService slskdService;
     private final SlskdSearchResultProcessor slskdSearchResultProcessor;
-
-    public SearchService(LastFMService lastFMService, SlskdService slskdService, SlskdSearchResultProcessor slskdSearchResultProcessor) {
-        this.lastFMService = lastFMService;
-        this.slskdService = slskdService;
-        this.slskdSearchResultProcessor = slskdSearchResultProcessor;
-    }
+    private final SlskdDownloadProcessor slskdDownloadProcessor;
 
     @RequestMapping("/search/{query}")
     Mono<String> search(@PathVariable String query) {
@@ -29,11 +27,12 @@ public class SearchService {
     }
 
     @RequestMapping("/download/{query}")
-    Mono<QueueDownloadResponse> downloadSearch(@PathVariable String query) {
+    Mono<TransferedFile> downloadSearch(@PathVariable String query) {
         return slskdService.searchResults(query)
             .flatMap(searchState -> slskdSearchResultProcessor.pollUntilComplete(searchState.getId()))
             .flatMap(finishedState -> slskdSearchResultProcessor.selectBestFile(finishedState, query))
-            .flatMap(entry -> slskdService.enqueueDownload(entry.getKey().getUsername(), entry.getValue()));
+            .flatMap(entry -> slskdService.enqueueDownload(entry.getKey().getUsername(), entry.getValue()))
+                .flatMap(queueDownloadResponse -> slskdDownloadProcessor.pollUntilComplete(queueDownloadResponse.getEnqueued().getFirst().getUsername(), queueDownloadResponse.getEnqueued().getFirst().getId()));
     }
 
     @RequestMapping("/download/search/progress/{searchId}")
