@@ -14,5 +14,5 @@ slskd-service:
     min-bit-rate: 320
     retry-count: 2
     max-poll-attempts: 30
-    first-back-off-duration-ms: 500
+    first-back-off-duration-ms: 50
     max-files-per-download: 10
