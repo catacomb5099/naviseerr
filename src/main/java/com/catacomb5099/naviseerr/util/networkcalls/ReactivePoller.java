@@ -6,6 +6,7 @@ import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -32,31 +33,35 @@ public class ReactivePoller {
                 );
     }
 
-    public static <T> Mono<T> pollUntilAny(
-            List<Supplier<Mono<T>>> calls,
+    public static <M, T> Mono<T> pollUntilAny(
+            List<Supplier<Mono<M>>> calls,
             Predicate<T> isSuccess,
             Predicate<T> isFailure,
-            RetryBackoffSpec retrySpec
+            RetryBackoffSpec retrySpec,
+            Function<M, Supplier<Mono<T>>> mToTSupplier
     ) {
         if (calls == null || calls.isEmpty()) {
             return Mono.error(new IllegalArgumentException("No suppliers provided"));
         }
 
-        return Mono.defer(() -> tryNextSupplier(calls, 0, isSuccess, isFailure, retrySpec));
+        return Mono.defer(() -> tryNextSupplier(calls, 0, isSuccess, isFailure, retrySpec, mToTSupplier));
     }
 
-    private static <T> Mono<T> tryNextSupplier(
-            List<Supplier<Mono<T>>> calls,
+    private static <M, T> Mono<T> tryNextSupplier(
+            List<Supplier<Mono<M>>> calls,
             int index,
             Predicate<T> isSuccess,
             Predicate<T> isFailure,
-            RetryBackoffSpec retrySpec
+            RetryBackoffSpec retrySpec,
+            Function<M, Supplier<Mono<T>>> mToTSupplier
     ) {
         if (index >= calls.size()) {
             return Mono.empty();
         }
-        return pollUntil(calls.get(index), isSuccess, isFailure, retrySpec)
-                .onErrorResume(PollingFailedException.class, ex -> tryNextSupplier(calls, index + 1, isSuccess, isFailure, retrySpec));
+
+        return calls.get(index).get()
+                .flatMap(m -> pollUntil(mToTSupplier.apply(m), isSuccess, isFailure, retrySpec))
+                .onErrorResume(PollingFailedException.class, ex -> tryNextSupplier(calls, index + 1, isSuccess, isFailure, retrySpec, mToTSupplier));
     }
 
 
