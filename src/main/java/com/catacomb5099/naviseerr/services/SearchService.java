@@ -32,7 +32,7 @@ public class SearchService {
             .flatMap(searchState -> slskdSearchResultProcessor.pollUntilComplete(searchState.getId()))
             .flatMap(finishedState -> slskdSearchResultProcessor.selectBestFile(finishedState, query))
             .flatMap(entry -> slskdService.enqueueDownload(entry.getKey().getUsername(), entry.getValue()))
-                .flatMap(queueDownloadResponse -> slskdDownloadProcessor.pollUntilComplete(queueDownloadResponse.getEnqueued().getFirst().getUsername(), queueDownloadResponse.getEnqueued().getFirst().getId()));
+                .flatMap(queueDownloadResponse -> slskdDownloadProcessor.pollUntilComplete(queueDownloadResponse.getEnqueued()));
     }
 
     @RequestMapping("/download/search/progress/{searchId}")

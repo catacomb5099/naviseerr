@@ -19,6 +19,8 @@ public class LastFMService {
 
     @Value("${last-fm-service.api_key}")
     private String apiKey;
+    @Value("${last-fm-service.search-result-limit}")
+    private int searchResultsLimit;
 
     public LastFMService(WebClient lastFmWebClient, LastFMAPIMethodHelper lastFMAPIMethodHelper) {
         this.lastFmWebClient = lastFmWebClient;
@@ -34,7 +36,7 @@ public class LastFMService {
                 .uri(uriBuilder -> uriBuilder
                         .queryParam(API_KEY_HEADER, apiKey)
                         .queryParam(FORMAT_HEADER, "json")
-                        .queryParam(LIMIT_HEADER, 10)
+                        .queryParam(LIMIT_HEADER, searchResultsLimit)
                         .queryParam(METHOD_HEADER, method)
                         .queryParam(paramName, query)
                         .build())
