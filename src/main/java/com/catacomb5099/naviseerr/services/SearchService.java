@@ -30,9 +30,8 @@ public class SearchService {
     Mono<TransferedFile> downloadSearch(@PathVariable String query) {
         return slskdService.searchResults(query)
             .flatMap(searchState -> slskdSearchResultProcessor.pollUntilComplete(searchState.getId()))
-            .flatMap(finishedState -> slskdSearchResultProcessor.selectBestFile(finishedState, query))
-            .flatMap(entry -> slskdService.enqueueDownload(entry.getKey().getUsername(), entry.getValue()))
-                .flatMap(queueDownloadResponse -> slskdDownloadProcessor.pollUntilComplete(queueDownloadResponse.getEnqueued()));
+            .flatMap(finishedState -> slskdSearchResultProcessor.selectBestFiles(finishedState, query))
+            .flatMap(slskdDownloadProcessor::pollUntilComplete);
     }
 
     @RequestMapping("/download/search/progress/{searchId}")
