@@ -20,10 +20,10 @@ public class ReactivePoller {
     ) {
         return Mono.defer(call)
                 .flatMap(response -> {
-                    if (isSuccess.test(response)) {
-                        return Mono.just(response);
-                    } else if (isFailure.test(response)) {
+                    if (isFailure.test(response)) {
                         return Mono.error(new PollingFailedException("Polling failed due to failure state"));
+                    } else if (isSuccess.test(response)) {
+                        return Mono.just(response);
                     } else {
                         return Mono.error(new PollingInProgressException("Still processing"));
                     }
