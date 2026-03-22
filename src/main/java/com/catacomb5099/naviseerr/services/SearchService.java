@@ -28,8 +28,7 @@ public class SearchService {
 
     @RequestMapping("/download/{query}")
     Mono<TransferedFile> downloadSearch(@PathVariable String query) {
-        return slskdService.searchResults(query)
-            .flatMap(searchState -> slskdSearchResultProcessor.pollUntilComplete(searchState.getId()))
+        return slskdSearchResultProcessor.pollUntilComplete(query)
             .flatMap(finishedState -> slskdSearchResultProcessor.selectBestFiles(finishedState, query))
             .flatMap(slskdDownloadProcessor::pollUntilComplete);
     }
