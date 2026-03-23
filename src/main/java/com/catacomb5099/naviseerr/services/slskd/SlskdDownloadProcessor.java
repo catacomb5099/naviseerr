@@ -16,10 +16,13 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import static reactor.netty.http.HttpConnectionLiveness.log;
+
 @Component
 public class SlskdDownloadProcessor {
     private final SlskdService slskdService;
 
+    // TODO: currently when one download fails, we move on the the next one when in fact that download should be retried X times
     @Value("${slskd-service.retry-count}")
     int retryAttempts;
     @Value("${slskd-service.max-poll-attempts}")
@@ -39,7 +42,14 @@ public class SlskdDownloadProcessor {
      */
     public Mono<TransferedFile> pollUntilComplete(List<Map.Entry<SearchResponseItem, SearchFile>> files) {
         List<Supplier<Mono<QueueDownloadResponse>>> calls = files.stream()
-                .map(fileEntry -> (Supplier<Mono<QueueDownloadResponse>>) () -> slskdService.enqueueDownload(fileEntry.getKey().getUsername(), fileEntry.getValue()))
+                .map(fileEntry -> (Supplier<Mono<QueueDownloadResponse>>) () -> slskdService.enqueueDownload(fileEntry.getKey().getUsername(), fileEntry.getValue())
+                        .doOnSubscribe(subscription -> log.info("Starting Slskd enqueue for user='{}' file='{}'",
+                                fileEntry.getKey().getUsername(), fileEntry.getValue()))
+                        .doOnSuccess(result -> log.info("Successfully triggered Slskd enqueue for user='{}' file='{}'",
+                                fileEntry.getKey().getUsername(), fileEntry.getValue().getFilename()))
+                        .doOnError(error -> log.error("Failed to trigger Slskd enqueue for user='{}' file='{}' with error='{}'",
+                                fileEntry.getKey().getUsername(), fileEntry.getValue(), error))
+                )
                 .toList();
 
         Predicate<TransferedFile> done = tf -> Arrays.stream(TransferState.values())
@@ -51,9 +61,19 @@ public class SlskdDownloadProcessor {
         RetryBackoffSpec retry = ReactivePoller.defaultBackoff(Duration.ofMillis(firstBackOffDuration), maxPollAttempts);
         Function<QueueDownloadResponse, Supplier<Mono<TransferedFile>>> function = queueDownloadResponse -> {
             var enqueued = queueDownloadResponse.getEnqueued().getFirst();
-            return () -> slskdService.getDownloadProgress(enqueued.getUsername(), enqueued.getId());
+            return () -> slskdService.getDownloadProgress(enqueued.getUsername(), enqueued.getId())
+                    .doOnSubscribe(subscription -> log.info("Polling Slskd download progress for user='{}' id='{}'",
+                            enqueued.getUsername(), enqueued.getId()))
+                    .doOnSuccess(result -> log.info("Polled Slskd download progress for user='{}' id='{}', percentComplete={}%, states={}",
+                            enqueued.getUsername(), enqueued.getId(), result.getPercentComplete(), TransferedFileUtil.getStateList(result)))
+                    .doOnError(error -> log.error("Failed to poll Slskd download progress for user='{}' id='{}' with error='{}'",
+                            enqueued.getUsername(), enqueued.getId(), error));
         };
 
-        return ReactivePoller.pollUntilAny(calls, done, failed, retry, function);
+        return ReactivePoller.pollUntilAny(calls, done, failed, retry, function)
+                .doOnSubscribe(subscription -> log.info("Polling Slskd download progress"))
+                .doOnSuccess(result -> log.info("Completed download progress for user='{}' id='{}', states={}",
+                        result.getUsername(), result.getId(), result.getState()))
+                .doOnError(error -> log.error("Failed to poll Slskd download progress with error='{}'", error));
     }
 }

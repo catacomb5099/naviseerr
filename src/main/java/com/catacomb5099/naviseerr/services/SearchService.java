@@ -35,7 +35,7 @@ public class SearchService {
 
     @RequestMapping("/download/{query}")
     Mono<TransferedFile> downloadSearch(@PathVariable String query) {
-        // add logging to say user asked to download {query}
+        log.info("Received Slskd download search request for query='{}'", query);
         return slskdSearchResultProcessor.pollUntilComplete(query)
             .flatMap(finishedState -> slskdSearchResultProcessor.selectBestFiles(finishedState, query))
             .flatMap(slskdDownloadProcessor::pollUntilComplete);
