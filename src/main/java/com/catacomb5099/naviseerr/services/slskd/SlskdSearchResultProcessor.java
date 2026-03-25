@@ -73,7 +73,6 @@ public class SlskdSearchResultProcessor {
                     .sorted(Comparator.comparingInt(entry -> -entry.getKey().getUploadSpeed()))
                     .toList();
 
-            // log how many candidates were returned from the search for query, and how many candidates were relevant, and then mention that that list is limited to X due to the maxFilesPerDownload env variable
             log.info("Completed candidate selection for query='{}' - {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, state.getFileCount(), candidates.size(), maxFilesPerDownload);
             return candidates.isEmpty() ? null : candidates.stream().limit(maxFilesPerDownload).toList();
         });

@@ -91,6 +91,7 @@ public class TrackMatchingService {
      * "Riptide - Vance Joy"
      * "Vance Joy - Riptide"
      */
+    // TODO: makes the assumption that title and artist is separated by -, adjust with lastFM responses
     private TitleParts extractParts(String cleanTitle) {
         if (cleanTitle == null || !cleanTitle.contains("-")) {
             return new TitleParts(null, cleanTitle);
@@ -108,32 +109,6 @@ public class TrackMatchingService {
         // Common pattern: "Title - Artist" or "Artist - Title"
         // We'll store both and check for both in the matching
         return new TitleParts(part1, part2);
-    }
-
-    /**
-     * Find best match from a list of torrent file paths
-     */
-    public MatchResult findBestMatch(String cleanTitle, List<String> torrentFilePaths) {
-        int bestScore = 0;
-        String bestMatch = null;
-
-        for (String torrentPath : torrentFilePaths) {
-            String filename = extractFilename(torrentPath);
-            String normalizedClean = normalize(cleanTitle);
-            String normalizedTorrent = normalize(filename);
-
-            int tokenScore = FuzzySearch.tokenSortRatio(normalizedClean, normalizedTorrent);
-            int partialScore = FuzzySearch.partialRatio(normalizedClean, normalizedTorrent);
-
-            int maxScore = Math.max(tokenScore, partialScore);
-
-            if (maxScore > bestScore) {
-                bestScore = maxScore;
-                bestMatch = torrentPath;
-            }
-        }
-
-        return new MatchResult(bestMatch, bestScore, bestScore >= MIN_TOKEN_SCORE);
     }
 
     // Helper classes
