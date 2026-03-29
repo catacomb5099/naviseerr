@@ -5,8 +5,6 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.util.TrackMatchingService;
 import com.catacomb5099.naviseerr.util.networkcalls.ReactivePoller;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -20,9 +18,10 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import static reactor.netty.http.HttpConnectionLiveness.log;
+
 @Component
 public class SlskdSearchResultProcessor {
-    private static final Logger log = LoggerFactory.getLogger(SlskdSearchResultProcessor.class);
     private final SlskdService slskdService;
     private final TrackMatchingService trackMatchingService;
 
@@ -54,12 +53,20 @@ public class SlskdSearchResultProcessor {
         RetryBackoffSpec retry = ReactivePoller.defaultBackoff(Duration.ofMillis(firstBackOffDuration), maxPollAttempts);
         Function<SearchState, Supplier<Mono<SearchState>>> function = startSearchState -> () -> slskdService.getSearchResultsProgress(startSearchState.getId())
                 .doOnSubscribe(subscription -> log.info("Polling Slskd search progress for query='{}'", query))
-                .doOnSuccess(result -> log.info("Polled Slskd search progress, found {} results", result.getFileCount()))
-                .doOnError(error -> log.error("Failed to poll Slskd search progress with error='{}'", error));
+                .doOnSuccess(result -> {
+                    if (result != null) {
+                        log.info("Polled Slskd search progress, found {} results", result.getFileCount());
+                    }
+                })
+                .doOnError(error -> log.error("Failed to poll Slskd search progress", error));
 
-        return ReactivePoller.pollUntilAny(List.of(call), done, failed, retry, function)
+        return ReactivePoller.pollUntilAny(List.of(call), done, failed, retry, function, 0)
                 .doOnSubscribe(subscription -> log.info("Reactive Polling Slskd search progress for query='{}' (subscription={})", query, subscription))
-                .doOnSuccess(result -> log.info("Completed Slskd search for query='{}', with {} results", query, result.getFileCount()))
+                .doOnSuccess(result -> {
+                    if (result != null) {
+                        log.info("Completed Slskd search for query='{}', with {} results", query, result.getFileCount());
+                    }
+                })
                 .doOnError(error -> log.error("Slskd search poll error for query='{}', with error='{}'", query, error));
 
     }
@@ -74,7 +81,7 @@ public class SlskdSearchResultProcessor {
                     .toList();
 
             log.info("Completed candidate selection for query='{}' - {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, state.getFileCount(), candidates.size(), maxFilesPerDownload);
-            return candidates.isEmpty() ? null : candidates.stream().limit(maxFilesPerDownload).toList();
+            return candidates.stream().limit(maxFilesPerDownload).toList();
         });
     }
 
@@ -85,4 +92,17 @@ public class SlskdSearchResultProcessor {
     private boolean isFlacAndHighBitrate(SearchFile file) {
         return (file.getBitRate().isPresent() && file.getBitRate().get() > minBitRate) || file.getExtension().equals("flac");
     }
+
+    // TESTS
+    // log failure for search results
+    // if search results failed, do not call search progress
+    // if search results succeeded, call search progress
+    // given list, search files are ordered by upload speed correctly
+    // given list, parameterised filter flac or min bit rate.
+        // if flac and low bit rate list but min is 320, only flac remains
+        // if no flac, and mixed bit rate, list should all be above min 160
+        // if no flac, and mixed bit rate, list should all be above min 320
+        // if no flac, and all low bit rate, return null
+    // assuming list of files that are mocked to return isMatch, returned list only has those mocked matched files
+    // assuming list of files that are all mocked to not match, return null
 }
