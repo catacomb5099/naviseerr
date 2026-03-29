@@ -12,11 +12,11 @@ import java.util.function.Supplier;
 
 public class ReactivePoller {
 
-    public static <T> Mono<T> pollUntil(
+    private static <T> Mono<T> pollUntil(
         Supplier<Mono<T>> call,
         Predicate<T> isSuccess,
         Predicate<T> isFailure,
-        RetryBackoffSpec retrySpec
+        RetryBackoffSpec pollSpec
     ) {
         return Mono.defer(call)
                 .flatMap(response -> {
@@ -29,7 +29,7 @@ public class ReactivePoller {
                     }
                 })
                 .retryWhen(
-                        retrySpec.filter(ex -> ex instanceof PollingInProgressException)
+                        pollSpec.filter(ex -> ex instanceof PollingInProgressException)
                 );
     }
 
@@ -37,31 +37,37 @@ public class ReactivePoller {
             List<Supplier<Mono<M>>> calls,
             Predicate<T> isSuccess,
             Predicate<T> isFailure,
-            RetryBackoffSpec retrySpec,
-            Function<M, Supplier<Mono<T>>> mToTSupplier
+            RetryBackoffSpec pollSpec,
+            Function<M, Supplier<Mono<T>>> mToTSupplier,
+            Integer individualFailRetries
     ) {
         if (calls == null || calls.isEmpty()) {
             return Mono.error(new IllegalArgumentException("No suppliers provided"));
         }
 
-        return Mono.defer(() -> tryNextSupplier(calls, 0, isSuccess, isFailure, retrySpec, mToTSupplier));
+        return Mono.defer(() -> tryNextSupplier(calls, 0, isSuccess, isFailure, pollSpec, mToTSupplier, individualFailRetries, individualFailRetries));
     }
 
     private static <M, T> Mono<T> tryNextSupplier(
             List<Supplier<Mono<M>>> calls,
-            int index,
+            int callIndex,
             Predicate<T> isSuccess,
             Predicate<T> isFailure,
-            RetryBackoffSpec retrySpec,
-            Function<M, Supplier<Mono<T>>> mToTSupplier
+            RetryBackoffSpec pollSpec,
+            Function<M, Supplier<Mono<T>>> mToTSupplier,
+            int pollFailureMaxRetries,
+            int pollFailureRetryIndex
     ) {
-        if (index >= calls.size()) {
+        if (callIndex >= calls.size()) {
             return Mono.empty();
         }
 
-        return calls.get(index).get()
-                .flatMap(m -> pollUntil(mToTSupplier.apply(m), isSuccess, isFailure, retrySpec))
-                .onErrorResume(PollingFailedException.class, ex -> tryNextSupplier(calls, index + 1, isSuccess, isFailure, retrySpec, mToTSupplier));
+        return calls.get(callIndex).get()
+                .flatMap(m -> pollUntil(mToTSupplier.apply(m), isSuccess, isFailure, pollSpec))
+                .onErrorResume(PollingFailedException.class, ex ->
+                        (pollFailureRetryIndex > 0) ?
+                                tryNextSupplier(calls, callIndex, isSuccess, isFailure, pollSpec, mToTSupplier, pollFailureMaxRetries, pollFailureRetryIndex - 1)
+                                : tryNextSupplier(calls, callIndex + 1, isSuccess, isFailure, pollSpec, mToTSupplier, pollFailureMaxRetries, pollFailureMaxRetries));
     }
 
 
@@ -85,5 +91,4 @@ public class ReactivePoller {
             super(message);
         }
     }
-
 }
