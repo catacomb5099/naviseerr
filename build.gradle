@@ -29,6 +29,8 @@ dependencies {
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webflux-test'
+	// Mocking library for tests (MockK)
+	testImplementation 'io.mockk:mockk:1.14.9'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
