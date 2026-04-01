@@ -66,15 +66,17 @@ public class SlskdDownloadProcessor {
                     .doOnSubscribe(subscription -> log.info("Polling Slskd download progress for user='{}' id='{}'",
                             enqueued.getUsername(), enqueued.getId()))
                     .doOnSuccess(result -> log.info("Polled Slskd download progress for user='{}' id='{}', percentComplete={}%, states={}",
-                            enqueued.getUsername(), enqueued.getId(), result.getPercentComplete(), TransferedFileUtil.getStateList(result)))
+                            enqueued.getUsername(), enqueued.getId(), result != null ? result.getPercentComplete() : null, TransferedFileUtil.getStateList(result)))
                     .doOnError(error -> log.error("Failed to poll Slskd download progress for user='{}' id='{}' with error='{}'",
                             enqueued.getUsername(), enqueued.getId(), error));
         };
 
         return ReactivePoller.pollUntilAny(calls, done, failed, retry, function, retryAttempts)
                 .doOnSubscribe(subscription -> log.info("Polling Slskd download progress"))
-                .doOnSuccess(result -> log.info("Completed download progress for user='{}' id='{}', states={}",
-                        result.getUsername(), result.getId(), result.getState()))
+                .doOnSuccess(result -> {
+                    if(result != null) log.info("Completed download progress for user='{}' id='{}', states={}",
+                        result.getUsername(), result.getId(), result.getState());
+                })
                 .doOnError(error -> log.error("Failed to poll Slskd download progress with error='{}'", error));
     }
 }
