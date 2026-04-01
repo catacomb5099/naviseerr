@@ -40,6 +40,7 @@ public class SlskdSearchResultProcessor {
     }
 
     public Mono<SearchState> pollUntilComplete(String query) {
+        if(query.isEmpty()) return Mono.empty();
         // TODO: this is a great place for metric incrementing and calculating how often the default search is not enough, and which usually yields enough results (would prob need to randomise the strategy order - otherwise most catch all strat will be reported most)
         // TODO: can add alternative search solutions (maybe omitting the artist name, replacing the artist name with album, replacing non alphanumeric chars (ex spaces))
         Supplier<Mono<SearchState>> call = () -> slskdService.searchResults(query)
@@ -93,16 +94,4 @@ public class SlskdSearchResultProcessor {
         return (file.getBitRate().isPresent() && file.getBitRate().get() > minBitRate) || file.getExtension().equals("flac");
     }
 
-    // TESTS
-    // log failure for search results
-    // if search results failed, do not call search progress
-    // if search results succeeded, call search progress
-    // given list, search files are ordered by upload speed correctly
-    // given list, parameterised filter flac or min bit rate.
-        // if flac and low bit rate list but min is 320, only flac remains
-        // if no flac, and mixed bit rate, list should all be above min 160
-        // if no flac, and mixed bit rate, list should all be above min 320
-        // if no flac, and all low bit rate, return null
-    // assuming list of files that are mocked to return isMatch, returned list only has those mocked matched files
-    // assuming list of files that are all mocked to not match, return null
 }
