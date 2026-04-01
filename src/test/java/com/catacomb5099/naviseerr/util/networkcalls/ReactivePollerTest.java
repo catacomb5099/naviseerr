@@ -258,7 +258,7 @@ class ReactivePollerTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    void listOf10CallsAllFailReturnEmpty() {
+    void listOf10CallsAllFailReturnError() {
         Supplier<Mono<String>> mSupplier = mock(Supplier.class);
         when(mSupplier.get()).thenReturn(Mono.just("m"));
 
@@ -280,7 +280,7 @@ class ReactivePollerTest {
 
         // Implementation returns Mono.empty() when all calls are exhausted
         StepVerifier.create(mono)
-                .verifyComplete();
+                .verifyError();
 
         // each entry in the list should have been invoked once
         verify(mSupplier, times(10)).get();

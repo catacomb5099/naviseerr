@@ -65,9 +65,11 @@ public class ReactivePoller {
         return calls.get(callIndex).get()
                 .flatMap(m -> pollUntil(mToTSupplier.apply(m), isSuccess, isFailure, pollSpec))
                 .onErrorResume(PollingFailedException.class, ex ->
-                        (pollFailureRetryIndex > 0) ?
-                                tryNextSupplier(calls, callIndex, isSuccess, isFailure, pollSpec, mToTSupplier, pollFailureMaxRetries, pollFailureRetryIndex - 1)
-                                : tryNextSupplier(calls, callIndex + 1, isSuccess, isFailure, pollSpec, mToTSupplier, pollFailureMaxRetries, pollFailureMaxRetries));
+                        pollFailureRetryIndex == 0 && callIndex == calls.size() - 1 ?
+                                Mono.error(new PollingFailedException("All suppliers failed after retries"))
+                                 : (pollFailureRetryIndex > 0) ?
+                                        tryNextSupplier(calls, callIndex, isSuccess, isFailure, pollSpec, mToTSupplier, pollFailureMaxRetries, pollFailureRetryIndex - 1)
+                                        : tryNextSupplier(calls, callIndex + 1, isSuccess, isFailure, pollSpec, mToTSupplier, pollFailureMaxRetries, pollFailureMaxRetries));
     }
 
 
