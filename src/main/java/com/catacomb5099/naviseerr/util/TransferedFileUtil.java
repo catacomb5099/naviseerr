@@ -4,10 +4,12 @@ import com.catacomb5099.naviseerr.schema.slskd.TransferState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 public class TransferedFileUtil {
     public static List<TransferState> getStateList(TransferedFile file) {
+        if(file == null) return Collections.emptyList();
         return  Arrays.stream(file.getState().split(","))
                 .map(String::trim)
                 .map(state -> Arrays.stream(TransferState.values())
