@@ -22,7 +22,6 @@ import static reactor.netty.http.HttpConnectionLiveness.log;
 public class SlskdDownloadProcessor {
     private final SlskdService slskdService;
 
-    // TODO: currently when one download fails, we move on the the next one when in fact that download should be retried X times
     @Value("${slskd-service.retry-count}")
     int retryAttempts;
     @Value("${slskd-service.max-poll-attempts}")
@@ -41,6 +40,8 @@ public class SlskdDownloadProcessor {
      * @return Mono emitting the first successfully completed TransferedFile, or error if all fail
      */
     public Mono<TransferedFile> pollUntilComplete(List<Map.Entry<SearchResponseItem, SearchFile>> files) {
+        if(files.isEmpty()) return Mono.empty();
+
         List<Supplier<Mono<QueueDownloadResponse>>> calls = files.stream()
                 .map(fileEntry -> (Supplier<Mono<QueueDownloadResponse>>) () -> slskdService.enqueueDownload(fileEntry.getKey().getUsername(), fileEntry.getValue())
                         .doOnSubscribe(subscription -> log.info("Starting Slskd enqueue for user='{}' file='{}'",
@@ -70,7 +71,7 @@ public class SlskdDownloadProcessor {
                             enqueued.getUsername(), enqueued.getId(), error));
         };
 
-        return ReactivePoller.pollUntilAny(calls, done, failed, retry, function)
+        return ReactivePoller.pollUntilAny(calls, done, failed, retry, function, retryAttempts)
                 .doOnSubscribe(subscription -> log.info("Polling Slskd download progress"))
                 .doOnSuccess(result -> log.info("Completed download progress for user='{}' id='{}', states={}",
                         result.getUsername(), result.getId(), result.getState()))
