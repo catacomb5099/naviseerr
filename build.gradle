@@ -19,10 +19,17 @@ repositories {
 }
 
 dependencies {
-	implementation 'org.springframework.boot:spring-boot-starter-webflux'
+	implementation('org.springframework.boot:spring-boot-starter-webflux') {
+		exclude group: 'org.springframework.boot', module: 'spring-boot-starter-logging'
+	}
+	implementation 'me.xdrop:fuzzywuzzy:1.4.0'
+	compileOnly 'org.projectlombok:lombok'
+	annotationProcessor 'org.projectlombok:lombok'
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webflux-test'
+	// Mocking library for tests (MockK)
+	testImplementation 'io.mockk:mockk:1.14.9'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
