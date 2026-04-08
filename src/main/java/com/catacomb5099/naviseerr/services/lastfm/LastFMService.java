@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services.lastfm;
 
+import com.catacomb5099.naviseerr.services.lastfm.model.LastFmSearchResponse;
 import com.catacomb5099.naviseerr.util.LastFMAPIMethod;
 import com.catacomb5099.naviseerr.util.LastFMAPIMethodHelper;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,7 +28,25 @@ public class LastFMService {
         this.lastFMAPIMethodHelper = lastFMAPIMethodHelper;
     }
 
-    public Mono<String> getResults(String query, LastFMAPIMethod apiMethod) {
+    public Mono<LastFmSearchResponse> getResults(String query, LastFMAPIMethod apiMethod) {
+        String method = lastFMAPIMethodHelper.getRelevantMethodHeaderValue(apiMethod);
+        String paramName = lastFMAPIMethodHelper.getAPIMethodSpecificParam(apiMethod);
+
+        return lastFmWebClient
+                .get()
+                .uri(uriBuilder -> uriBuilder
+                        .queryParam(API_KEY_HEADER, apiKey)
+                        .queryParam(FORMAT_HEADER, "json")
+                        .queryParam(LIMIT_HEADER, searchResultsLimit)
+                        .queryParam(METHOD_HEADER, method)
+                        .queryParam(paramName, query)
+                        .build())
+                .retrieve()
+                .bodyToMono(LastFmSearchResponse.class);
+    }
+
+    public Mono<String> getResults(String query) {
+        /*
         String method = lastFMAPIMethodHelper.getRelevantMethodHeaderValue(apiMethod);
         String paramName = lastFMAPIMethodHelper.getAPIMethodSpecificParam(apiMethod);
 
@@ -42,5 +61,7 @@ public class LastFMService {
                         .build())
                 .retrieve()
                 .bodyToMono(String.class);
+         */
+        return Mono.empty().ofType(String.class);
     }
 }
