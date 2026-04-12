@@ -91,7 +91,7 @@ public class SlskdSearchResultProcessor {
     }
 
     private boolean isFlacAndHighBitrate(SearchFile file) {
-        return (file.getBitRate().isPresent() && file.getBitRate().get() > minBitRate) || file.getExtension().equals("flac");
+        return (file.getBitRate().isPresent() && file.getBitRate().get() >= minBitRate) || file.getExtension().equals("flac");
     }
 
 }
