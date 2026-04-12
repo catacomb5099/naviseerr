@@ -49,17 +49,17 @@ public class LastFmSearchResponse {
 
         // Some responses place albums directly under results.album
         @JsonProperty("album")
-        private List<Album> album;
+        private List<LastFMAlbum> album;
 
         // Other responses place albums under results.albummatches.album
         @JsonProperty("albummatches")
         private AlbumMatches albummatches;
 
-        // Artist search results (results.artistmatches.artist)
+        // LastFMArtist search results (results.artistmatches.artist)
         @JsonProperty("artistmatches")
         private ArtistMatches artistmatches;
 
-        // Track search results (results.trackmatches.track)
+        // LastFMTrack search results (results.trackmatches.track)
         @JsonProperty("trackmatches")
         private TrackMatches trackmatches;
 
@@ -70,7 +70,7 @@ public class LastFmSearchResponse {
          * Return whichever album list is present (never null).
          */
         @JsonIgnore
-        public List<Album> getAlbumList() {
+        public List<LastFMAlbum> getAlbumList() {
             if (album != null && !album.isEmpty()) return album;
             if (albummatches != null && albummatches.getAlbum() != null) return albummatches.getAlbum();
             return Collections.emptyList();
@@ -80,7 +80,7 @@ public class LastFmSearchResponse {
          * Return whichever artist list is present (never null).
          */
         @JsonIgnore
-        public List<Artist> getArtistList() {
+        public List<LastFMArtist> getArtistList() {
             if (artistmatches != null && artistmatches.getArtist() != null) return artistmatches.getArtist();
             return Collections.emptyList();
         }
@@ -89,7 +89,7 @@ public class LastFmSearchResponse {
          * Return whichever track list is present (never null).
          */
         @JsonIgnore
-        public List<Track> getTrackList() {
+        public List<LastFMTrack> getTrackList() {
             if (trackmatches != null && trackmatches.getTrack() != null) return trackmatches.getTrack();
             return Collections.emptyList();
         }
@@ -115,7 +115,7 @@ public class LastFmSearchResponse {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class AlbumMatches {
         @JsonProperty("album")
-        private List<Album> album;
+        private List<LastFMAlbum> album;
     }
 
     @Data
@@ -125,7 +125,7 @@ public class LastFmSearchResponse {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ArtistMatches {
         @JsonProperty("artist")
-        private List<Artist> artist;
+        private List<LastFMArtist> artist;
     }
 
     @Data
@@ -135,7 +135,7 @@ public class LastFmSearchResponse {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class TrackMatches {
         @JsonProperty("track")
-        private List<Track> track;
+        private List<LastFMTrack> track;
     }
 
     @Data
@@ -143,7 +143,7 @@ public class LastFmSearchResponse {
     @AllArgsConstructor
     @Builder
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class Album {
+    public static class LastFMAlbum {
         private String name;
         private String artist;
         private String url;
@@ -160,7 +160,7 @@ public class LastFmSearchResponse {
     @AllArgsConstructor
     @Builder
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class Artist {
+    public static class LastFMArtist {
         private String name;
         private String listeners;
         private String mbid;
@@ -176,7 +176,7 @@ public class LastFmSearchResponse {
     @AllArgsConstructor
     @Builder
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class Track {
+    public static class LastFMTrack {
         private String name;
         private String artist;
         private String url;
@@ -184,7 +184,7 @@ public class LastFmSearchResponse {
         private String listeners;
 
         @JsonProperty("image")
-        private List<Image> image;
+        private List<Image> images;
 
         private String mbid;
     }
