@@ -10,7 +10,7 @@ import java.util.List;
 @AllArgsConstructor
 public class SearchResponse {
     @Nullable
-    List<Song> songs;
+    List<Track> tracks;
     @Nullable
     List<Album> albums;
     @Nullable
