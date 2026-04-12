@@ -1,11 +1,16 @@
 package com.catacomb5099.naviseerr.services.lastfm;
 
+import com.catacomb5099.naviseerr.schema.response.SearchResponse;
+import com.catacomb5099.naviseerr.services.lastfm.model.LastFmSearchResponse;
 import com.catacomb5099.naviseerr.util.LastFMAPIMethod;
 import com.catacomb5099.naviseerr.util.LastFMAPIMethodHelper;
+import com.catacomb5099.naviseerr.util.SearchResponseMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+
+import static reactor.netty.http.HttpConnectionLiveness.log;
 
 @Service
 public class LastFMService {
@@ -27,11 +32,11 @@ public class LastFMService {
         this.lastFMAPIMethodHelper = lastFMAPIMethodHelper;
     }
 
-    public Mono<String> getResults(String query, LastFMAPIMethod apiMethod) {
+    public Mono<SearchResponse> getResults(String query, LastFMAPIMethod apiMethod) {
         String method = lastFMAPIMethodHelper.getRelevantMethodHeaderValue(apiMethod);
         String paramName = lastFMAPIMethodHelper.getAPIMethodSpecificParam(apiMethod);
 
-        return lastFmWebClient
+        Mono<LastFmSearchResponse> lastFMResponse =  lastFmWebClient
                 .get()
                 .uri(uriBuilder -> uriBuilder
                         .queryParam(API_KEY_HEADER, apiKey)
@@ -41,6 +46,30 @@ public class LastFMService {
                         .queryParam(paramName, query)
                         .build())
                 .retrieve()
-                .bodyToMono(String.class);
+                .bodyToMono(LastFmSearchResponse.class);
+
+        return SearchResponseMapper.mapFromLastFmResponse(lastFMResponse);
+    }
+
+    public Mono<SearchResponse> getResults(String query) {
+        Mono<SearchResponse> tracksMono = getResults(query, LastFMAPIMethod.TRACK_SEARCH)
+                .doOnSubscribe(subscription -> log.debug("Starting LastFM track search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed LastFM track search for query='{}'", query))
+                .doOnError(error -> log.error("LastFM track search failed for query='{}'", query, error));
+        Mono<SearchResponse> albumsMono = getResults(query, LastFMAPIMethod.ALBUM_SEARCH)
+                .doOnSubscribe(subscription -> log.debug("Starting LastFM album search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed LastFM album search for query='{}'", query))
+                .doOnError(error -> log.error("LastFM album search failed for query='{}'", query, error));
+        Mono<SearchResponse> artistsMono = getResults(query, LastFMAPIMethod.ARTIST_SEARCH)
+                .doOnSubscribe(subscription -> log.debug("Starting LastFM artist search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed LastFM artist search for query='{}'", query))
+                .doOnError(error -> log.error("LastFM artist search failed for query='{}'", query, error));
+
+        return Mono.zip(tracksMono, albumsMono, artistsMono)
+                .map(tuple ->  new SearchResponse(
+                            tuple.getT1().getTracks(),
+                            tuple.getT2().getAlbums(),
+                            tuple.getT3().getArtists()
+                    ));
     }
 }

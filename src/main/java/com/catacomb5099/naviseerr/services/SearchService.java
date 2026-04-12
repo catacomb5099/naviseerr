@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services;
 
+import com.catacomb5099.naviseerr.schema.response.SearchResponse;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.lastfm.LastFMService;
 import com.catacomb5099.naviseerr.services.slskd.SlskdDownloadProcessor;
@@ -21,13 +22,43 @@ public class SearchService {
     private final SlskdDownloadProcessor slskdDownloadProcessor;
 
     @RequestMapping("/search/{query}")
-    Mono<String> search(@PathVariable String query) {
+    Mono<SearchResponse> search(@PathVariable String query) {
         // TODO: log result count
-        log.info("Received LastFM search request for query='{}'", query);
+        log.info("Received LastFM general search request for query='{}'", query);
+        return lastFMService.getResults(query)
+            .doOnSubscribe(subscription -> log.debug("Starting LastFM general search for query='{}' (subscription={})", query, subscription))
+            .doOnSuccess(result -> log.info("Completed LastFM general search for query='{}'", query))
+            .doOnError(error -> log.error("LastFM general search failed for query='{}'", query, error));
+    }
+
+    @RequestMapping("/search/{query}/tracks")
+    Mono<SearchResponse> searchTracks(@PathVariable String query) {
+        // TODO: log result count
+        log.info("Received LastFM track search request for query='{}'", query);
         return lastFMService.getResults(query, LastFMAPIMethod.TRACK_SEARCH)
-            .doOnSubscribe(subscription -> log.debug("Starting LastFM search for query='{}' (subscription={})", query, subscription))
-            .doOnSuccess(result -> log.info("Completed LastFM search for query='{}'", query))
-            .doOnError(error -> log.error("LastFM search failed for query='{}'", query, error));
+                .doOnSubscribe(subscription -> log.debug("Starting LastFM track search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed LastFM track search for query='{}'", query))
+                .doOnError(error -> log.error("LastFM track search failed for query='{}'", query, error));
+    }
+
+    @RequestMapping("/search/{query}/albums")
+    Mono<SearchResponse> searchAlbums(@PathVariable String query) {
+        // TODO: log result count
+        log.info("Received LastFM album search request for query='{}'", query);
+        return lastFMService.getResults(query, LastFMAPIMethod.ALBUM_SEARCH)
+                .doOnSubscribe(subscription -> log.debug("Starting LastFM album search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed LastFM album search for query='{}'", query))
+                .doOnError(error -> log.error("LastFM album search failed for query='{}'", query, error));
+    }
+
+    @RequestMapping("/search/{query}/artists")
+    Mono<SearchResponse> searchArtists(@PathVariable String query) {
+        // TODO: log result count
+        log.info("Received LastFM artist search request for query='{}'", query);
+        return lastFMService.getResults(query, LastFMAPIMethod.ARTIST_SEARCH)
+                .doOnSubscribe(subscription -> log.debug("Starting LastFM artist search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed LastFM artist search for query='{}'", query))
+                .doOnError(error -> log.error("LastFM artist search failed for query='{}'", query, error));
     }
 
     @RequestMapping("/download/{query}")
