@@ -7,7 +7,7 @@ import java.util.List;
 
 @Getter
 @AllArgsConstructor
-public class Song {
+public class Track {
     String id;
     String iconURL;
     String streamURL;
