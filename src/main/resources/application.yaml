@@ -1,6 +1,14 @@
 spring:
   application:
     name: naviseerr
+  r2dbc:
+    url: ${SPRING_R2DBC_URL:r2dbc:postgresql://localhost:5432/naviseerr}
+    username: ${SPRING_R2DBC_USERNAME:naviseerr}
+    password: ${SPRING_R2DBC_PASSWORD:naviseerr}
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
 
 last-fm-service:
     url: http://ws.audioscrobbler.com/2.0
