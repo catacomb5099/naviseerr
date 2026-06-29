@@ -76,6 +76,41 @@ class DownloadServiceClaimIT {
         assertTrue(claimed.isEmpty());
     }
 
+    @Test
+    void markStatus_flipsInProgressRowToTerminalStatus() {
+        UUID id = UUID.randomUUID();
+        insertWithStatus(id, "song-x", DownloadStatus.IN_PROGRESS);
+
+        Long updated = downloadService.markStatus(id, DownloadStatus.SUCCEEDED).block();
+
+        assertEquals(1L, updated.longValue());
+        List<Download> all = findAllOrderedByCreatedAt();
+        assertEquals(1, all.size());
+        assertEquals(DownloadStatus.SUCCEEDED, all.get(0).getStatus());
+    }
+
+    @Test
+    void markStatus_doesNotTouchRowsThatAreNotInProgress() {
+        UUID id = UUID.randomUUID();
+        insertWithStatus(id, "song-y", DownloadStatus.PENDING);
+
+        Long updated = downloadService.markStatus(id, DownloadStatus.SUCCEEDED).block();
+
+        assertEquals(0L, updated.longValue());
+        List<Download> all = findAllOrderedByCreatedAt();
+        assertEquals(DownloadStatus.PENDING, all.get(0).getStatus());
+    }
+
+    private void insertWithStatus(UUID id, String songName, DownloadStatus status) {
+        Download download = Download.builder()
+                .downloadId(id)
+                .songName(songName)
+                .status(status)
+                .createdAt(Instant.now())
+                .build();
+        template.insert(download).block();
+    }
+
     private void insertPending(String songName, Instant createdAt) {
         Download download = Download.builder()
                 .downloadId(UUID.randomUUID())
