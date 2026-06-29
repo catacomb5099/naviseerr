@@ -32,6 +32,14 @@ public class DownloadService {
             WHERE download_id = :id AND status = 'IN_PROGRESS'
             """;
 
+    private static final String RECLAIM_STALE_SQL = """
+            UPDATE downloads
+            SET status = 'PENDING'
+            WHERE status = 'IN_PROGRESS'
+              AND created_at < :cutoff
+            RETURNING download_id, song_name, status, created_at
+            """;
+
     private final R2dbcEntityTemplate entityTemplate;
 
     public DownloadService(R2dbcEntityTemplate entityTemplate) {
@@ -56,6 +64,18 @@ public class DownloadService {
         return entityTemplate.getDatabaseClient()
                 .sql(CLAIM_PENDING_SQL)
                 .bind("limit", batchSize)
+                .map((row, meta) -> entityTemplate.getConverter().read(Download.class, row, meta))
+                .all();
+    }
+
+    // Resets stale IN_PROGRESS rows back to PENDING so PendingDownloadRunner re-claims them on its
+    // next cycle. A row is considered stale when its created_at is older than the given cutoff.
+    // Operates on IN_PROGRESS rows only, so it cannot race with claimPendingDownloads (which only
+    // touches PENDING rows).
+    public Flux<Download> reclaimStaleDownloads(Instant cutoff) {
+        return entityTemplate.getDatabaseClient()
+                .sql(RECLAIM_STALE_SQL)
+                .bind("cutoff", cutoff)
                 .map((row, meta) -> entityTemplate.getConverter().read(Download.class, row, meta))
                 .all();
     }
