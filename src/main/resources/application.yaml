@@ -31,3 +31,7 @@ download-runner:
 
 download-worker:
   concurrency: 3
+
+download-reaper:
+  interval-ms: 300000
+  stale-lifetime-ms: 600000
