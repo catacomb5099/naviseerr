@@ -30,6 +30,10 @@ dependencies {
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webflux-test'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
+	testImplementation 'org.testcontainers:testcontainers-r2dbc'
 	// Mocking library for tests (MockK)
 	testImplementation 'io.mockk:mockk:1.14.9'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
