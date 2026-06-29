@@ -2,6 +2,8 @@
 
 This file is the primary project guide for AI agents working in this repository. Read it before making changes.
 
+For detailed, agent-oriented subsystem context (how the slskd pipeline, download manager, persistence, LastFM, and reactive patterns actually work today, plus testing and known gotchas), see the deep-dive guides in [docs/architecture/](docs/architecture/README.md).
+
 ## Project Identity
 
 Naviseerr is the backend/server for "Jellyseerr, but for music." The goal is a FOSS service that helps users search for music and download individual songs or collections through free sources such as slskd/Soulseek, torrent indexers, and other future providers.
@@ -79,6 +81,19 @@ Current endpoints:
 - `GET /search/{query}/albums` — LastFM album search
 - `GET /search/{query}/artists` — LastFM artist search
 - `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
+
+## Deeper Context (docs/architecture)
+
+Deep-dive guides for agents and developers live in [docs/architecture/](docs/architecture/README.md). Read the relevant one before working on a subsystem; the cited source files remain the source of truth.
+
+- [codebase-map.md](docs/architecture/codebase-map.md) — repo layout, package map, entry points, branch topology, build/run.
+- [slskd-integration.md](docs/architecture/slskd-integration.md) — the Soulseek search -> select -> download -> poll pipeline and retry/failover.
+- [download-manager.md](docs/architecture/download-manager.md) — the event-driven download queue (ingress, claim, queue, worker, terminal status).
+- [persistence.md](docs/architecture/persistence.md) — R2DBC + Postgres, the `downloads` table, claim/status SQL, patterns.
+- [lastfm-integration.md](docs/architecture/lastfm-integration.md) — LastFM metadata search and response mapping.
+- [reactive-patterns.md](docs/architecture/reactive-patterns.md) — Reactor cookbook: polling-via-retry and the Sinks work queue.
+- [testing.md](docs/architecture/testing.md) — unit (Mockito + StepVerifier) and integration (Testcontainers) testing, and how to run them.
+- [gotchas.md](docs/architecture/gotchas.md) — known bugs and hygiene issues (e.g. the `TransferedFileUtil` state-parsing bug, committed secrets).
 
 ## Product Context
 
