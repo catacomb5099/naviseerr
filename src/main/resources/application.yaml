@@ -24,3 +24,7 @@ slskd-service:
     max-poll-attempts: 30
     first-back-off-duration-ms: 50
     max-files-per-download: 10
+
+download-runner:
+  interval-ms: 10000
+  batch-size: 10
