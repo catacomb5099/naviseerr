@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -9,6 +10,7 @@ import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.UUID;
 
+@Slf4j
 @Service
 public class DownloadService {
 
@@ -60,17 +62,27 @@ public class DownloadService {
                 .all();
     }
 
-    // Terminal status write once the pipeline reaches a success/fail state. The status guard keeps
-    // the write idempotent and safe against future cancellation races, and it runs in a transaction
-    // so the milestone is persisted atomically. Returns the number of rows updated (0 if the row was
-    // no longer IN_PROGRESS).
+    // Terminal status write once the pipeline reaches a success/fail state.
+    //
+    // The name spells out the precondition because it is not optional: the UPDATE only applies to a
+    // row that is still IN_PROGRESS. Any other current status is left untouched - this is what keeps
+    // the write idempotent and safe against future cancellation races. It runs in a transaction so
+    // the milestone is persisted atomically.
+    //
+    // Returns the number of rows updated: 1 on a successful transition, 0 if the row was no longer
+    // IN_PROGRESS (already terminal, or reclaimed elsewhere). A 0 is a legitimate outcome, not an
+    // error, so callers that care must check it rather than relying on an exception.
     @Transactional
-    public Mono<Long> markStatus(UUID downloadId, DownloadStatus status) {
+    public Mono<Long> markStatusIfInProgress(UUID downloadId, DownloadStatus status) {
         return entityTemplate.getDatabaseClient()
                 .sql(MARK_STATUS_SQL)
                 .bind("status", status.name())
                 .bind("id", downloadId)
                 .fetch()
-                .rowsUpdated();
+                .rowsUpdated()
+                // Logged here, at the write itself, rather than in the caller: this fires for every
+                // caller and names the operation that actually failed.
+                .doOnError(error -> log.error("Could not write status {} for download {}",
+                        status, downloadId, error));
     }
 }
