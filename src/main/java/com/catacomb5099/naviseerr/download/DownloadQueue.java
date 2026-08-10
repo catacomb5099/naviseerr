@@ -7,11 +7,8 @@ import reactor.core.publisher.Sinks;
 
 /**
  * In-memory work queue between the interval claimer (producer) and the download worker (consumer).
- *
- * <p>Backed by a unicast {@link Sinks.Many} with an unbounded buffer: the single subscriber (the
- * worker) is parked when the buffer is empty and is woken immediately on the next emission, so the
- * worker never polls. The worker's bounded {@code flatMap} only requests up to its concurrency, so
- * surplus claimed downloads simply wait in the buffer (natural backpressure).
+ * A unicast {@link Sinks.Many} whose single subscriber parks while empty and wakes on the next emit,
+ * so the worker never polls. Not durable, unbounded buffer - see the event-driven-download-queue ADR.
  */
 @Slf4j
 @Component
@@ -19,11 +16,7 @@ public class DownloadQueue {
 
     private final Sinks.Many<Download> sink = Sinks.many().unicast().onBackpressureBuffer();
 
-    /**
-     * Offers a claimed download to the queue. The only producer is the single interval-claimer
-     * thread, so emissions are already serialized and {@code tryEmitNext} is sufficient (no
-     * busy-loop handler needed).
-     */
+    // Sole producer is the interval claimer, so emissions are serialized and tryEmitNext suffices.
     public void enqueue(Download download) {
         Sinks.EmitResult result = sink.tryEmitNext(download);
         if (result.isFailure()) {

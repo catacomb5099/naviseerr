@@ -9,10 +9,9 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
 /**
- * Event-driven consumer of {@link DownloadQueue}. Subscribes once and processes claimed downloads
- * with bounded concurrency: for each item it runs {@link DownloadFulfillment} and then writes the
- * terminal status. Every item is fully isolated so a single failure never tears down the worker
- * subscription.
+ * Consumer of {@link DownloadQueue}: subscribes once and runs {@link DownloadFulfillment} per item
+ * with bounded concurrency, then writes the terminal status. Each item is isolated so one failure
+ * never tears down the subscription. Push-based within this process, not durable messaging.
  */
 @Slf4j
 @Component
@@ -47,21 +46,24 @@ public class DownloadWorker {
                 .flatMap(transferedFile -> {
                     log.info("Download {} for song '{}' succeeded (file='{}')",
                             download.getDownloadId(), download.getSongName(), transferedFile.getFilename());
-                    return downloadService.markStatus(download.getDownloadId(), DownloadStatus.SUCCEEDED);
+                    return downloadService.markStatusIfInProgress(download.getDownloadId(), DownloadStatus.SUCCEEDED);
                 })
                 .switchIfEmpty(Mono.defer(() -> {
                     log.warn("Download {} for song '{}' yielded no result; marking FAILED",
                             download.getDownloadId(), download.getSongName());
-                    return downloadService.markStatus(download.getDownloadId(), DownloadStatus.FAILED);
+                    return downloadService.markStatusIfInProgress(download.getDownloadId(), DownloadStatus.FAILED);
                 }))
                 .onErrorResume(error -> {
                     log.error("Download {} for song '{}' failed; marking FAILED",
                             download.getDownloadId(), download.getSongName(), error);
-                    return downloadService.markStatus(download.getDownloadId(), DownloadStatus.FAILED);
+                    return downloadService.markStatusIfInProgress(download.getDownloadId(), DownloadStatus.FAILED);
                 })
                 .then()
+                // Only status-write failures reach here; swallowed to keep the subscription alive.
                 .onErrorResume(error -> {
-                    log.error("Could not finalize status for download {}", download.getDownloadId(), error);
+                    log.error("Download {} for song '{}' ended without a confirmed terminal status; "
+                                    + "row is left non-terminal and needs reclaiming",
+                            download.getDownloadId(), download.getSongName());
                     return Mono.empty();
                 });
     }

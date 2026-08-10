@@ -77,11 +77,11 @@ class DownloadServiceClaimIT {
     }
 
     @Test
-    void markStatus_flipsInProgressRowToTerminalStatus() {
+    void markStatusIfInProgress_flipsInProgressRowToTerminalStatus() {
         UUID id = UUID.randomUUID();
         insertWithStatus(id, "song-x", DownloadStatus.IN_PROGRESS);
 
-        Long updated = downloadService.markStatus(id, DownloadStatus.SUCCEEDED).block();
+        Long updated = downloadService.markStatusIfInProgress(id, DownloadStatus.SUCCEEDED).block();
 
         assertEquals(1L, updated.longValue());
         List<Download> all = findAllOrderedByCreatedAt();
@@ -90,11 +90,11 @@ class DownloadServiceClaimIT {
     }
 
     @Test
-    void markStatus_doesNotTouchRowsThatAreNotInProgress() {
+    void markStatusIfInProgress_doesNotTouchRowsThatAreNotInProgress() {
         UUID id = UUID.randomUUID();
         insertWithStatus(id, "song-y", DownloadStatus.PENDING);
 
-        Long updated = downloadService.markStatus(id, DownloadStatus.SUCCEEDED).block();
+        Long updated = downloadService.markStatusIfInProgress(id, DownloadStatus.SUCCEEDED).block();
 
         assertEquals(0L, updated.longValue());
         List<Download> all = findAllOrderedByCreatedAt();
