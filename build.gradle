@@ -34,6 +34,8 @@ dependencies {
 	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
 	testImplementation 'org.testcontainers:testcontainers-postgresql'
 	testImplementation 'org.testcontainers:testcontainers-r2dbc'
+	// HTTP-boundary tests for provider clients (WebClient request/response mocking)
+	testImplementation 'com.squareup.okhttp3:mockwebserver:5.4.0'
 	// Mocking library for tests (MockK)
 	testImplementation 'io.mockk:mockk:1.14.9'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
