@@ -17,6 +17,17 @@ services:
       timeout: 5s
       retries: 10
 
+  ytmusic-adapter:
+    build: ../ytmusic-adapter
+    container_name: naviseerr-ytmusic-adapter
+    restart: unless-stopped
+    environment:
+      YTM_LOG_LEVEL: ${YTM_LOG_LEVEL:-INFO}
+      YTM_TIMEOUT_SECONDS: ${YTM_TIMEOUT_SECONDS:-10}
+    ports:
+      - "${YTMUSIC_ADAPTER_PORT:-8000}:8000"
+    # healthcheck is inherited from the image's own HEALTHCHECK (see ../ytmusic-adapter/Dockerfile)
+
 volumes:
   naviseerr-postgres-data:
     name: naviseerr-postgres-data
