@@ -58,3 +58,9 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - Where: [TrackMatchingService.extractParts](../../src/main/java/com/catacomb5099/naviseerr/util/TrackMatchingService.java) (noted TODO).
 - Impact: artist/title extraction relies on a single `"-"`; titles containing `-`, or other separators, are split incorrectly (the fuzzy ratio checks still apply, so matching degrades rather than breaks).
 - Suggested action: drive matching from structured LastFM fields (artist/title) rather than parsing a combined string.
+
+## 10. A rejected queue emission is dropped silently (relates to 3 and 4)
+
+- Where: `enqueue` in [DownloadQueue.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadQueue.java).
+- What/impact: a failed `tryEmitNext` is logged and the download is discarded - there is no retry and no back-channel to the claimer, so the row is left stranded at `IN_PROGRESS` exactly as in 3. Narrow in practice: the sole producer emits serially into an unbounded buffer, so this is only reachable once the sink is terminated or cancelled (shutdown, or a cancelled worker subscription).
+- Suggested action: fold into the same reaper work as 3; a bounded buffer (4) would make emit rejection a routine case rather than a shutdown-only one, so handle it before bounding.
