@@ -29,11 +29,12 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - Impact: if the claimer enqueues faster than the worker drains (e.g. large `download-runner.batch-size` / small `download-worker.concurrency`), the buffer can grow unbounded.
 - Suggested action: bound the buffer and/or apply backpressure from the worker back to the claim cadence; revisit when adding the durable broker.
 
-## 5. LastFM response mapping: index risk and placeholder values
+## 5. LastFM response mapping: index risk and placeholder values (dormant since 10-08-2026)
 
 - Where: [SearchResponseMapper.java](../../src/main/java/com/catacomb5099/naviseerr/util/SearchResponseMapper.java).
 - What/impact: artist/album image selection uses `images.get(2)` guarded only by `isEmpty()`, so fewer than 3 images throws `IndexOutOfBoundsException`. `mapFromLastFMTrack` returns placeholders (`"lol"` album id, `0` year); album year is `0`.
-- Suggested action: select images defensively (size check / first available) and replace placeholders with real mapping when those fields matter.
+- Status: `SearchService` no longer calls this path (see [ytmusic-integration.md](ytmusic-integration.md)), so this bug is currently unreachable rather than fixed. `YtMusicSearchResponseMapper` gets `Track.albumId` and `Album.year` from real fields and never indexes into an image list without a bounds check — the replacement, not a patch.
+- Suggested action: no longer worth fixing in place; delete alongside the rest of the LastFM code per the [ADR](../decisions/ytmusic-search-provider-10-08-2026.md).
 
 ## 6. `@EnableWebFlux` + wide-open CORS
 

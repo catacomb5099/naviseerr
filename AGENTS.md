@@ -21,7 +21,10 @@ The product direction is intentionally track-first. Existing tools such as Lidar
 - `spring.sql.init` with `schema.sql` for schema creation (no Flyway yet — see schema management note below)
 - Gradle
 - Lombok
-- LastFM for search metadata
+- YouTube Music (via the sidecar `ytmusic-adapter` service, see below) for search metadata. LastFM's
+  client code is retained on disk but unused as of 10-08-2026 — see
+  [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md) and the
+  [ADR](docs/decisions/ytmusic-search-provider-10-08-2026.md).
 - slskd for Soulseek search/download orchestration
 - JUnit Platform with MockK present for tests
 
@@ -39,7 +42,11 @@ Be explicit about this distinction: much of the architecture described below is 
 
 The current application is a small Java REST/WebFlux service that:
 
-- Calls LastFM for track, album, and artist search.
+- Calls a sidecar service, `ytmusic-adapter` (a standalone Python/FastAPI process wrapping
+  `ytmusicapi`, in the sibling repo `~/IdeaProjects/ytmusic-adapter`, wired into
+  [compose.yaml](compose.yaml)), for track, album, and artist search. LastFM previously filled this
+  role; its client code still compiles but is no longer called — see
+  [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md).
 - Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread).
 - Runs an event-driven download pipeline that turns those `PENDING` rows into real slskd downloads (see "Download Execution Flow" below).
 - Calls slskd to search Soulseek, select candidates, enqueue downloads, poll to completion, and retry/fail over across candidates via the existing reactive polling/retry logic.
@@ -76,10 +83,10 @@ The current application does not have:
 
 Current endpoints:
 
-- `GET /search/{query}` — LastFM general search
-- `GET /search/{query}/tracks` — LastFM track search
-- `GET /search/{query}/albums` — LastFM album search
-- `GET /search/{query}/artists` — LastFM artist search
+- `GET /search/{query}` — general search (YouTube Music, via `ytmusic-adapter`)
+- `GET /search/{query}/tracks` — track search
+- `GET /search/{query}/albums` — album search
+- `GET /search/{query}/artists` — artist search
 - `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
 
 ## Deeper Context (docs/architecture)
@@ -164,8 +171,8 @@ Cancellation should be treated as a first-class action. Prefer correctness and e
 ## Engineering Guidelines
 
 - Keep the backend reactive unless there is a strong reason not to. Do not introduce blocking calls into reactive paths without isolating them.
-- Preserve clear boundaries between provider clients (`lastfm`, `slskd`), orchestration services, domain models, and API controllers.
-- Model external-provider failures explicitly. slskd and LastFM can be slow, incomplete, or inconsistent.
+- Preserve clear boundaries between provider clients (`ytmusic`, `slskd`; `lastfm` is unused, retained on disk), orchestration services, domain models, and API controllers.
+- Model external-provider failures explicitly. slskd and ytmusic-adapter can be slow, incomplete, or inconsistent. `YtMusicService` is the first provider client with real timeout/retry/typed-error handling (`YtMusicBadRequestException` vs `YtMusicUnavailableException`) — follow that pattern for new provider clients rather than the untimed, untyped LastFM/slskd ones it replaces.
 - Use fuzzy matching and metadata checks carefully; prioritize high-confidence track matches over downloading the first result.
 - Keep API behavior user-centered: report "no good match" distinctly from provider errors, timeouts, and cancellations.
 - Do not write high-frequency progress changes directly to the primary database.

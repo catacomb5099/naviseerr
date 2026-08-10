@@ -1,8 +1,16 @@
 # LastFM Integration
 
-> Status: current as of 2026-06-29, branch `event-driven-download-queue`. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
+> Status: current as of 2026-06-29, branch `event-driven-download-queue`. **Superseded 10-08-2026: retained on disk, unused.** Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
-LastFM is the metadata source for search (tracks, albums, artists). It is read-only and reactive (`Mono`), exposed through [SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java).
+> [!IMPORTANT]
+> As of 10-08-2026, `SearchService` no longer calls any of the code described below — search now
+> runs through [YtMusicService](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java);
+> see [ytmusic-integration.md](ytmusic-integration.md) and the
+> [ADR](../decisions/ytmusic-search-provider-10-08-2026.md). `LastFMConfig` and `LastFMService` are
+> marked `@Deprecated(forRemoval = true)` but not yet deleted — this doc describes code that still
+> exists and still compiles, just isn't reachable. Do not extend it; it is pending removal.
+
+LastFM was the metadata source for search (tracks, albums, artists). It was read-only and reactive (`Mono`), exposed through [SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java).
 
 ## Client
 
@@ -31,7 +39,7 @@ Be aware (see [gotchas.md](gotchas.md)):
 
 ## Endpoints
 
-Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java):
+These paths are now served by `YtMusicService`, not the classes on this page:
 
 - `GET /search/{query}` - combined (track + album + artist)
 - `GET /search/{query}/tracks` | `/albums` | `/artists`
