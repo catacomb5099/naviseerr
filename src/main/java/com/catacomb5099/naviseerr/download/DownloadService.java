@@ -51,9 +51,7 @@ public class DownloadService {
         return entityTemplate.insert(download);
     }
 
-    // Claims the oldest PENDING rows in a single statement. FOR UPDATE SKIP LOCKED means a row is
-    // never handed to two concurrent cycles/instances, and RETURNING yields exactly the rows this
-    // call won (already flipped to IN_PROGRESS).
+    // SKIP LOCKED stops two cycles claiming the same row; RETURNING yields exactly the rows won.
     public Flux<Download> claimPendingDownloads(int batchSize) {
         return entityTemplate.getDatabaseClient()
                 .sql(CLAIM_PENDING_SQL)
@@ -62,16 +60,7 @@ public class DownloadService {
                 .all();
     }
 
-    // Terminal status write once the pipeline reaches a success/fail state.
-    //
-    // The name spells out the precondition because it is not optional: the UPDATE only applies to a
-    // row that is still IN_PROGRESS. Any other current status is left untouched - this is what keeps
-    // the write idempotent and safe against future cancellation races. It runs in a transaction so
-    // the milestone is persisted atomically.
-    //
-    // Returns the number of rows updated: 1 on a successful transition, 0 if the row was no longer
-    // IN_PROGRESS (already terminal, or reclaimed elsewhere). A 0 is a legitimate outcome, not an
-    // error, so callers that care must check it rather than relying on an exception.
+    // Terminal status write. Applies only while the row is still IN_PROGRESS; returns 0 if it isn't.
     @Transactional
     public Mono<Long> markStatusIfInProgress(UUID downloadId, DownloadStatus status) {
         return entityTemplate.getDatabaseClient()
@@ -80,8 +69,6 @@ public class DownloadService {
                 .bind("id", downloadId)
                 .fetch()
                 .rowsUpdated()
-                // Logged here, at the write itself, rather than in the caller: this fires for every
-                // caller and names the operation that actually failed.
                 .doOnError(error -> log.error("Could not write status {} for download {}",
                         status, downloadId, error));
     }
