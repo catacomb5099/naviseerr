@@ -35,3 +35,10 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Machine-local tooling and scratch work (never committed) ###
+# Holds a personal-account GitHub token - must stay ignored.
+.local/
+
+### macOS ###
+.DS_Store
