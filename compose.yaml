@@ -1,1 +1,22 @@
-services: {}
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: naviseerr-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-naviseerr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-naviseerr}
+      POSTGRES_DB: ${POSTGRES_DB:-naviseerr}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - naviseerr-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-naviseerr} -d ${POSTGRES_DB:-naviseerr}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  naviseerr-postgres-data:
+    name: naviseerr-postgres-data

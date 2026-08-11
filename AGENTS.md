@@ -15,11 +15,21 @@ The product direction is intentionally track-first. Existing tools such as Lidar
 - Java 21
 - Spring Boot 4
 - Spring WebFlux and Reactor (`Mono`, reactive polling)
+- Spring Data R2DBC over Postgres (reactive, no blocking JDBC in the runtime path)
+- `spring.sql.init` with `schema.sql` for schema creation (no Flyway yet — see schema management note below)
 - Gradle
 - Lombok
 - LastFM for search metadata
 - slskd for Soulseek search/download orchestration
 - JUnit Platform with MockK present for tests
+
+## Schema Management Approach
+
+Schema is currently managed via `src/main/resources/schema.sql`, applied on startup by `spring.sql.init`. All table definitions use `CREATE TABLE IF NOT EXISTS` to make the script idempotent across restarts.
+
+This is intentionally simpler than Flyway. The trade-off: `schema.sql` can safely add tables but cannot express column-level migrations (e.g. `ALTER TABLE ADD COLUMN`). When the schema needs to evolve across deployments (adding a column to an existing table, renaming a column, etc.), that is the right moment to introduce Flyway with versioned migration files.
+
+Do not add Flyway or a blocking JDBC driver until that need arises. See `docs/decisions/minimal-postgres-downloads-26-06-2026.md` for the full rationale.
 
 ## Current Implementation State
 
@@ -28,29 +38,30 @@ Be explicit about this distinction: much of the architecture described below is 
 The current application is a small Java REST/WebFlux service that:
 
 - Calls LastFM for track, album, and artist search.
-- Calls slskd to search Soulseek and enqueue downloads.
+- Calls slskd to search Soulseek and enqueue downloads (processor classes exist; not wired into `/download` yet).
 - Polls slskd until search/download completion.
 - Retries failed candidate downloads according to the existing reactive polling/retry logic.
-- Returns results directly from request-handling flows.
+- Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted`. No actual search or download is triggered yet.
+
+The `downloads` table (`download_id UUID`, `song_name TEXT`, `status TEXT CHECK (...)`, `created_at TIMESTAMPTZ`) lives in `com.catacomb5099.naviseerr.download`. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale).
 
 The current application does not have:
 
-- A database.
 - Redis.
 - RabbitMQ or any other durable queue.
-- A download manager service.
+- A download manager service that executes actual downloads from the queue.
 - SSE/WebSocket progress streaming.
-- Persisted download history.
+- Actual slskd/LastFM orchestration wired into the `/download` endpoint (it only records intent).
 - User accounts, JWT handling, or authorization.
 - Collection/playlist download orchestration.
 
-Current endpoints are early-stage and live in `SearchService`:
+Current endpoints:
 
-- `GET /search/{query}`
-- `GET /search/{query}/tracks`
-- `GET /search/{query}/albums`
-- `GET /search/{query}/artists`
-- `GET /download/{query}`
+- `GET /search/{query}` — LastFM general search
+- `GET /search/{query}/tracks` — LastFM track search
+- `GET /search/{query}/albums` — LastFM album search
+- `GET /search/{query}/artists` — LastFM artist search
+- `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`
 
 ## Product Context
 
