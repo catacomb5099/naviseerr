@@ -44,6 +44,12 @@ public class DownloadWorker {
 
     Mono<Void> process(Download download) {
         return downloadFulfillment.fulfill(download.getSongName())
+                // Scoped to fulfillment only, so a status-write failure below can't be re-marked FAILED.
+                .onErrorResume(error -> {
+                    log.error("Download {} for song '{}' failed to fulfill",
+                            download.getDownloadId(), download.getSongName(), error);
+                    return Mono.empty();
+                })
                 .flatMap(transferedFile -> {
                     log.info("Download {} for song '{}' succeeded (file='{}')",
                             download.getDownloadId(), download.getSongName(), transferedFile.getFilename());
@@ -54,13 +60,8 @@ public class DownloadWorker {
                             download.getDownloadId(), download.getSongName());
                     return downloadService.markStatusIfInProgress(download.getDownloadId(), DownloadStatus.FAILED);
                 }))
-                .onErrorResume(error -> {
-                    log.error("Download {} for song '{}' failed; marking FAILED",
-                            download.getDownloadId(), download.getSongName(), error);
-                    return downloadService.markStatusIfInProgress(download.getDownloadId(), DownloadStatus.FAILED);
-                })
                 .then()
-                // Only status-write failures reach here; swallowed to keep the subscription alive.
+                // Only a failed status write reaches here now; swallowed to keep the subscription alive.
                 .onErrorResume(error -> {
                     log.error("Download {} for song '{}' ended without a confirmed terminal status; "
                                     + "row is left non-terminal and needs reclaiming",

@@ -45,7 +45,7 @@ public class DownloadService {
                 .songName(songName)
                 .status(DownloadStatus.PENDING)
                 .createdAt(Instant.now())
-                .build();   
+                .build();
         // insert() forces an INSERT; save() would treat the pre-set @Id as an UPDATE.
         return entityTemplate.insert(download);
     }
@@ -67,6 +67,11 @@ public class DownloadService {
                 .bind("id", downloadId)
                 .fetch()
                 .rowsUpdated()
+                .doOnNext(rows -> {
+                    if (rows == 0) {
+                        log.warn("markStatusIfInProgress({}, {}) updated no rows - row was not IN_PROGRESS", downloadId, status);
+                    }
+                })
                 .doOnError(error -> log.error("Could not write status {} for download {}",
                         status, downloadId, error));
     }

@@ -73,4 +73,17 @@ class DownloadWorkerTest {
 
         StepVerifier.create(worker.process(d)).verifyComplete();
     }
+
+    @Test
+    void succeededStatusWriteFailure_isNotReclassifiedAsFailed() {
+        Download d = download("write-fails-after-success");
+        when(fulfillment.fulfill("write-fails-after-success")).thenReturn(Mono.just(mock(TransferedFile.class)));
+        when(downloadService.markStatusIfInProgress(eq(d.getDownloadId()), eq(DownloadStatus.SUCCEEDED)))
+                .thenReturn(Mono.error(new RuntimeException("db down")));
+
+        StepVerifier.create(worker.process(d)).verifyComplete();
+
+        verify(downloadService).markStatusIfInProgress(d.getDownloadId(), DownloadStatus.SUCCEEDED);
+        verify(downloadService, never()).markStatusIfInProgress(d.getDownloadId(), DownloadStatus.FAILED);
+    }
 }
