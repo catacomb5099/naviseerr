@@ -39,7 +39,7 @@ The current application is a small Java REST/WebFlux service that:
 
 - Calls LastFM for track, album, and artist search.
 - Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread).
-- Runs an event-driven download pipeline that turns those `PENDING` rows into real slskd downloads (see "Download Execution Flow" below).
+- Runs a queue-based download pipeline that turns those `PENDING` rows into real slskd downloads (see "Download Execution Flow" below).
 - Calls slskd to search Soulseek, select candidates, enqueue downloads, poll to completion, and retry/fail over across candidates via the existing reactive polling/retry logic.
 - Persists a terminal `SUCCEEDED`/`FAILED` status per download once the pipeline reaches a success/fail state.
 
@@ -51,7 +51,7 @@ Three decoupled concerns in `com.catacomb5099.naviseerr.download`:
 
 1. Ingress — `DownloadController` + `DownloadService.requestDownload` insert a `PENDING` row and return `202`. Nothing else happens on the request.
 2. Claim + emit (interval) — `PendingDownloadRunner` polls the DB on an interval (`download-runner.interval-ms`), claiming the oldest `PENDING` rows with `claimPendingDownloads` (`UPDATE ... FOR UPDATE SKIP LOCKED ... RETURNING`, flipping them to `IN_PROGRESS`) and emitting each claimed row into `DownloadQueue`. The `PENDING -> IN_PROGRESS` transition is what triggers enqueueing.
-3. Process (event-driven within the process) — `DownloadQueue` wraps an in-memory Reactor `Sinks.many().unicast().onBackpressureBuffer()`. `DownloadWorker` subscribes once and processes claimed downloads with bounded concurrency (`download-worker.concurrency`, default 3) via `flatMap`. For each item it runs `DownloadFulfillment.fulfill` (slskd search -> select best files -> enqueue/poll download) and then writes the terminal status via the transactional `DownloadService.markStatusIfInProgress`. Both an error and an empty result map to `FAILED`; every item is isolated so one failure never tears down the worker. The queue sleeps when empty and wakes immediately on emit — no polling on the queue itself (the only interval is the DB claim). Push-based, but not durable messaging: the buffer is heap-only, so anything queued or in flight is lost on restart and its row is stranded at `IN_PROGRESS`.
+3. Process (queue-based, not event-driven — there is no event, no broker, no delivery guarantee) — `DownloadQueue` wraps an in-memory Reactor `Sinks.many().unicast().onBackpressureBuffer()`. `DownloadWorker` subscribes once and processes claimed downloads with bounded concurrency (`download-worker.concurrency`, default 3) via `flatMap`. For each item it runs `DownloadFulfillment.fulfill` (slskd search -> select best files -> enqueue/poll download) and then writes the terminal status via `DownloadService.markStatusIfInProgress` (a single UPDATE, no `@Transactional` needed). Both an error and an empty result map to `FAILED`; every item is isolated so one failure never tears down the worker. The queue sleeps when empty and wakes immediately on emit — no polling on the queue itself (the only interval is the DB claim). The buffer is heap-only, so anything queued or in flight is lost on restart and its row is stranded at `IN_PROGRESS`.
 
 The current application does not have:
 

@@ -42,7 +42,7 @@ public class PendingDownloadRunner {
 
     // Claims the next batch of PENDING downloads (flipping them to IN_PROGRESS) and hands each one to
     // the in-memory queue. That claim transition is what triggers enqueueing; the worker consumes the
-    // queue independently and event-driven.
+    // queue independently, on its own schedule.
     Mono<Void> processBatch() {
         return downloadService.claimPendingDownloads(batchSize)
                 .doOnNext(download -> {

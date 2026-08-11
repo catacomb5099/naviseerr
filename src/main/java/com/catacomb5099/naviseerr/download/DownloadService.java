@@ -3,7 +3,6 @@ package com.catacomb5099.naviseerr.download;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -46,7 +45,7 @@ public class DownloadService {
                 .songName(songName)
                 .status(DownloadStatus.PENDING)
                 .createdAt(Instant.now())
-                .build();
+                .build();   
         // insert() forces an INSERT; save() would treat the pre-set @Id as an UPDATE.
         return entityTemplate.insert(download);
     }
@@ -61,7 +60,6 @@ public class DownloadService {
     }
 
     // Terminal status write. Applies only while the row is still IN_PROGRESS; returns 0 if it isn't.
-    @Transactional
     public Mono<Long> markStatusIfInProgress(UUID downloadId, DownloadStatus status) {
         return entityTemplate.getDatabaseClient()
                 .sql(MARK_STATUS_SQL)

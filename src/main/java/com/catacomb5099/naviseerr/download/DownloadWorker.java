@@ -11,7 +11,8 @@ import reactor.core.publisher.Mono;
 /**
  * Consumer of {@link DownloadQueue}: subscribes once and runs {@link DownloadFulfillment} per item
  * with bounded concurrency, then writes the terminal status. Each item is isolated so one failure
- * never tears down the subscription. Push-based within this process, not durable messaging.
+ * never tears down the subscription. Queue-based, not event-driven: there is no event, no broker,
+ * and no delivery guarantee - just an in-memory queue this process reads from.
  */
 @Slf4j
 @Component
