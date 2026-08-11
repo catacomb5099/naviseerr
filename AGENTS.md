@@ -38,22 +38,39 @@ Be explicit about this distinction: much of the architecture described below is 
 The current application is a small Java REST/WebFlux service that:
 
 - Calls LastFM for track, album, and artist search.
-- Calls slskd to search Soulseek and enqueue downloads (processor classes exist; not wired into `/download` yet).
-- Polls slskd until search/download completion.
-- Retries failed candidate downloads according to the existing reactive polling/retry logic.
-- Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted`. No actual search or download is triggered yet.
+- Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread).
+- Runs a queue-based download pipeline that turns those `PENDING` rows into real slskd downloads (see "Download Execution Flow" below).
+- Calls slskd to search Soulseek, select candidates, enqueue downloads, poll to completion, and retry/fail over across candidates via the existing reactive polling/retry logic.
+- Persists a terminal `SUCCEEDED`/`FAILED` status per download once the pipeline reaches a success/fail state.
 
 The `downloads` table (`download_id UUID`, `song_name TEXT`, `status TEXT CHECK (...)`, `created_at TIMESTAMPTZ`) lives in `com.catacomb5099.naviseerr.download`. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale).
+
+### Download Execution Flow
+
+Three decoupled concerns in `com.catacomb5099.naviseerr.download`:
+
+1. Ingress — `DownloadController` + `DownloadService.requestDownload` insert a `PENDING` row and return `202`. Nothing else happens on the request.
+2. Claim + emit (interval) — `PendingDownloadRunner` polls the DB on an interval (`download-runner.interval-ms`), claiming the oldest `PENDING` rows with `claimPendingDownloads` (`UPDATE ... FOR UPDATE SKIP LOCKED ... RETURNING`, flipping them to `IN_PROGRESS`) and emitting each claimed row into `DownloadQueue`. The `PENDING -> IN_PROGRESS` transition is what triggers enqueueing.
+3. Process (queue-based, not event-driven — there is no event, no broker, no delivery guarantee) — `DownloadQueue` wraps an in-memory Reactor `Sinks.many().unicast().onBackpressureBuffer()`. `DownloadWorker` subscribes once and processes claimed downloads with bounded concurrency (`download-worker.concurrency`, default 3) via `flatMap`. For each item it runs `DownloadFulfillment.fulfill` (slskd search -> select best files -> enqueue/poll download) and then writes the terminal status via `DownloadService.markStatusIfInProgress` (a single UPDATE, no `@Transactional` needed). Both an error and an empty result map to `FAILED`; every item is isolated so one failure never tears down the worker. The queue sleeps when empty and wakes immediately on emit — no polling on the queue itself (the only interval is the DB claim). The buffer is heap-only, so anything queued or in flight is lost on restart and its row is stranded at `IN_PROGRESS`.
 
 The current application does not have:
 
 - Redis.
-- RabbitMQ or any other durable queue.
-- A download manager service that executes actual downloads from the queue.
+- RabbitMQ or any other durable/cross-process queue (the work queue is in-memory).
 - SSE/WebSocket progress streaming.
-- Actual slskd/LastFM orchestration wired into the `/download` endpoint (it only records intent).
 - User accounts, JWT handling, or authorization.
 - Collection/playlist download orchestration.
+- Resilience/recovery for in-flight work — see the must-do below.
+
+> [!IMPORTANT]
+> No resilience / crash-recovery for in-flight downloads yet — THIS MUST BE ADDED.
+>
+> The work queue is in-memory only. Because the DB is the durable ingress, rows still in `PENDING` are picked up automatically by the next claim interval after a restart, so they are effectively recovered. The gap is rows already flipped to `IN_PROGRESS` when the process dies: the claimer only claims `PENDING`, and the in-memory queue contents are lost, so those downloads are stranded in `IN_PROGRESS` forever.
+>
+> This was omitted only to keep the first cut simple and MUST be implemented next:
+> - A reaper/timeout that reclaims stale `IN_PROGRESS` rows (reset to `PENDING` or re-enqueue), with idempotent reprocessing.
+> - Queue overflow/backpressure from the worker back to the claimer (the buffer is currently unbounded).
+> - Eventually a durable broker (RabbitMQ/Redis) per the target architecture, which removes the in-memory-loss problem entirely.
 
 Current endpoints:
 
@@ -61,7 +78,7 @@ Current endpoints:
 - `GET /search/{query}/tracks` — LastFM track search
 - `GET /search/{query}/albums` — LastFM album search
 - `GET /search/{query}/artists` — LastFM artist search
-- `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`
+- `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
 
 ## Product Context
 

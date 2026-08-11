@@ -28,3 +28,6 @@ slskd-service:
 download-runner:
   interval-ms: 10000
   batch-size: 10
+
+download-worker:
+  concurrency: 3
