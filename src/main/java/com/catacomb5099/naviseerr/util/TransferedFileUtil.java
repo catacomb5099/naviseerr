@@ -13,7 +13,7 @@ public class TransferedFileUtil {
         return  Arrays.stream(file.getState().split(","))
                 .map(String::trim)
                 .map(state -> Arrays.stream(TransferState.values())
-                        .filter(transferState -> transferState.name().equalsIgnoreCase(state))
+                        .filter(transferState -> transferState.getValue().equalsIgnoreCase(state))
                         .findFirst())
                 .flatMap(java.util.Optional::stream)
                 .toList();
