@@ -7,6 +7,7 @@ import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -39,17 +40,6 @@ public class SlskdService {
                 .bodyToMono(SearchState.class);
     }
 
-    public Mono<SearchState> getSearchResultsProgress(String searchId) {
-        return webClient
-                .get()
-                .uri(uriBuilder -> uriBuilder
-                        .path(SEARCHES_ENDPOINT + "/" + searchId)
-                        .queryParam("includeResponses", true)
-                        .build())
-                .retrieve()
-                .bodyToMono(SearchState.class);
-    }
-
     public Mono<QueueDownloadResponse> enqueueDownload(String username, SearchFile file) {
         return webClient
                 .post()
@@ -65,5 +55,29 @@ public class SlskdService {
                 .uri(TRANSFERS_ENDPOINT + "/" + username + "/" + downloadId)
                 .retrieve()
                 .bodyToMono(TransferedFile.class);
+    }
+
+    public Flux<SearchState> getAllSearches() {
+        return webClient
+                .get()
+                .uri(SEARCHES_ENDPOINT)
+                .retrieve()
+                .bodyToFlux(SearchState.class);
+    }
+
+    public Mono<Void> deleteSearch(String searchId) {
+        return webClient
+                .delete()
+                .uri(SEARCHES_ENDPOINT + "/" + searchId)
+                .retrieve()
+                .bodyToMono(Void.class);
+    }
+
+    public Flux<TransferedFile> getAllDownloads() {
+        return webClient
+                .get()
+                .uri(TRANSFERS_ENDPOINT)
+                .retrieve()
+                .bodyToFlux(TransferedFile.class);
     }
 }
