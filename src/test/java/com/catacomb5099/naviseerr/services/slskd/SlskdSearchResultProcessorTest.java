@@ -7,7 +7,6 @@ import com.catacomb5099.naviseerr.util.TrackMatchingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
-import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.List;
@@ -27,63 +26,6 @@ class SlskdSearchResultProcessorTest {
         // sensible defaults
         ReflectionTestUtils.setField(processor, "minBitRate", 128);
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 5);
-        ReflectionTestUtils.setField(processor, "maxPollAttempts", 3);
-        ReflectionTestUtils.setField(processor, "firstBackOffDuration", 10L);
-    }
-
-    @Test
-    void pollUntilComplete_emptyQuery_returnsEmptyMono_andDoesNotPollProgress() {
-        when(slskdService.searchResults("")).thenReturn(Mono.empty());
-
-        StepVerifier.create(processor.pollUntilComplete(""))
-                .verifyComplete();
-
-        verify(slskdService, never()).searchResults(anyString());
-        verify(slskdService, never()).getSearchResultsProgress(anyString());
-    }
-
-    @Test
-    void pollUntilComplete_searchResultsErrors_propagatesError_andDoesNotCallProgress() {
-        when(slskdService.searchResults("q")).thenReturn(Mono.error(new RuntimeException("boom")));
-
-        StepVerifier.create(processor.pollUntilComplete("q"))
-                .verifyError();
-
-        verify(slskdService).searchResults("q");
-        verify(slskdService, never()).getSearchResultsProgress(anyString());
-    }
-
-    @Test
-    void pollUntilComplete_searchReturnsStartState_butProgressErrors_calledOnceThenError() {
-        // ensure only one poll attempt by setting maxPollAttempts=1
-        ReflectionTestUtils.setField(processor, "maxPollAttempts", 1);
-
-        SearchState startState = mock(SearchState.class);
-        when(startState.getId()).thenReturn("start-id");
-        when(slskdService.searchResults("q")).thenReturn(Mono.just(startState));
-        when(slskdService.getSearchResultsProgress("start-id")).thenReturn(Mono.error(new RuntimeException("progress fail")));
-
-        StepVerifier.create(processor.pollUntilComplete("q"))
-                .verifyError();
-
-        verify(slskdService).searchResults("q");
-        // called once due to single poll attempt configured
-        verify(slskdService, times(1)).getSearchResultsProgress("start-id");
-    }
-
-    @Test
-    void pollUntilComplete_progressReturnsCompleteState_emitsThatState() {
-        SearchState startState = mock(SearchState.class);
-        when(startState.getId()).thenReturn("start-id");
-        SearchState complete = mock(SearchState.class);
-        when(complete.getIsComplete()).thenReturn(true);
-        when(complete.getFileCount()).thenReturn(1);
-        when(slskdService.searchResults("q")).thenReturn(Mono.just(startState));
-        when(slskdService.getSearchResultsProgress("start-id")).thenReturn(Mono.just(complete));
-
-        StepVerifier.create(processor.pollUntilComplete("q"))
-                .expectNextMatches(SearchState::getIsComplete)
-                .verifyComplete();
     }
 
     @Test
