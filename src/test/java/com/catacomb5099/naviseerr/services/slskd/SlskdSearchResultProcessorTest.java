@@ -12,6 +12,7 @@ import reactor.test.StepVerifier;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -154,5 +155,68 @@ class SlskdSearchResultProcessorTest {
                                 list.get(1).getKey().getUploadSpeed() == 200 &&
                                 list.get(2).getKey().getUploadSpeed() == 100)
                 .verifyComplete();
+    }
+
+    @Test
+    void selectBestFiles_prefersAFreeSlotOverAFasterBusyPeer() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        // fast, but 40 people ahead of you
+        SearchResponseItem busy = peer("busy", 10_000_000, false, 40, file("busy/song.flac"));
+        // slower, but can start right now
+        SearchResponseItem free = peer("free", 2_000_000, true, 0, file("free/song.flac"));
+
+        var result = processor.selectBestFiles(state(busy, free), "song").block();
+
+        assertEquals("free", result.getFirst().getKey().getUsername());
+    }
+
+    @Test
+    void selectBestFiles_amongFreePeers_prefersTheShorterQueue() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        SearchResponseItem longer = peer("longer", 9_000_000, true, 5, file("longer/song.flac"));
+        SearchResponseItem shorter = peer("shorter", 8_000_000, true, 1, file("shorter/song.flac"));
+
+        var result = processor.selectBestFiles(state(longer, shorter), "song").block();
+
+        assertEquals("shorter", result.getFirst().getKey().getUsername());
+    }
+
+    @Test
+    void selectBestFiles_allElseEqual_stillPrefersTheFasterPeer() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        SearchResponseItem slow = peer("slow", 1_000_000, true, 0, file("slow/song.flac"));
+        SearchResponseItem fast = peer("fast", 9_000_000, true, 0, file("fast/song.flac"));
+
+        var result = processor.selectBestFiles(state(slow, fast), "song").block();
+
+        assertEquals("fast", result.getFirst().getKey().getUsername());
+    }
+
+    private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadsSlot, int queueLength, SearchFile file) {
+        SearchResponseItem item = mock(SearchResponseItem.class);
+        when(item.getUsername()).thenReturn(username);
+        when(item.getUploadSpeed()).thenReturn(uploadSpeed);
+        when(item.getHasFreeUploadsSlot()).thenReturn(hasFreeUploadsSlot);
+        when(item.getQueueLength()).thenReturn(queueLength);
+        when(item.getFiles()).thenReturn(List.of(file));
+        return item;
+    }
+
+    private SearchFile file(String filename) {
+        SearchFile searchFile = mock(SearchFile.class);
+        when(searchFile.getFilename()).thenReturn(filename);
+        when(searchFile.getExtension()).thenReturn("flac");
+        when(searchFile.getBitRate()).thenReturn(Optional.empty());
+        return searchFile;
+    }
+
+    private SearchState state(SearchResponseItem... peers) {
+        SearchState state = mock(SearchState.class);
+        when(state.getResponses()).thenReturn(List.of(peers));
+        when(state.getFileCount()).thenReturn(peers.length);
+        return state;
     }
 }

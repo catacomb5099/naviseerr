@@ -24,6 +24,15 @@ public class SlskdSearchResultProcessor {
     @Value("${slskd-service.max-files-per-download}")
     int maxFilesPerDownload;
 
+    // A free slot is a fact about now; uploadSpeed is the peer's own unverified claim about its
+    // history. So: can they start at all, then how many people are ahead of you, then speed.
+    private static final Comparator<Map.Entry<SearchResponseItem, SearchFile>> BY_AVAILABILITY =
+            Comparator
+                    .comparing((Map.Entry<SearchResponseItem, SearchFile> entry) ->
+                            !Boolean.TRUE.equals(entry.getKey().getHasFreeUploadsSlot()))
+                    .thenComparingInt(entry -> entry.getKey().getQueueLength())
+                    .thenComparingInt(entry -> -entry.getKey().getUploadSpeed());
+
     public SlskdSearchResultProcessor(SlskdService slskdService, TrackMatchingService trackMatchingService) {
         this.slskdService = slskdService;
         this.trackMatchingService = trackMatchingService;
@@ -35,7 +44,7 @@ public class SlskdSearchResultProcessor {
                     .flatMap(item -> item.getFiles().stream().map(file -> Map.entry(item, file)))
                     .filter(entry -> isFlacAndHighBitrate(entry.getValue()))
                     .filter(entry -> isRelevant(entry.getValue(), query))
-                    .sorted(Comparator.comparingInt(entry -> -entry.getKey().getUploadSpeed()))
+                    .sorted(BY_AVAILABILITY)
                     .toList();
 
             log.info("Completed candidate selection for query='{}' - {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, state.getFileCount(), candidates.size(), maxFilesPerDownload);
