@@ -9,7 +9,7 @@ import java.util.List;
 
 public class TransferedFileUtil {
     public static List<TransferState> getStateList(TransferedFile file) {
-        if(file == null) return Collections.emptyList();
+        if(file == null || file.getState() == null) return Collections.emptyList();
         return  Arrays.stream(file.getState().split(","))
                 .map(String::trim)
                 .map(state -> Arrays.stream(TransferState.values())

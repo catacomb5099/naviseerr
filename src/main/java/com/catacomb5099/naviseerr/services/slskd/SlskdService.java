@@ -4,6 +4,7 @@ import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
+import com.catacomb5099.naviseerr.schema.slskd.UserTransfers;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -87,11 +88,23 @@ public class SlskdService {
                 .bodyToMono(SearchState.class);
     }
 
+    /**
+     * Every transfer slskd currently knows about, flattened. The endpoint groups transfers by peer and
+     * then by directory ({@link UserTransfers}), so the flattening is required, not cosmetic: reading
+     * the response as a flat {@code Flux<TransferedFile>} yields one all-null transfer per peer, whose
+     * null {@code id} makes every by-id lookup miss.
+     */
     public Flux<TransferedFile> getAllDownloads() {
         return webClient
                 .get()
                 .uri(TRANSFERS_ENDPOINT)
                 .retrieve()
-                .bodyToFlux(TransferedFile.class);
+                .bodyToFlux(UserTransfers.class)
+                .flatMapIterable(user -> user.getDirectories() == null
+                        ? List.of()
+                        : user.getDirectories())
+                .flatMapIterable(directory -> directory.getFiles() == null
+                        ? List.of()
+                        : directory.getFiles());
     }
 }
