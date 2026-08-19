@@ -1,4 +1,10 @@
 spring:
+  # Loads ./.env (Java-properties syntax: KEY=VALUE, one per line) as a property source when present.
+  # "optional:" means nothing breaks when the file is absent (CI, containers that inject real env
+  # vars instead). This is what lets the placeholders below resolve locally without ever putting a
+  # real secret in a file this repo commits — see .env.example and README.md.
+  config:
+    import: "optional:file:.env[.properties]"
   application:
     name: naviseerr
   r2dbc:
@@ -27,7 +33,9 @@ logging:
 
 last-fm-service:
     url: http://ws.audioscrobbler.com/2.0
-    api_key: f72e6119180c02c7c3dec26be56ff0dd
+    # No default: a missing key must fail fast at startup, not silently ship a working secret in
+    # source control. Set LASTFM_API_KEY in ./.env (see .env.example) or a real env var.
+    api_key: ${LASTFM_API_KEY}
     search-result-limit: 10
 
 # Operator note: this project owns candidate retry/failover (retry-count above). Set slskd's OWN
@@ -35,8 +43,11 @@ last-fm-service:
 # with this tier — see docs/decisions/durable-download-state-machine-13-08-2026.md. Unverified against
 # a live failure; confirm the interaction during Task 8.
 slskd-service:
-    url: http://192.168.0.2:5030/api/v0/
-    api_key: vKXTHrYfQXj8Riqzk57zJm6zhSN88gPjc2xfJSXZnCatPI3s72pHyATAJKuNLq7R
+    # The LAN default only works on the original author's network; everyone else overrides SLSKD_URL
+    # (see .env.example) to point at their own slskd instance, local or remote.
+    url: ${SLSKD_URL:http://192.168.0.2:5030/api/v0/}
+    # No default, same reasoning as LASTFM_API_KEY above.
+    api_key: ${SLSKD_API_KEY}
     timeout: 10000
     min-bit-rate: 320
     retry-count: 2
