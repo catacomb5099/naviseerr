@@ -40,14 +40,19 @@ public class SlskdSearchResultProcessor {
 
     public Mono<List<Map.Entry<SearchResponseItem, SearchFile>>> selectBestFiles(SearchState state, String query) {
         return Mono.fromCallable(() -> {
-            List<Map.Entry<SearchResponseItem, SearchFile>> candidates = state.getResponses().stream()
+            // Null rather than empty when the caller handed us a search fetched without
+            // includeResponses. Degrade to "no candidates" instead of an NPE, so the failure reads as
+            // what it is in the log below rather than as a generic step error.
+            List<SearchResponseItem> responses =
+                    state.getResponses() == null ? List.of() : state.getResponses();
+            List<Map.Entry<SearchResponseItem, SearchFile>> candidates = responses.stream()
                     .flatMap(item -> item.getFiles().stream().map(file -> Map.entry(item, file)))
                     .filter(entry -> isFlacAndHighBitrate(entry.getValue()))
                     .filter(entry -> isRelevant(entry.getValue(), query))
                     .sorted(BY_AVAILABILITY)
                     .toList();
 
-            log.info("Completed candidate selection for query='{}' - {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, state.getFileCount(), candidates.size(), maxFilesPerDownload);
+            log.info("Completed candidate selection for query='{}' - {} response(s), {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, responses.size(), state.getFileCount(), candidates.size(), maxFilesPerDownload);
             return candidates.stream().limit(maxFilesPerDownload).toList();
         });
     }
