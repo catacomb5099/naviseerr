@@ -86,19 +86,26 @@ public class DownloadStepExecutor {
         if (state == null || !Boolean.TRUE.equals(state.getIsComplete())) {
             return Mono.just(stateMachine.afterSearchPoll(task, state, List.of(), now));
         }
-        return searchResultProcessor.selectBestFiles(state, task.songName())
-                .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
-                .map(candidates -> stateMachine.afterSearchPoll(task, state, candidates, now))
-                // The search is complete either way — with or without usable candidates — so its
-                // slskd-side record is no longer needed. Pruning it (unlike pruning a transfer) is
-                // safe: DELETE is a distinct verb from cancel, a search holds no partial-download
-                // state to lose, and the candidates are already copied into this row. Best-effort:
-                // a failed delete just leaves one harmless extra row in slskd.
-                .flatMap(decision -> slskdService.deleteSearch(task.searchId())
-                        .onErrorResume(error -> {
-                            log.warn("Could not delete completed search {}", task.searchId(), error);
-                            return Mono.empty();
-                        })
-                        .thenReturn(decision));
+        // The batched GET /searches carries isComplete but NOT responses — it has no
+        // includeResponses parameter and always returns that list empty. Selecting straight off the
+        // batched state therefore finds zero candidates for every search, however many results it
+        // really got, and the download dies on NO_CANDIDATES seconds after the search completes.
+        // So the batch decides *when* to select; this single GET supplies *what* to select from.
+        // Costs one extra call per download, on the completion transition only, not per poll.
+        return slskdService.getSearchWithResponses(task.searchId())
+                .doOnNext(full -> log.info(
+                        "Search {} for download {} complete (state='{}'); summary reported "
+                                + "responseCount={} fileCount={} with {} response(s) inlined, refetch "
+                                + "returned {} response(s)",
+                        task.searchId(), task.downloadId(), full.getState(), full.getResponseCount(),
+                        full.getFileCount(), size(state.getResponses()), size(full.getResponses())))
+                .flatMap(full -> searchResultProcessor.selectBestFiles(full, task.songName())
+                        .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
+                        .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
+    }
+
+    /** The batched summary leaves {@code responses} null on some slskd versions and empty on others. */
+    private static int size(List<?> list) {
+        return list == null ? 0 : list.size();
     }
 }

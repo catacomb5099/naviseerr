@@ -57,6 +57,12 @@ public class SlskdService {
                 .bodyToMono(TransferedFile.class);
     }
 
+    /**
+     * Every search slskd currently knows about, but <strong>summaries only</strong>: the list endpoint
+     * takes no {@code includeResponses} parameter and always returns {@code responses} empty, however
+     * many results the search actually found. Use it for the {@code isComplete} gate, never for the
+     * results themselves — for those, follow up with {@link #getSearchWithResponses(String)}.
+     */
     public Flux<SearchState> getAllSearches() {
         return webClient
                 .get()
@@ -65,12 +71,20 @@ public class SlskdService {
                 .bodyToFlux(SearchState.class);
     }
 
-    public Mono<Void> deleteSearch(String searchId) {
+    /**
+     * One search including its {@code responses}. The only endpoint that populates them, so this is
+     * the required follow-up to {@link #getAllSearches()} before candidate selection. Called once per
+     * download, on the transition to complete — not once per poll.
+     */
+    public Mono<SearchState> getSearchWithResponses(String searchId) {
         return webClient
-                .delete()
-                .uri(SEARCHES_ENDPOINT + "/" + searchId)
+                .get()
+                .uri(uriBuilder -> uriBuilder
+                        .path(SEARCHES_ENDPOINT + "/" + searchId)
+                        .queryParam("includeResponses", true)
+                        .build())
                 .retrieve()
-                .bodyToMono(Void.class);
+                .bodyToMono(SearchState.class);
     }
 
     public Flux<TransferedFile> getAllDownloads() {

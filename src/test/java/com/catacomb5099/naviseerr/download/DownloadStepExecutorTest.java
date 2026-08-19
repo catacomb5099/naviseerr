@@ -37,10 +37,9 @@ class DownloadStepExecutorTest {
         searchProcessor = mock(SlskdSearchResultProcessor.class);
         DownloadStateMachine machine = new DownloadStateMachine(
                 Duration.ofSeconds(2), Duration.ofSeconds(5),
-                Duration.ofSeconds(120), Duration.ofSeconds(3600), 2);
+                Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofSeconds(60), 2);
         executor = new DownloadStepExecutor(slskdService, searchProcessor, machine,
                 Clock.fixed(T0, ZoneOffset.UTC));
-        when(slskdService.deleteSearch(any())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -77,41 +76,72 @@ class DownloadStepExecutorTest {
     }
 
     @Test
-    void searchPoll_complete_selectsCandidatesAndMapsThem_thenDeletesTheSearch() {
-        var state = SlskdFixtures.searchState("s1", true, "Completed");
+    void searchPoll_complete_refetchesTheSearchForItsResponses_andSelectsFromThat() {
+        // THE REGRESSION GUARD. The batched summary is complete but carries no responses -- that is
+        // not a fixture convenience, it is what GET /searches actually returns, since it has no
+        // includeResponses parameter. Selecting off the summary therefore found zero candidates for
+        // every search and killed the download on NO_CANDIDATES seconds after the search completed.
+        // Selection must run against the refetched state, never the batched one.
+        var summary = SlskdFixtures.searchState("s1", true, "Completed, ResponseLimitReached");
         var file = new SearchFile("music/alice/song.flac", 10L, 7L, false, "flac", Optional.of(1411));
-        var peer = new SearchResponseItem(1, java.util.List.of(file), true, 0,
-                java.util.List.of(), 0, 1, 900, "alice");
-        when(searchProcessor.selectBestFiles(eq(state), any()))
-                .thenReturn(Mono.just(java.util.List.of(Map.entry(peer, file))));
+        var peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 900, "alice");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true,
+                "Completed, ResponseLimitReached", List.of(peer));
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.selectBestFiles(eq(full), any()))
+                .thenReturn(Mono.just(List.of(Map.entry(peer, file))));
 
         DownloadDecision d = executor
-                .execute(searchPolling("s1"), Map.of("s1", state), Map.of()).block();
+                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
         assertEquals("alice", next.candidates().getFirst().username());
         assertEquals(1411, next.candidates().getFirst().bitRate());
-        verify(slskdService).deleteSearch("s1");
+        verify(slskdService).getSearchWithResponses("s1");
+        verify(searchProcessor, never()).selectBestFiles(eq(summary), any());
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_stillDeletesTheSearch() {
-        var state = SlskdFixtures.searchState("s1", true, "Completed");
-        when(searchProcessor.selectBestFiles(eq(state), any())).thenReturn(Mono.just(List.of()));
+    void searchPoll_completeWithNoCandidatesEvenAfterRefetch_fails() {
+        var summary = SlskdFixtures.searchState("s1", true, "Completed");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.selectBestFiles(eq(full), any())).thenReturn(Mono.just(List.of()));
 
-        executor.execute(searchPolling("s1"), Map.of("s1", state), Map.of()).block();
+        DownloadDecision d = executor
+                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
 
-        verify(slskdService).deleteSearch("s1");
+        assertEquals(DownloadStateMachine.NO_CANDIDATES,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
     }
 
     @Test
-    void searchPoll_stillRunning_neverDeletesTheSearch() {
+    void searchPoll_completedWithResponseLimitReached_isNotAFailure() {
+        // "Completed, ResponseLimitReached" is slskd saying the search stopped because it found
+        // PLENTY -- a healthy outcome, not an error, and nothing the app needs to recover from.
+        var summary = SlskdFixtures.searchState("s1", true, "Completed, ResponseLimitReached");
+        var file = new SearchFile("music/alice/song.flac", 10L, 7L, false, "flac", Optional.of(1411));
+        var peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 900, "alice");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true,
+                "Completed, ResponseLimitReached", List.of(peer));
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.selectBestFiles(eq(full), any()))
+                .thenReturn(Mono.just(List.of(Map.entry(peer, file))));
+
+        DownloadDecision d = executor
+                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
+
+        assertInstanceOf(DownloadDecision.Advance.class, d);
+    }
+
+    @Test
+    void searchPoll_stillRunning_makesNoRefetch() {
         var state = SlskdFixtures.searchState("s1", false, "InProgress");
 
         executor.execute(searchPolling("s1"), Map.of("s1", state), Map.of()).block();
 
-        verify(slskdService, never()).deleteSearch(any());
+        verify(slskdService, never()).getSearchWithResponses(any());
     }
 
     @Test
