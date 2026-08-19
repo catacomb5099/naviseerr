@@ -15,6 +15,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -48,6 +50,10 @@ public class YtMusicService {
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, this::translateError)
                 .bodyToMono(YtMusicSearchResponse.class)
+                .doOnNext(response -> log.debug(
+                        "ytmusic-adapter responded for type={} query='{}': reportedType={}, count={}, items={}",
+                        type, query, response.getType(), response.getCount(),
+                        summarizeItems(response.getItems())))
                 .timeout(Duration.ofMillis(timeoutMs))
                 // Any failure that isn't already one of our typed exceptions (client-side
                 // timeout, connection refused, decode failure) is a provider-availability
@@ -59,6 +65,9 @@ public class YtMusicService {
                 )
                 .retryWhen(ReactivePoller.defaultBackoff(Duration.ofMillis(firstBackOffDurationMs), retryCount)
                         .filter(YtMusicUnavailableException.class::isInstance)
+                        .doBeforeRetry(signal -> log.warn(
+                                "Retrying ytmusic-adapter request for type={} query='{}' (attempt {}) after: {}",
+                                type, query, signal.totalRetries() + 1, signal.failure().getMessage()))
                         // Reactor's default exhaustion behavior wraps the last failure in an
                         // IllegalStateException; unwrap it so callers only ever see
                         // YtMusicException subtypes, retried or not.
@@ -96,6 +105,7 @@ public class YtMusicService {
         return response.bodyToMono(JsonNode.class)
                 .defaultIfEmpty(JsonNodeFactory.instance.objectNode())
                 .<YtMusicException>map(body -> buildException(statusCode, extractMessage(body, statusCode)))
+                .doOnNext(ex -> log.warn("ytmusic-adapter returned {}: {}", statusCode, ex.getMessage()))
                 .onErrorReturn(new YtMusicUnavailableException(
                         "ytmusic-adapter returned " + statusCode + " with an unreadable error body"));
     }
@@ -108,6 +118,19 @@ public class YtMusicService {
         }
         // 429/502/504/404 and any other unlisted status: provider failed or is unreachable.
         return new YtMusicUnavailableException(message);
+    }
+
+    /**
+     * DEBUG-only, so this stays on for verifying real-world YouTube Music responses without
+     * flooding INFO -- title + resultType per item, never the full raw payload.
+     */
+    private String summarizeItems(List<YtMusicSearchResponse.Item> items) {
+        if (items == null || items.isEmpty()) {
+            return "[]";
+        }
+        return items.stream()
+                .map(item -> "%s:'%s'".formatted(item.getType(), item.getTitle()))
+                .collect(Collectors.joining(", ", "[", "]"));
     }
 
     private String extractMessage(JsonNode body, int statusCode) {

@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
+
 @Slf4j
 @RestController
 @AllArgsConstructor
@@ -23,42 +25,43 @@ public class SearchService {
 
     @GetMapping("/search/{query}")
     Mono<SearchResponse> search(@PathVariable String query) {
-        // TODO: log result count
         log.info("Received YtMusic general search request for query='{}'", query);
         return ytMusicService.getResults(query)
             .doOnSubscribe(subscription -> log.debug("Starting YtMusic general search for query='{}' (subscription={})", query, subscription))
-            .doOnSuccess(result -> log.info("Completed YtMusic general search for query='{}'", query))
+            .doOnSuccess(result -> log.info("Completed YtMusic general search for query='{}': tracks={}, albums={}, artists={}",
+                    query, size(result.getTracks()), size(result.getAlbums()), size(result.getArtists())))
             .doOnError(error -> log.error("YtMusic general search failed for query='{}'", query, error));
     }
 
     @GetMapping("/search/{query}/tracks")
     Mono<SearchResponse> searchTracks(@PathVariable String query) {
-        // TODO: log result count
         log.info("Received YtMusic track search request for query='{}'", query);
         return ytMusicService.getResults(query, YtMusicSearchType.SONGS)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic track search for query='{}' (subscription={})", query, subscription))
-                .doOnSuccess(result -> log.info("Completed YtMusic track search for query='{}'", query))
+                .doOnSuccess(result -> log.info("Completed YtMusic track search for query='{}': tracks={}", query, size(result.getTracks())))
                 .doOnError(error -> log.error("YtMusic track search failed for query='{}'", query, error));
     }
 
     @GetMapping("/search/{query}/albums")
     Mono<SearchResponse> searchAlbums(@PathVariable String query) {
-        // TODO: log result count
         log.info("Received YtMusic album search request for query='{}'", query);
         return ytMusicService.getResults(query, YtMusicSearchType.ALBUMS)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic album search for query='{}' (subscription={})", query, subscription))
-                .doOnSuccess(result -> log.info("Completed YtMusic album search for query='{}'", query))
+                .doOnSuccess(result -> log.info("Completed YtMusic album search for query='{}': albums={}", query, size(result.getAlbums())))
                 .doOnError(error -> log.error("YtMusic album search failed for query='{}'", query, error));
     }
 
     @GetMapping("/search/{query}/artists")
     Mono<SearchResponse> searchArtists(@PathVariable String query) {
-        // TODO: log result count
         log.info("Received YtMusic artist search request for query='{}'", query);
         return ytMusicService.getResults(query, YtMusicSearchType.ARTISTS)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic artist search for query='{}' (subscription={})", query, subscription))
-                .doOnSuccess(result -> log.info("Completed YtMusic artist search for query='{}'", query))
+                .doOnSuccess(result -> log.info("Completed YtMusic artist search for query='{}': artists={}", query, size(result.getArtists())))
                 .doOnError(error -> log.error("YtMusic artist search failed for query='{}'", query, error));
+    }
+
+    private static int size(List<?> list) {
+        return list == null ? 0 : list.size();
     }
 
     // AGENTS.md: "report 'no good match' distinctly from provider errors, timeouts, and
