@@ -16,10 +16,11 @@ class DownloadStateMachineTest {
     private static final Duration DOWNLOAD_BUDGET = Duration.ofSeconds(3600);
     private static final Duration SEARCH_POLL = Duration.ofSeconds(2);
     private static final Duration DOWNLOAD_POLL = Duration.ofSeconds(5);
+    private static final Duration MISSING_GRACE = Duration.ofSeconds(60);
     private static final int RETRY_LIMIT = 2;
 
     private final DownloadStateMachine machine = new DownloadStateMachine(
-            SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, RETRY_LIMIT);
+            SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, MISSING_GRACE, RETRY_LIMIT);
 
     @Test
     void searchInit_recordsSearchId_andAdvancesToSearchPoll() {
@@ -166,17 +167,45 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void downloadPoll_transferMissingFromBatchResponse_treatedAsStillRunning() {
-        // The batched GET /transfers/downloads simply omits a transfer it doesn't recognise —
-        // TransferedFileUtil.getStateList already returns an empty list for a null file, which
-        // matches neither the success nor the failure predicate, so this falls through to the same
-        // "still running, check the budget" branch as an in-progress transfer. No dedicated branch
-        // needed; this test exists to pin that behaviour down explicitly.
+    void downloadPoll_transferMissingFromBatchResponse_keepsPollingOnlyWithinTheGraceWindow() {
+        // A transfer absent from GET /transfers/downloads is tolerated briefly, to cover the gap
+        // between enqueueing it and it showing up in the list.
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"), null, T0.plusSeconds(10));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(T0.plusSeconds(15), next.nextAttemptAt());
+    }
+
+    @Test
+    void downloadPoll_transferMissingPastTheGraceWindow_failsFast_ratherThanPollingForTheFullHour() {
+        // THE REGRESSION GUARD for the stranded-poll bug. This case used to alias onto the
+        // "still running" branch, so a lookup that could never resolve was indistinguishable from a
+        // transfer in progress and the row polled for the whole 1h downloadBudget before timing out.
+        // It now terminates after MISSING_GRACE (60s) with a reason that names the actual problem.
+        // Note the deliberate choice of FAILED over SUCCEEDED: not being able to see a transfer is
+        // not evidence that it finished.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice"), 0, 0, "abc"), null, T0.plusSeconds(61));
+
+        DownloadDecision.Terminal terminal = assertInstanceOf(DownloadDecision.Terminal.class, d);
+        assertEquals(DownloadStatus.FAILED, terminal.status());
+        assertEquals(DownloadStateMachine.TRANSFER_NOT_FOUND, terminal.message());
+        assertTrue(Duration.between(T0, T0.plusSeconds(61)).compareTo(DOWNLOAD_BUDGET) < 0,
+                "must fail well before the download budget, otherwise this proves nothing");
+    }
+
+    @Test
+    void downloadPoll_transferPresentButWithAnUnparseableState_isTreatedAsNotFound() {
+        // Defensive: a found transfer whose state string yields no recognised token is just as
+        // undecidable as a missing one, and must not be mistaken for progress either.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "SomethingSlskdInventedLater"),
+                T0.plusSeconds(61));
+
+        assertEquals(DownloadStateMachine.TRANSFER_NOT_FOUND,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
     }
 
     @Test

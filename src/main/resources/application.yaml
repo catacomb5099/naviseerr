@@ -18,6 +18,13 @@ spring:
     user: ${SPRING_R2DBC_USERNAME:naviseerr}
     password: ${SPRING_R2DBC_PASSWORD:naviseerr}
 
+logging:
+  level:
+    # DEBUG here surfaces the per-pass slskd call log ("slskd calls this pass: GET /searches=...,
+    # GET /transfers/downloads=..."), which is the direct measure of the slskd request rate — count
+    # those lines over a minute rather than inferring it from the intervals below.
+    com.catacomb5099.naviseerr.download: DEBUG
+
 last-fm-service:
     url: http://ws.audioscrobbler.com/2.0
     api_key: f72e6119180c02c7c3dec26be56ff0dd
@@ -60,3 +67,7 @@ download-task:
   # in play.
   search-budget-ms: 120000
   download-budget-ms: 3600000
+  # A DOWNLOAD_POLL row whose transfer is absent from GET /transfers/downloads gets this much grace
+  # (not the hour above) before failing. slskd keeps completed transfers in that list, so "absent"
+  # means the lookup is broken, not that the download finished -- fail fast and loudly instead.
+  missing-transfer-grace-ms: 60000

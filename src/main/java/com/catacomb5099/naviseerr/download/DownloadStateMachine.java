@@ -25,11 +25,13 @@ public class DownloadStateMachine {
     public static final String NO_CANDIDATES = "No download candidates found";
     public static final String SOURCES_EXHAUSTED = "All download sources exhausted";
     public static final String TIMED_OUT = "timed out";
+    public static final String TRANSFER_NOT_FOUND = "slskd has no record of this transfer";
 
     private final Duration searchPollInterval;
     private final Duration downloadPollInterval;
     private final Duration searchBudget;
     private final Duration downloadBudget;
+    private final Duration missingTransferGrace;
     private final int retryLimit;
 
     public DownloadStateMachine(
@@ -37,11 +39,13 @@ public class DownloadStateMachine {
             @Value("${download-task.download-poll-interval-ms:5000}") Duration downloadPollInterval,
             @Value("${download-task.search-budget-ms:120000}") Duration searchBudget,
             @Value("${download-task.download-budget-ms:3600000}") Duration downloadBudget,
+            @Value("${download-task.missing-transfer-grace-ms:60000}") Duration missingTransferGrace,
             @Value("${slskd-service.retry-count}") int retryLimit) {
         this.searchPollInterval = searchPollInterval;
         this.downloadPollInterval = downloadPollInterval;
         this.searchBudget = searchBudget;
         this.downloadBudget = downloadBudget;
+        this.missingTransferGrace = missingTransferGrace;
         this.retryLimit = retryLimit;
     }
 
@@ -97,11 +101,17 @@ public class DownloadStateMachine {
     }
 
     /**
-     * {@code file} may be {@code null} — the batched {@code GET /transfers/downloads} simply omits a
-     * transfer it doesn't recognise, and {@link TransferedFileUtil#getStateList} already returns an
-     * empty list for a null file. An empty list matches neither the success nor the failure predicate
-     * below, so a missing transfer falls through to the same still-running branch as an in-progress
-     * one and eventually resolves via the phase budget — no dedicated branch needed.
+     * {@code file} is {@code null} when the batched {@code GET /transfers/downloads} has no transfer
+     * with this row's id, and {@link TransferedFileUtil#getStateList} returns an empty list for it.
+     *
+     * <p>That case gets its OWN short-budget branch rather than falling through to "still running".
+     * Aliasing the two — the original design — meant a lookup that could never succeed was
+     * indistinguishable from a transfer making progress, so the row polled for the full hour-long
+     * {@code downloadBudget} before reporting a timeout. Not hypothetical: it is exactly what the
+     * nested-response bug in {@code getAllDownloads} produced, and the aliasing is what kept it silent.
+     * slskd retains completed transfers (a finished one still reports {@code "Completed, Succeeded"}
+     * with {@code removed: false}), so "absent from the list" is a real signal, not a normal lifecycle
+     * stage, and it deserves to fail loudly and quickly.
      */
     public DownloadDecision afterDownloadPoll(DownloadTask task, TransferedFile file, Instant now) {
         List<TransferState> states = TransferedFileUtil.getStateList(file);
@@ -110,6 +120,15 @@ public class DownloadStateMachine {
         }
         if (states.stream().anyMatch(TransferState::isFailure)) {
             return retryOrAdvanceCandidate(task, now);
+        }
+        if (states.isEmpty()) {
+            // Deliberately NOT reported as SUCCEEDED. "We cannot see this transfer" is not evidence
+            // that it finished, and treating it as success would mark downloads complete that never
+            // moved a byte. A short grace window absorbs the gap between enqueueing and the transfer
+            // appearing in the list; past that, stop polling and say so.
+            return task.isPastBudget(now, missingTransferGrace)
+                    ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TRANSFER_NOT_FOUND)
+                    : new DownloadDecision.Continue(task.dueAt(now.plus(downloadPollInterval)));
         }
         return task.isPastBudget(now, downloadBudget)
                 ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TIMED_OUT)
