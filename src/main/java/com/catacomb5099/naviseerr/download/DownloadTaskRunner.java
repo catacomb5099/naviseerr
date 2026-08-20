@@ -119,7 +119,6 @@ public class DownloadTaskRunner {
      */
     private Mono<Void> stepDueTasks(Instant now) {
         return repository.countActiveTransfers()
-                // TODO:  will this ever be a more than one item flux?,  it seems to be collecting a long?
                 .flatMapMany(active -> {
                     boolean transferSlotsFree = active < maxConcurrentTransfers;
                     return repository.claimDueTasks(batchSize, instanceId, now, leaseDuration,
