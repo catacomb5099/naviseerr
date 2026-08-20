@@ -4,9 +4,9 @@ import com.catacomb5099.naviseerr.schema.response.Album;
 import com.catacomb5099.naviseerr.schema.response.Artist;
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
 import com.catacomb5099.naviseerr.schema.response.Track;
-import com.catacomb5099.naviseerr.services.ytmusic.YtMusicSearchType;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicSearchResponse;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -21,47 +21,45 @@ import java.util.Objects;
  * - Every list is non-null (empty, never null) -- {@code id}/{@code name} are React keys /
  *   display text on the client and must never be null either.
  *
- * Each typed sugar route ({@code /v1/search/songs|albums|artists}) is filtered server-side by
- * ytmusicapi, but items are re-filtered by {@code resultType} here defensively -- upstream shape
- * drift must not leak, e.g., a podcast into the artists list (see naviseerr gotchas.md #5, the
- * precedent for defensive image/index handling on the Last.fm path this replaces).
+ * This partitions by {@code resultType} in a single pass rather than switching per caller: a
+ * typed sugar route ({@code /v1/search/songs|albums|artists}) already filtered server-side by
+ * ytmusicapi yields items of one type, so two of the three lists come back empty; the general,
+ * unfiltered route yields a mix of all three (plus junk types below), so all three lists can be
+ * populated from one call. Either way, items are re-classified by {@code resultType} here
+ * defensively -- upstream shape drift must not leak, e.g., a podcast into the artists list (see
+ * naviseerr gotchas.md #5, the precedent for defensive image/index handling on the Last.fm path
+ * this replaces).
  */
 public class YtMusicSearchResponseMapper {
 
     private YtMusicSearchResponseMapper() {
     }
 
-    public static SearchResponse mapToSearchResponse(YtMusicSearchType type, YtMusicSearchResponse response) {
+    public static SearchResponse mapToSearchResponse(YtMusicSearchResponse response) {
         List<YtMusicSearchResponse.Item> items = response != null && response.getItems() != null
                 ? response.getItems()
                 : Collections.emptyList();
 
-        return switch (type) {
-            case SONGS -> new SearchResponse(mapTracks(items), Collections.emptyList(), Collections.emptyList());
-            case ALBUMS -> new SearchResponse(Collections.emptyList(), mapAlbums(items), Collections.emptyList());
-            case ARTISTS -> new SearchResponse(Collections.emptyList(), Collections.emptyList(), mapArtists(items));
-        };
-    }
+        List<Track> tracks = new ArrayList<>();
+        List<Album> albums = new ArrayList<>();
+        List<Artist> artists = new ArrayList<>();
 
-    private static List<Track> mapTracks(List<YtMusicSearchResponse.Item> items) {
-        return items.stream()
-                .filter(item -> "song".equals(item.getType()))
-                .map(YtMusicSearchResponseMapper::mapTrack)
-                .toList();
-    }
+        for (YtMusicSearchResponse.Item item : items) {
+            if (item == null || item.getType() == null) {
+                continue;
+            }
+            switch (item.getType()) {
+                case "song" -> tracks.add(mapTrack(item));
+                case "album" -> albums.add(mapAlbum(item));
+                case "artist" -> artists.add(mapArtist(item));
+                // "video", "episode", "podcast", "playlist", "station", "profile" and any future
+                // resultType are deliberately dropped -- SearchResponse has no field for them and
+                // the adapter cannot be asked to exclude them (its filter param is single-valued).
+                default -> { }
+            }
+        }
 
-    private static List<Album> mapAlbums(List<YtMusicSearchResponse.Item> items) {
-        return items.stream()
-                .filter(item -> "album".equals(item.getType()))
-                .map(YtMusicSearchResponseMapper::mapAlbum)
-                .toList();
-    }
-
-    private static List<Artist> mapArtists(List<YtMusicSearchResponse.Item> items) {
-        return items.stream()
-                .filter(item -> "artist".equals(item.getType()))
-                .map(YtMusicSearchResponseMapper::mapArtist)
-                .toList();
+        return new SearchResponse(List.copyOf(tracks), List.copyOf(albums), List.copyOf(artists));
     }
 
     private static Track mapTrack(YtMusicSearchResponse.Item item) {

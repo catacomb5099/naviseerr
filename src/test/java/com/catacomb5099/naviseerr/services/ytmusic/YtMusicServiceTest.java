@@ -41,6 +41,47 @@ class YtMusicServiceTest {
             }
             """;
 
+    private static final String MIXED_BODY = """
+            {
+              "query": "Oasis Wonderwall",
+              "type": null,
+              "count": 3,
+              "items": [
+                {
+                  "type": "song",
+                  "videoId": "hpSrLjc5SMs",
+                  "browseId": null,
+                  "playlistId": null,
+                  "title": "Wonderwall",
+                  "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}],
+                  "album": null,
+                  "durationSeconds": null,
+                  "thumbnailUrl": "https://example.com/song.jpg",
+                  "explicit": false,
+                  "year": null
+                },
+                {
+                  "type": "album",
+                  "videoId": null,
+                  "browseId": "MPREb_Hl8XJR59OrY",
+                  "playlistId": "OLAK5uy_m--RCG58SjXLvgRiw0pASnMY6YjE8q3NU",
+                  "title": "Definitely Maybe",
+                  "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}],
+                  "thumbnailUrl": "https://example.com/album.jpg",
+                  "year": 1994
+                },
+                {
+                  "type": "artist",
+                  "videoId": null,
+                  "browseId": "UCmMUZbaYdNH0bEd1PAlAqsA",
+                  "title": "Oasis",
+                  "artists": [],
+                  "thumbnailUrl": "https://example.com/artist.jpg"
+                }
+              ]
+            }
+            """;
+
     private MockWebServer server;
     private YtMusicService service;
 
@@ -52,6 +93,7 @@ class YtMusicServiceTest {
         WebClient webClient = WebClient.builder().baseUrl(server.url("/").toString()).build();
         service = new YtMusicService(webClient);
         ReflectionTestUtils.setField(service, "searchResultLimit", 10);
+        ReflectionTestUtils.setField(service, "mixedSearchLimit", 100);
         ReflectionTestUtils.setField(service, "timeoutMs", 2000L);
         ReflectionTestUtils.setField(service, "retryCount", 1);
         ReflectionTestUtils.setField(service, "firstBackOffDurationMs", 1L);
@@ -84,6 +126,40 @@ class YtMusicServiceTest {
         RecordedRequest request = server.takeRequest();
         assertEquals("/v1/search/songs?q=Oasis%20Wonderwall&limit=10", request.getPath());
         assertEquals(1, server.getRequestCount());
+    }
+
+    @Test
+    void getResults_generalSearch_issuesExactlyOneUnfilteredRequest() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody(MIXED_BODY));
+
+        StepVerifier.create(service.getResults("Oasis Wonderwall"))
+                .assertNext(response -> {
+                    assertEquals(1, response.getTracks().size());
+                    assertEquals(1, response.getAlbums().size());
+                    assertEquals(1, response.getArtists().size());
+                })
+                .verifyComplete();
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("/v1/search?q=Oasis%20Wonderwall&limit=100", request.getPath());
+        assertEquals(1, server.getRequestCount());
+    }
+
+    @Test
+    void getResults_typedSearch_stillUsesSearchResultLimit_notMixedSearchLimit() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody(SONGS_BODY));
+
+        StepVerifier.create(service.getResults("Oasis Wonderwall", YtMusicSearchType.SONGS))
+                .assertNext(response -> assertEquals(1, response.getTracks().size()))
+                .verifyComplete();
+
+        RecordedRequest request = server.takeRequest();
+        assertTrue(request.getPath().contains("limit=10"));
+        assertFalse(request.getPath().contains("limit=100"));
     }
 
     @Test

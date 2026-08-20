@@ -45,6 +45,11 @@ yt-music-service:
     # The sidecar ytmusic-adapter (see compose.yaml). Default matches the port compose publishes.
     url: ${YT_MUSIC_SERVICE_URL:http://localhost:8000}
     search-result-limit: 10
+    # Mixed (unfiltered) search returns a single page of shelves -- ytmusicapi ignores `limit`
+    # when no filter is set. This is set to the adapter's maximum purely to stop the adapter's
+    # own items[:limit] truncation from starving the categories YouTube interleaves late
+    # (albums, artists). Lowering it silently drops albums from general search.
+    mixed-search-limit: 100
     timeout-ms: 15000
     # Retries apply only to YtMusicUnavailableException (adapter 429/502/504, timeout, connection
     # refused) - never to a 4xx the adapter rejected outright. See YtMusicService.

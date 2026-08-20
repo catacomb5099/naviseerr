@@ -12,23 +12,34 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriBuilder;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class YtMusicService {
-    private static final String SEARCH_PATH_PREFIX = "/v1/search/";
+    private static final String SEARCH_PATH = "/v1/search";
+    private static final String SEARCH_PATH_PREFIX = SEARCH_PATH + "/";
     private static final String QUERY_PARAM = "q";
     private static final String LIMIT_PARAM = "limit";
+    private static final String MIXED_SEARCH_LABEL = "mixed";
 
     private final WebClient ytMusicWebClient;
 
     @Value("${yt-music-service.search-result-limit}")
     private int searchResultLimit;
+    // Mixed (unfiltered) search returns a single page of shelves -- ytmusicapi ignores `limit`
+    // when no filter is set. This is set to the adapter's maximum purely to stop the adapter's
+    // own items[:limit] truncation from starving the categories YouTube interleaves late
+    // (albums, artists). Lowering it silently drops albums from general search.
+    @Value("${yt-music-service.mixed-search-limit}")
+    private int mixedSearchLimit;
     @Value("${yt-music-service.timeout-ms}")
     private long timeoutMs;
     @Value("${yt-music-service.retry-count}")
@@ -41,18 +52,44 @@ public class YtMusicService {
     }
 
     public Mono<SearchResponse> getResults(String query, YtMusicSearchType type) {
-        return ytMusicWebClient.get()
-                .uri(uriBuilder -> uriBuilder
+        return executeSearch(
+                uriBuilder -> uriBuilder
                         .path(SEARCH_PATH_PREFIX + type.getPathSegment())
                         .queryParam(QUERY_PARAM, query)
                         .queryParam(LIMIT_PARAM, searchResultLimit)
-                        .build())
+                        .build(),
+                type.getPathSegment(),
+                query);
+    }
+
+    /**
+     * Issues one unfiltered search and partitions the mixed response into tracks/albums/artists
+     * ({@link YtMusicSearchResponseMapper}) -- replaces the previous three-leg
+     * {@code Mono.zip} of typed searches. This trades result volume (YouTube Music returns one
+     * page of shelves for a mixed search, not up to {@code searchResultLimit} per type) and
+     * blanks {@code Track.albumId} (song items in a mixed response carry no {@code album} field)
+     * for a third of the provider load -- see docs/decisions/ytmusic-mixed-search-20-08-2026.md.
+     */
+    public Mono<SearchResponse> getResults(String query) {
+        return executeSearch(
+                uriBuilder -> uriBuilder
+                        .path(SEARCH_PATH)
+                        .queryParam(QUERY_PARAM, query)
+                        .queryParam(LIMIT_PARAM, mixedSearchLimit)
+                        .build(),
+                MIXED_SEARCH_LABEL,
+                query);
+    }
+
+    private Mono<SearchResponse> executeSearch(Function<UriBuilder, URI> uriFunction, String label, String query) {
+        return ytMusicWebClient.get()
+                .uri(uriFunction)
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, this::translateError)
                 .bodyToMono(YtMusicSearchResponse.class)
                 .doOnNext(response -> log.debug(
                         "ytmusic-adapter responded for type={} query='{}': reportedType={}, count={}, items={}",
-                        type, query, response.getType(), response.getCount(),
+                        label, query, response.getType(), response.getCount(),
                         summarizeItems(response.getItems())))
                 .timeout(Duration.ofMillis(timeoutMs))
                 // Any failure that isn't already one of our typed exceptions (client-side
@@ -67,31 +104,12 @@ public class YtMusicService {
                         .filter(YtMusicUnavailableException.class::isInstance)
                         .doBeforeRetry(signal -> log.warn(
                                 "Retrying ytmusic-adapter request for type={} query='{}' (attempt {}) after: {}",
-                                type, query, signal.totalRetries() + 1, signal.failure().getMessage()))
+                                label, query, signal.totalRetries() + 1, signal.failure().getMessage()))
                         // Reactor's default exhaustion behavior wraps the last failure in an
                         // IllegalStateException; unwrap it so callers only ever see
                         // YtMusicException subtypes, retried or not.
                         .onRetryExhaustedThrow((spec, signal) -> signal.failure()))
-                .map(response -> YtMusicSearchResponseMapper.mapToSearchResponse(type, response));
-    }
-
-    /**
-     * Fuses the three typed searches into one combined response. Request-level logging
-     * (received/started/completed/failed) lives once, at the controller, in
-     * {@code SearchService} -- LastFMService duplicated that triplet here too, which made
-     * every combined search log each line twice; this does not repeat that.
-     */
-    public Mono<SearchResponse> getResults(String query) {
-        Mono<SearchResponse> tracksMono = getResults(query, YtMusicSearchType.SONGS);
-        Mono<SearchResponse> albumsMono = getResults(query, YtMusicSearchType.ALBUMS);
-        Mono<SearchResponse> artistsMono = getResults(query, YtMusicSearchType.ARTISTS);
-
-        return Mono.zip(tracksMono, albumsMono, artistsMono)
-                .map(tuple -> new SearchResponse(
-                        tuple.getT1().getTracks(),
-                        tuple.getT2().getAlbums(),
-                        tuple.getT3().getArtists()
-                ));
+                .map(YtMusicSearchResponseMapper::mapToSearchResponse);
     }
 
     /**
