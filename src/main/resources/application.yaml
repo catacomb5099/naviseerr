@@ -31,12 +31,25 @@ logging:
     # those lines over a minute rather than inferring it from the intervals below.
     com.catacomb5099.naviseerr.download: DEBUG
 
+# Dormant since 10-08-2026: search runs through yt-music-service below and nothing calls Last.fm.
+# LastFMService is still a @Service with an @Value on the key, so it is read at startup even though it
+# is never used - hence the placeholder default. Do NOT restore the no-default "fail fast" form while
+# the provider is unused; that only makes the app refuse to boot without a secret it never sends.
+# Give it a real key (LASTFM_API_KEY in ./.env) only if Last.fm is re-enabled.
 last-fm-service:
     url: http://ws.audioscrobbler.com/2.0
-    # No default: a missing key must fail fast at startup, not silently ship a working secret in
-    # source control. Set LASTFM_API_KEY in ./.env (see .env.example) or a real env var.
-    api_key: ${LASTFM_API_KEY}
+    api_key: ${LASTFM_API_KEY:unused-lastfm-is-deprecated}
     search-result-limit: 10
+
+yt-music-service:
+    # The sidecar ytmusic-adapter (see compose.yaml). Default matches the port compose publishes.
+    url: ${YT_MUSIC_SERVICE_URL:http://localhost:8000}
+    search-result-limit: 10
+    timeout-ms: 15000
+    # Retries apply only to YtMusicUnavailableException (adapter 429/502/504, timeout, connection
+    # refused) - never to a 4xx the adapter rejected outright. See YtMusicService.
+    retry-count: 2
+    first-back-off-duration-ms: 50
 
 # Operator note: this project owns candidate retry/failover (retry-count above). Set slskd's OWN
 # config key `transfers.download.retry.attempts` to 0 (or 1) so its per-file retry does not compound
