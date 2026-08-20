@@ -34,17 +34,7 @@ public class DownloadService {
             WHERE download_id = :id AND status = 'IN_PROGRESS'
             """;
 
-    // Terminal write. One statement, so the download's status and the task's terminal phase cannot
-    // be split by a crash. The task UPDATE is deliberately NOT conditional on the download UPDATE
-    // matching: when the download is already terminal (reachable whenever an expired lease causes a
-    // duplicated step) a conditional write would leave the task non-terminal, and the next pass
-    // would re-step it, re-reach Terminal, and change nothing — one slskd call per interval,
-    // forever. Postgres runs a data-modifying CTE exactly once even when nothing references it, so
-    // both halves always execute.
-    //
-    // The task row is retained, not deleted: its terminal phase plus failure_reason is the history a
-    // self-hoster needs to debug a failed download. The partial index on next_attempt_at is what
-    // keeps the due-work query fast despite that.
+    // One statement so the download's status and the task's terminal phase can't be split by a crash.
     private static final String FINISH_DOWNLOAD_SQL = """
             WITH updated AS (
                 UPDATE downloads

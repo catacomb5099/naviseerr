@@ -22,18 +22,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-/**
- * The level-triggered driver. Every pass asks the database what is due and acts on the answer, so a
- * lost wakeup costs one interval instead of a download and there is nothing in the heap to lose on
- * restart.
- *
- * <p>Passes are serialised with {@code concatMap}, so a slow pass delays the next one. Accepted for
- * simplicity: leases already make overlapping passes safe, so switching later needs no other change.
- * Stepping the rows CLAIMED WITHIN one pass is concurrent ({@code flatMap(batchSize)}) — the earlier
- * {@code concatMap} there processed claimed rows strictly one at a time, so a batch of 10 rows each
- * waiting on a 10s slskd timeout could make one pass take up to 100 seconds. Nothing needs a thread
- * pool for this: WebFlux already runs an event loop per core: the only thing wrong was the sequencing.
- */
+/** Every pass asks the database what is due and acts on the answer; nothing is held in memory between passes. */
 @Slf4j
 @Component
 public class DownloadTaskRunner {

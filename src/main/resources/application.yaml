@@ -43,9 +43,9 @@ last-fm-service:
 # with this tier — see docs/decisions/durable-download-state-machine-13-08-2026.md. Unverified against
 # a live failure; confirm the interaction during Task 8.
 slskd-service:
-    # The LAN default only works on the original author's network; everyone else overrides SLSKD_URL
-    # (see .env.example) to point at their own slskd instance, local or remote.
-    url: ${SLSKD_URL:http://192.168.0.2:5030/api/v0/}
+    # No default: every deployment points at its own slskd instance. Set SLSKD_URL in ./.env
+    # (see .env.example) or a real env var.
+    url: ${SLSKD_URL}
     # No default, same reasoning as LASTFM_API_KEY above.
     api_key: ${SLSKD_API_KEY}
     timeout: 10000

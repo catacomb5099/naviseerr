@@ -59,21 +59,13 @@ public class DownloadStateMachine {
                 next.candidateIndex(), next.retryIndex(), null, null, null, null));
     }
 
-    /**
-     * {@code state} may be {@code null} — the batched {@code GET /searches} simply omits a search it
-     * doesn't recognise. Deliberately indistinguishable from "still running": there is no reliable way
-     * to tell "not there yet" apart from "slskd forgot it", so a missing search just falls through to
-     * the same still-running branch and eventually resolves via the phase budget. Same reasoning
-     * applies to {@code selected}, which is only consulted once the search is complete, so callers may
-     * pass an empty list while it is still running or missing.
-     */
+    /** {@code state} missing or not yet complete is treated as still running, not as an error. */
     public DownloadDecision afterSearchPoll(DownloadTask task, SearchState state,
                                             List<DownloadCandidate> selected, Instant now) {
         if (state != null && SlskdSearchState.isFailure(state.getState())) {
             return new DownloadDecision.Terminal(DownloadStatus.FAILED, SEARCH_FAILED);
         }
-        boolean complete = state != null && Boolean.TRUE.equals(state.getIsComplete());
-        if (!complete) {
+        if (state == null || !Boolean.TRUE.equals(state.getIsComplete())) {
             return task.isPastBudget(now, searchBudget)
                     ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TIMED_OUT)
                     : new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
@@ -100,19 +92,7 @@ public class DownloadStateMachine {
                 enqueued.getFilename(), enqueued.getId(), null));
     }
 
-    /**
-     * {@code file} is {@code null} when the batched {@code GET /transfers/downloads} has no transfer
-     * with this row's id, and {@link TransferedFileUtil#getStateList} returns an empty list for it.
-     *
-     * <p>That case gets its OWN short-budget branch rather than falling through to "still running".
-     * Aliasing the two — the original design — meant a lookup that could never succeed was
-     * indistinguishable from a transfer making progress, so the row polled for the full hour-long
-     * {@code downloadBudget} before reporting a timeout. Not hypothetical: it is exactly what the
-     * nested-response bug in {@code getAllDownloads} produced, and the aliasing is what kept it silent.
-     * slskd retains completed transfers (a finished one still reports {@code "Completed, Succeeded"}
-     * with {@code removed: false}), so "absent from the list" is a real signal, not a normal lifecycle
-     * stage, and it deserves to fail loudly and quickly.
-     */
+    /** A transfer absent from slskd's list gets its own short-budget branch, not the poll timeout. */
     public DownloadDecision afterDownloadPoll(DownloadTask task, TransferedFile file, Instant now) {
         List<TransferState> states = TransferedFileUtil.getStateList(file);
         if (states.stream().anyMatch(TransferState::isSuccess)) {

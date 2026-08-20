@@ -23,13 +23,7 @@ import java.util.UUID;
 @Repository
 public class DownloadTaskRepository {
 
-    /**
-     * Admits work in one atomic statement. Matches NON-TERMINAL downloads with no task row, not just
-     * PENDING ones, which makes "every non-terminal download has a task row" an invariant the loop
-     * continuously restores — so a download that somehow loses its task row is recovered rather than
-     * stranded. NOT EXISTS rather than a LEFT JOIN because FOR UPDATE cannot be applied across an
-     * outer join. ON CONFLICT DO NOTHING guards a concurrent admit.
-     */
+    /** Admits, in one atomic statement, every non-terminal download that has no task row yet. */
     private static final String ADMIT_SQL = """
             WITH admitted AS (
                 SELECT d.download_id, d.song_name
@@ -51,16 +45,7 @@ public class DownloadTaskRepository {
              WHERE download_id IN (SELECT download_id FROM created)
             """;
 
-    /**
-     * Claims due, unleased, non-terminal tasks.
-     *
-     * <p>The {@code :transferSlotsFree} predicate is the "don't melt slskd" guard. When no transfer
-     * slots are free, DOWNLOAD_INIT tasks are excluded from the claim entirely rather than claimed
-     * and then deferred — otherwise a 500-track collection sitting at DOWNLOAD_INIT would consume
-     * every pass claiming and re-deferring rows, crowding out the transfers that are actually
-     * running. Everything else (searches, and polling live transfers) is never gated: polling is one
-     * cheap GET, and starving it stalls a download that slskd is happily finishing.
-     */
+    /** Claims due, unleased, non-terminal tasks; excludes DOWNLOAD_INIT rows when no transfer slot is free. */
     private static final String CLAIM_DUE_SQL = """
             UPDATE download_tasks
                SET lease_owner = :owner,
@@ -79,8 +64,7 @@ public class DownloadTaskRepository {
                       slskd_filename, slskd_transfer_id, last_error
             """;
 
-    // Writes every field so there is no partial-update logic to get wrong: DownloadTask is the
-    // complete state. Clearing the lease is what makes the row visible to the next pass.
+    // Writes every field (DownloadTask is the complete state) and clears the lease.
     private static final String SAVE_SQL = """
             UPDATE download_tasks
                SET phase = :phase,
@@ -99,24 +83,13 @@ public class DownloadTaskRepository {
              WHERE download_id = :id
             """;
 
-    // Counts DOWNLOADS in flight, not tasks. A 500-track collection is ONE in-flight download, so
-    // one large request cannot lock every other request out of admission.
+    // Counts DOWNLOADS in flight, not tasks, so one large collection can't lock out admission.
     private static final String COUNT_ACTIVE_DOWNLOADS_SQL = """
             SELECT count(*) AS total FROM downloads WHERE status = 'IN_PROGRESS'
             """;
 
-    // Counts only DOWNLOAD_POLL: the only phase with a real, live slskd transfer (a non-null
-    // slskd_transfer_id). This is the resource that actually needs protecting: bandwidth, and peers'
-    // upload queues. One collection may legitimately hold every slot.
-    //
-    // DOWNLOAD_INIT is deliberately EXCLUDED, even though it is "about to attempt an enqueue" — it is
-    // not yet a real transfer (slskd_username/slskd_filename/slskd_transfer_id are all null for every
-    // row entering or re-entering this phase). Including it would create a durable deadlock: CLAIM_DUE_SQL
-    // refuses to claim DOWNLOAD_INIT rows once this count reaches max-concurrent-transfers, so those rows
-    // could never advance out of DOWNLOAD_INIT, so the count could never drop, and the gate would stay
-    // closed forever (a restart would not clear it, since this is backed by the DB). Counting only
-    // DOWNLOAD_POLL keeps the gate self-healing: it can only decrease via a DOWNLOAD_POLL row reaching a
-    // terminal state, which always happens eventually (success, failure, or budget timeout).
+    // Counts only DOWNLOAD_POLL, the only phase with a real live transfer; counting DOWNLOAD_INIT too
+    // would deadlock the gate, since CLAIM_DUE_SQL excludes DOWNLOAD_INIT once this count is maxed out.
     private static final String COUNT_ACTIVE_TRANSFERS_SQL = """
             SELECT count(*) AS total FROM download_tasks
              WHERE phase = 'DOWNLOAD_POLL'
@@ -217,13 +190,7 @@ public class DownloadTaskRepository {
         try {
             return objectMapper.readValue(json, CANDIDATE_LIST);
         } catch (Exception e) {
-            // This runs inside the row-mapping stage of claimDueTasks's Flux<DownloadTask>: throwing
-            // here would fail the whole Flux (and every other row already claimed in the same pass),
-            // not just this row — one bad row/step must never abort a pass (see DownloadTaskRunner's
-            // class javadoc). Logging and falling back to an empty candidate list keeps this row
-            // flowing through normally; an empty list then fails the download cleanly at its next
-            // DOWNLOAD_INIT/DOWNLOAD_POLL step (via DownloadStepExecutor/DownloadStateMachine's
-            // candidate-exhaustion path) rather than poisoning every other claimed row.
+            // Falls back rather than throws: one bad row must not abort the whole claimed batch.
             log.error("Could not deserialise download candidates; treating as no candidates", e);
             return List.of();
         }
