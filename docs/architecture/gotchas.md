@@ -4,11 +4,11 @@
 
 Foot-guns, latent bugs, and hygiene issues to know before touching related code. Each entry: what, where, impact, suggested action.
 
-## 1. Secrets committed in application.yaml
+## 1. Secrets committed in application.yaml (fixed; keys still need rotating)
 
-- Where: [application.yaml](../../src/main/resources/application.yaml) - `last-fm-service.api_key` and `slskd-service.api_key` are hardcoded.
-- Impact: live keys in version control; against the Configuration Hygiene rule in `AGENTS.md`.
-- Suggested action: move to environment variables / local override (as already done for `spring.r2dbc.*`), rotate the exposed keys, and avoid adding new secrets to tracked files.
+- Where: [application.yaml](../../src/main/resources/application.yaml) - `last-fm-service.api_key` and `slskd-service.api_key` used to be hardcoded.
+- Status: fixed. Both now read from `./.env` via `spring.config.import` (see [.env.example](../../.env.example)). `slskd-service.api_key` has no default and fails fast; `last-fm-service.api_key` carries a placeholder default because Last.fm is dormant (see #7) and must not block startup.
+- Still outstanding: the keys that were previously committed are in the git history, so they remain exposed and should be rotated. Do not add new secrets to tracked files.
 
 ## 2. Track matching assumes "artist - title" separator
 
@@ -41,11 +41,12 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - Impact: `./gradlew test` fails without a running Docker daemon (Testcontainers can't start Postgres); first run pulls the `postgres:16-alpine` image.
 - Suggested action: run Docker for the full suite, or filter to unit tests when Docker is unavailable.
 
-## 7. LastFM response mapping: index risk and placeholder values
+## 7. LastFM response mapping: index risk and placeholder values (dormant since 10-08-2026)
 
 - Where: [SearchResponseMapper.java](../../src/main/java/com/catacomb5099/naviseerr/util/SearchResponseMapper.java).
 - What/impact: artist/album image selection uses `images.get(2)` guarded only by `isEmpty()`, so fewer than 3 images throws `IndexOutOfBoundsException`. `mapFromLastFMTrack` returns placeholders (`"lol"` album id, `0` year); album year is `0`.
-- Suggested action: select images defensively (size check / first available) and replace placeholders with real mapping when those fields matter.
+- Status: `SearchService` no longer calls this path (see [ytmusic-integration.md](ytmusic-integration.md)), so this bug is currently unreachable rather than fixed. `YtMusicSearchResponseMapper` gets `Track.albumId` and `Album.year` from real fields and never indexes into an image list without a bounds check — the replacement, not a patch.
+- Suggested action: no longer worth fixing in place; delete alongside the rest of the LastFM code per the [ADR](../decisions/ytmusic-search-provider-10-08-2026.md).
 
 ## 8. The one accepted crash window: a duplicate download after a crash mid-enqueue
 
