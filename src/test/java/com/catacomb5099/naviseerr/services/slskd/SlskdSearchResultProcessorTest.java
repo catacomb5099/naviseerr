@@ -7,12 +7,12 @@ import com.catacomb5099.naviseerr.util.TrackMatchingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
-import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -27,63 +27,6 @@ class SlskdSearchResultProcessorTest {
         // sensible defaults
         ReflectionTestUtils.setField(processor, "minBitRate", 128);
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 5);
-        ReflectionTestUtils.setField(processor, "maxPollAttempts", 3);
-        ReflectionTestUtils.setField(processor, "firstBackOffDuration", 10L);
-    }
-
-    @Test
-    void pollUntilComplete_emptyQuery_returnsEmptyMono_andDoesNotPollProgress() {
-        when(slskdService.searchResults("")).thenReturn(Mono.empty());
-
-        StepVerifier.create(processor.pollUntilComplete(""))
-                .verifyComplete();
-
-        verify(slskdService, never()).searchResults(anyString());
-        verify(slskdService, never()).getSearchResultsProgress(anyString());
-    }
-
-    @Test
-    void pollUntilComplete_searchResultsErrors_propagatesError_andDoesNotCallProgress() {
-        when(slskdService.searchResults("q")).thenReturn(Mono.error(new RuntimeException("boom")));
-
-        StepVerifier.create(processor.pollUntilComplete("q"))
-                .verifyError();
-
-        verify(slskdService).searchResults("q");
-        verify(slskdService, never()).getSearchResultsProgress(anyString());
-    }
-
-    @Test
-    void pollUntilComplete_searchReturnsStartState_butProgressErrors_calledOnceThenError() {
-        // ensure only one poll attempt by setting maxPollAttempts=1
-        ReflectionTestUtils.setField(processor, "maxPollAttempts", 1);
-
-        SearchState startState = mock(SearchState.class);
-        when(startState.getId()).thenReturn("start-id");
-        when(slskdService.searchResults("q")).thenReturn(Mono.just(startState));
-        when(slskdService.getSearchResultsProgress("start-id")).thenReturn(Mono.error(new RuntimeException("progress fail")));
-
-        StepVerifier.create(processor.pollUntilComplete("q"))
-                .verifyError();
-
-        verify(slskdService).searchResults("q");
-        // called once due to single poll attempt configured
-        verify(slskdService, times(1)).getSearchResultsProgress("start-id");
-    }
-
-    @Test
-    void pollUntilComplete_progressReturnsCompleteState_emitsThatState() {
-        SearchState startState = mock(SearchState.class);
-        when(startState.getId()).thenReturn("start-id");
-        SearchState complete = mock(SearchState.class);
-        when(complete.getIsComplete()).thenReturn(true);
-        when(complete.getFileCount()).thenReturn(1);
-        when(slskdService.searchResults("q")).thenReturn(Mono.just(startState));
-        when(slskdService.getSearchResultsProgress("start-id")).thenReturn(Mono.just(complete));
-
-        StepVerifier.create(processor.pollUntilComplete("q"))
-                .expectNextMatches(SearchState::getIsComplete)
-                .verifyComplete();
     }
 
     @Test
@@ -212,5 +155,68 @@ class SlskdSearchResultProcessorTest {
                                 list.get(1).getKey().getUploadSpeed() == 200 &&
                                 list.get(2).getKey().getUploadSpeed() == 100)
                 .verifyComplete();
+    }
+
+    @Test
+    void selectBestFiles_prefersAFreeSlotOverAFasterBusyPeer() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        // fast, but 40 people ahead of you
+        SearchResponseItem busy = peer("busy", 10_000_000, false, 40, file("busy/song.flac"));
+        // slower, but can start right now
+        SearchResponseItem free = peer("free", 2_000_000, true, 0, file("free/song.flac"));
+
+        var result = processor.selectBestFiles(state(busy, free), "song").block();
+
+        assertEquals("free", result.getFirst().getKey().getUsername());
+    }
+
+    @Test
+    void selectBestFiles_amongFreePeers_prefersTheShorterQueue() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        SearchResponseItem longer = peer("longer", 9_000_000, true, 5, file("longer/song.flac"));
+        SearchResponseItem shorter = peer("shorter", 8_000_000, true, 1, file("shorter/song.flac"));
+
+        var result = processor.selectBestFiles(state(longer, shorter), "song").block();
+
+        assertEquals("shorter", result.getFirst().getKey().getUsername());
+    }
+
+    @Test
+    void selectBestFiles_allElseEqual_stillPrefersTheFasterPeer() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        SearchResponseItem slow = peer("slow", 1_000_000, true, 0, file("slow/song.flac"));
+        SearchResponseItem fast = peer("fast", 9_000_000, true, 0, file("fast/song.flac"));
+
+        var result = processor.selectBestFiles(state(slow, fast), "song").block();
+
+        assertEquals("fast", result.getFirst().getKey().getUsername());
+    }
+
+    private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadsSlot, int queueLength, SearchFile file) {
+        SearchResponseItem item = mock(SearchResponseItem.class);
+        when(item.getUsername()).thenReturn(username);
+        when(item.getUploadSpeed()).thenReturn(uploadSpeed);
+        when(item.getHasFreeUploadsSlot()).thenReturn(hasFreeUploadsSlot);
+        when(item.getQueueLength()).thenReturn(queueLength);
+        when(item.getFiles()).thenReturn(List.of(file));
+        return item;
+    }
+
+    private SearchFile file(String filename) {
+        SearchFile searchFile = mock(SearchFile.class);
+        when(searchFile.getFilename()).thenReturn(filename);
+        when(searchFile.getExtension()).thenReturn("flac");
+        when(searchFile.getBitRate()).thenReturn(Optional.empty());
+        return searchFile;
+    }
+
+    private SearchState state(SearchResponseItem... peers) {
+        SearchState state = mock(SearchState.class);
+        when(state.getResponses()).thenReturn(List.of(peers));
+        when(state.getFileCount()).thenReturn(peers.length);
+        return state;
     }
 }

@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS downloads (
+CREATE TABLE downloads (
     download_id UUID PRIMARY KEY,
     song_name   TEXT NOT NULL,
     status      TEXT NOT NULL
@@ -6,4 +6,4 @@ CREATE TABLE IF NOT EXISTS downloads (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_downloads_status_created_at ON downloads (status, created_at);
+CREATE INDEX idx_downloads_status_created_at ON downloads (status, created_at);

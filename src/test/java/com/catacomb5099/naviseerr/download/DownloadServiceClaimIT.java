@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
-@TestPropertySource(properties = "download-runner.interval-ms=3600000")
+@TestPropertySource(properties = "download-task.loop-interval-ms=3600000")
 class DownloadServiceClaimIT {
 
     @Autowired

@@ -55,4 +55,27 @@ public class TransferedFileUtilTest {
         List<TransferState> result = TransferedFileUtil.getStateList(file);
         assertTrue(result.isEmpty());
     }
+
+    @Test
+    void multiWordStatesMatchOnSlskdValueNotEnumName() {
+        TransferedFile file = mock(TransferedFile.class);
+        when(file.getState()).thenReturn("InProgress");
+        assertEquals(List.of(TransferState.IN_PROGRESS), TransferedFileUtil.getStateList(file));
+    }
+
+    @Test
+    void timedOutIsRecognised_soTheRetryTierIsReachable() {
+        TransferedFile file = mock(TransferedFile.class);
+        when(file.getState()).thenReturn("Completed, TimedOut");
+        List<TransferState> result = TransferedFileUtil.getStateList(file);
+        assertEquals(List.of(TransferState.COMPLETED, TransferState.TIMED_OUT), result);
+        assertTrue(result.stream().anyMatch(TransferState::isFailure));
+    }
+
+    @Test
+    void succeededStillParses() {
+        TransferedFile file = mock(TransferedFile.class);
+        when(file.getState()).thenReturn("Completed, Succeeded");
+        assertTrue(TransferedFileUtil.getStateList(file).stream().anyMatch(TransferState::isSuccess));
+    }
 }

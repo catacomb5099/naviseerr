@@ -40,5 +40,13 @@ out/
 # Holds a personal-account GitHub token - must stay ignored.
 .local/
 
+### Local secrets ###
+# Real API keys/URLs for local runs. Never commit this — see .env.example for the template.
+.env
+.env.*
+!.env.example
+
 ### macOS ###
 .DS_Store
+
+.worktrees/

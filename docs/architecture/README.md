@@ -1,6 +1,6 @@
 # Naviseerr Architecture (Agent Context)
 
-> Status: current as of 2026-06-29, branch `event-driven-download-queue`. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
+> Status: current as of 2026-08-13, branch `durable-download-state-machine`. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
 These are deep-dive reference documents for the Naviseerr backend. They exist so that an agent (or a developer) starting a task can load accurate subsystem context without re-exploring the whole codebase from scratch.
 
@@ -22,10 +22,10 @@ These are deep-dive reference documents for the Naviseerr backend. They exist so
 
 - [codebase-map.md](codebase-map.md) - repo layout, package-by-package map, entry points, branch topology, how to build/run.
 - [slskd-integration.md](slskd-integration.md) - the Soulseek (slskd) search -> select -> download -> poll pipeline and its retry/failover.
-- [download-manager.md](download-manager.md) - the event-driven download queue: ingress, interval claim, in-memory queue, worker, terminal status.
-- [persistence.md](persistence.md) - R2DBC + Postgres, the `downloads` table, claim and status-write SQL, the patterns used.
+- [download-manager.md](download-manager.md) - the durable download state machine: the admit/claim/step pass loop, leases, `next_attempt_at`, capacity bounds, and the atomic terminal write.
+- [persistence.md](persistence.md) - R2DBC + Postgres, the `downloads` and `download_tasks` tables, the Flyway migration layout, claim/admit/terminal SQL, the patterns used.
 - [lastfm-integration.md](lastfm-integration.md) - LastFM metadata search and response mapping.
-- [reactive-patterns.md](reactive-patterns.md) - the project's Reactor cookbook: polling-via-retry and the Sinks work queue.
+- [reactive-patterns.md](reactive-patterns.md) - the project's Reactor cookbook: the level-triggered pass loop and the pass-vs-row concurrency split (`concatMap` vs `flatMap`).
 - [testing.md](testing.md) - unit (Mockito + StepVerifier) and integration (Testcontainers) testing, and how to run them.
 - [gotchas.md](gotchas.md) - known bugs, foot-guns, and hygiene issues to be aware of before touching related code.
 
@@ -35,4 +35,4 @@ These are deep-dive reference documents for the Naviseerr backend. They exist so
 
 ## Current vs target (important)
 
-Much of the "download manager" direction in `AGENTS.md` (RabbitMQ for execution state, Redis for ephemeral progress, SSE streaming, DLQ) is the targeted end state, not what exists today. These docs describe what is actually implemented now and call out the gaps explicitly. When a doc says "target", assume it is not built yet.
+The durable Postgres-backed state machine in `AGENTS.md`'s "Download Manager Architecture" section is now built, not aspirational — RabbitMQ and Redis were considered and **rejected**, not deferred; see `docs/decisions/durable-download-state-machine-13-08-2026.md`. What remains genuinely aspirational: SSE/WebSocket progress streaming, collection/playlist orchestration, and cancellation. These docs describe what is actually implemented now and call out the remaining gaps explicitly. When a doc says "target" or "future work", assume it is not built yet.

@@ -1,4 +1,10 @@
 spring:
+  # Loads ./.env (Java-properties syntax: KEY=VALUE, one per line) as a property source when present.
+  # "optional:" means nothing breaks when the file is absent (CI, containers that inject real env
+  # vars instead). This is what lets the placeholders below resolve locally without ever putting a
+  # real secret in a file this repo commits — see .env.example and README.md.
+  config:
+    import: "optional:file:.env[.properties]"
   application:
     name: naviseerr
   r2dbc:
@@ -7,27 +13,72 @@ spring:
     password: ${SPRING_R2DBC_PASSWORD:naviseerr}
   sql:
     init:
-      mode: always
-      schema-locations: classpath:schema.sql
+      mode: never
+  flyway:
+    enabled: true
+    # Existing installs already have `downloads` with real data but no Flyway history table.
+    # This tells Flyway to treat what is already there as V1 rather than trying to create it.
+    baseline-on-migrate: true
+    baseline-version: 1
+    url: ${SPRING_FLYWAY_URL:jdbc:postgresql://localhost:5432/naviseerr}
+    user: ${SPRING_R2DBC_USERNAME:naviseerr}
+    password: ${SPRING_R2DBC_PASSWORD:naviseerr}
+
+logging:
+  level:
+    # DEBUG here surfaces the per-pass slskd call log ("slskd calls this pass: GET /searches=...,
+    # GET /transfers/downloads=..."), which is the direct measure of the slskd request rate — count
+    # those lines over a minute rather than inferring it from the intervals below.
+    com.catacomb5099.naviseerr.download: DEBUG
 
 last-fm-service:
     url: http://ws.audioscrobbler.com/2.0
-    api_key: f72e6119180c02c7c3dec26be56ff0dd
+    # No default: a missing key must fail fast at startup, not silently ship a working secret in
+    # source control. Set LASTFM_API_KEY in ./.env (see .env.example) or a real env var.
+    api_key: ${LASTFM_API_KEY}
     search-result-limit: 10
 
+# Operator note: this project owns candidate retry/failover (retry-count above). Set slskd's OWN
+# config key `transfers.download.retry.attempts` to 0 (or 1) so its per-file retry does not compound
+# with this tier — see docs/decisions/durable-download-state-machine-13-08-2026.md. Unverified against
+# a live failure; confirm the interaction during Task 8.
 slskd-service:
-    url: http://192.168.0.2:5030/api/v0/
-    api_key: vKXTHrYfQXj8Riqzk57zJm6zhSN88gPjc2xfJSXZnCatPI3s72pHyATAJKuNLq7R
+    # No default: every deployment points at its own slskd instance. Set SLSKD_URL in ./.env
+    # (see .env.example) or a real env var.
+    url: ${SLSKD_URL}
+    # No default, same reasoning as LASTFM_API_KEY above.
+    api_key: ${SLSKD_API_KEY}
     timeout: 10000
     min-bit-rate: 320
     retry-count: 2
-    max-poll-attempts: 30
-    first-back-off-duration-ms: 50
     max-files-per-download: 10
 
-download-runner:
-  interval-ms: 10000
+download-task:
+  loop-interval-ms: 2000
   batch-size: 10
-
-download-worker:
-  concurrency: 3
+  lease-duration-ms: 60000
+  # Two SEPARATE limits, because they protect different things and conflating them is what the
+  # deleted flatMap(3) did wrong.
+  #
+  # How many user requests are worked on at once. Counts `downloads` rows, so one collection of
+  # 500 songs is ONE in-flight download and cannot lock everything else out of admission.
+  max-concurrent-downloads: 20
+  # How many slskd transfers may exist at once. This protects bandwidth and peers' upload queues.
+  # Deliberately NOT scoped per collection: work is taken oldest-first, so one collection may
+  # legitimately hold every slot until it is done. See "Future work" for the planned user-facing
+  # option to change that.
+  max-concurrent-transfers: 20
+  # Searches finish in seconds; transfers run for minutes to hours. Polling both at one cadence
+  # is waste, so they get separate intervals.
+  search-poll-interval-ms: 2000
+  download-poll-interval-ms: 5000
+  # Real duration budgets for SEARCH_POLL/DOWNLOAD_POLL. The old slskd-service polling
+  # attempt-count/back-off config keys that used to gate the in-process pollers are gone as of
+  # Task 6 (removed along with that dead code); these budgets are now the only polling limits
+  # in play.
+  search-budget-ms: 120000
+  download-budget-ms: 3600000
+  # A DOWNLOAD_POLL row whose transfer is absent from GET /transfers/downloads gets this much grace
+  # (not the hour above) before failing. slskd keeps completed transfers in that list, so "absent"
+  # means the lookup is broken, not that the download finished -- fail fast and loudly instead.
+  missing-transfer-grace-ms: 60000

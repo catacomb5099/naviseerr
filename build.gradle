@@ -24,6 +24,15 @@ dependencies {
 	}
 	implementation 'org.springframework.boot:spring-boot-starter-data-r2dbc'
 	implementation 'org.postgresql:r2dbc-postgresql'
+	// Spring Boot 4 moved Flyway autoconfiguration out of spring-boot-autoconfigure into its own
+	// starter (spring-boot-starter-flyway, which also brings in spring-boot-starter-jdbc for the
+	// blocking DataSource Flyway needs). flyway-database-postgresql is the dialect-specific module,
+	// added on top since the starter itself is database-agnostic.
+	implementation 'org.springframework.boot:spring-boot-starter-flyway'
+	implementation 'org.flywaydb:flyway-database-postgresql'
+	// Flyway needs a blocking driver. Used ONLY to run migrations at startup; the runtime path
+	// stays entirely on r2dbc-postgresql.
+	runtimeOnly 'org.postgresql:postgresql'
 	implementation 'me.xdrop:fuzzywuzzy:1.4.0'
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
