@@ -119,6 +119,7 @@ public class DownloadTaskRunner {
      */
     private Mono<Void> stepDueTasks(Instant now) {
         return repository.countActiveTransfers()
+                // TODO:  will this ever be a more than one item flux?,  it seems to be collecting a long?
                 .flatMapMany(active -> {
                     boolean transferSlotsFree = active < maxConcurrentTransfers;
                     return repository.claimDueTasks(batchSize, instanceId, now, leaseDuration,
@@ -140,13 +141,17 @@ public class DownloadTaskRunner {
         if (claimed.isEmpty()) {
             return Mono.empty();
         }
-        boolean needsSearches = claimed.stream().anyMatch(t -> t.phase() == DownloadPhase.SEARCH_POLL);
+        // slskd returns its whole search history, so narrow to our own rows -- and drop null ids,
+        // which collectMap would otherwise key on (the nested-response bug, search-side).
+        Set<String> trackedSearchIds = claimed.stream()
+                .filter(t -> t.phase() == DownloadPhase.SEARCH_POLL)
+                .map(DownloadTask::searchId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        boolean needsSearches = !trackedSearchIds.isEmpty();
 
-        // The transfer ids this pass actually cares about. slskd returns EVERY transfer it has ever
-        // known, including years of completed history, so the response is only interesting where it
-        // intersects the rows we are stepping. Narrowing to that intersection bounds the map by our own
-        // concurrency instead of by the user's history, and drops null-id entries before collectMap can
-        // key the map by null -- which is precisely how the nested-response bug went undetected.
+        // slskd returns its whole transfer history, so narrow to our own rows -- and drop null ids,
+        // which collectMap would otherwise key on (the nested-response bug).
         Set<String> trackedTransferIds = claimed.stream()
                 .filter(t -> t.phase() == DownloadPhase.DOWNLOAD_POLL)
                 .map(DownloadTask::slskdTransferId)
@@ -154,16 +159,24 @@ public class DownloadTaskRunner {
                 .collect(Collectors.toSet());
         boolean needsTransfers = !trackedTransferIds.isEmpty();
 
-        // Logged per pass so the slskd call rate is directly observable rather than inferred from the
-        // interval config: this line IS the two batched calls, so counting these lines over a minute
-        // is the real request rate, whatever the number of in-flight downloads.
         log.debug("Pass stepping {} claimed row(s); slskd calls this pass: GET /searches={}, "
                 + "GET /transfers/downloads={}", claimed.size(), needsSearches, needsTransfers);
 
         Mono<Map<String, SearchState>> searches = needsSearches
                 ? slskdService.getAllSearches()
+                        .filter(state -> state.getId() != null && trackedSearchIds.contains(state.getId()))
                         .collectMap(SearchState::getId)
-                        .doOnNext(byId -> log.debug("Fetched {} search(es) from slskd", byId.size()))
+                        .doOnNext(byId -> {
+                            if (byId.size() < trackedSearchIds.size()) {
+                                log.warn("Matched only {} of {} tracked search(es) in the slskd "
+                                        + "response; unmatched ids: {}", byId.size(),
+                                        trackedSearchIds.size(),
+                                        trackedSearchIds.stream()
+                                                .filter(id -> !byId.containsKey(id)).toList());
+                            } else {
+                                log.debug("Matched all {} tracked search(es)", byId.size());
+                            }
+                        })
                 : Mono.just(Map.of());
         Mono<Map<String, TransferedFile>> transfers = needsTransfers
                 ? slskdService.getAllDownloads()
