@@ -56,7 +56,7 @@ class DownloadRecoveryIT {
         repository.save(new DownloadTask(id, "song", DownloadPhase.DOWNLOAD_POLL, NOW,
                 NOW.plusSeconds(5), "s1",
                 com.catacomb5099.naviseerr.support.DownloadTaskFixtures.candidates("alice", "bob"),
-                1, 0, "bob", "music/bob/song.flac", "abc", null)).block();
+                1, 0, "bob", "music/bob/song.flac", "abc", null), "dead").block();
         // ...then took the lease and died without clearing it.
         repository.claimDueTasks(10, "dead", NOW.plusSeconds(5), LEASE, true).blockFirst();
 

@@ -48,6 +48,7 @@ public class DownloadService {
                    phase_entered_at = :now,
                    finished_at = :now,
                    failure_reason = :reason,
+                   progress_percent = CASE WHEN :status = 'SUCCEEDED' THEN 100 ELSE progress_percent END,
                    lease_owner = NULL,
                    lease_expires_at = NULL
              WHERE download_id = :id

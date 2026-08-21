@@ -207,8 +207,8 @@ public class DownloadTaskRunner {
 
     private Mono<Void> apply(DownloadTask task, DownloadDecision decision) {
         return switch (decision) {
-            case DownloadDecision.Advance advance -> repository.save(advance.next()).then();
-            case DownloadDecision.Continue proceed -> repository.save(proceed.next()).then();
+            case DownloadDecision.Advance advance -> repository.save(advance.next(), instanceId).then();
+            case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {
                 log.info("Download {} finished as {}{}", task.downloadId(), terminal.status(),
                         terminal.message() == null ? "" : " (" + terminal.message() + ")");

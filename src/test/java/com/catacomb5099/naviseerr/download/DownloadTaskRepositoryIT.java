@@ -137,7 +137,7 @@ class DownloadTaskRepositoryIT {
         DownloadTask updated = new DownloadTask(id, "song", DownloadPhase.DOWNLOAD_POLL,
                 NOW, NOW.plusSeconds(5), "s1", DownloadTaskFixtures.candidates("alice", "bob"),
                 1, 2, "bob", "music/bob/song.flac", "abc", "some error");
-        repository.save(updated).block();
+        repository.save(updated, "a").block();
 
         DownloadTask reread = repository
                 .claimDueTasks(10, "b", NOW.plusSeconds(10), Duration.ofSeconds(60), true).blockFirst();
@@ -211,10 +211,10 @@ class DownloadTaskRepositoryIT {
         UUID searching = insertDownload("PENDING");
         UUID starting = insertDownload("PENDING");
         repository.admitNewDownloads(10, NOW).block();
-        // Move one task to DOWNLOAD_INIT; leave the other at SEARCH_INIT.
-        repository.save(new DownloadTask(starting, "song", DownloadPhase.DOWNLOAD_INIT, NOW, NOW,
-                "s1", DownloadTaskFixtures.candidates("alice"), 0, 0,
-                null, null, null, null)).block();
+        // Move one task to DOWNLOAD_INIT; leave the other at SEARCH_INIT. Direct SQL, not
+        // repository.save(): save() now requires a live lease, and this is fixture setup, not a
+        // claimed step.
+        moveToPhase(starting, DownloadPhase.DOWNLOAD_INIT);
 
         List<DownloadTask> claimed = repository
                 .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), false)
@@ -237,9 +237,7 @@ class DownloadTaskRepositoryIT {
         for (int i = 0; i < maxConcurrentTransfers; i++) {
             UUID id = insertDownload("PENDING");
             repository.admitNewDownloads(10, NOW).block();
-            repository.save(new DownloadTask(id, "song", DownloadPhase.DOWNLOAD_INIT, NOW, NOW,
-                    "s" + i, DownloadTaskFixtures.candidates("alice"), 0, 0,
-                    null, null, null, null)).block();
+            moveToPhase(id, DownloadPhase.DOWNLOAD_INIT);
         }
 
         assertEquals(maxConcurrentTransfers, countTaskRowsInPhase("DOWNLOAD_INIT"),
@@ -299,6 +297,14 @@ class DownloadTaskRepositoryIT {
                 .sql("SELECT count(*) AS total FROM download_tasks WHERE phase = :phase")
                 .bind("phase", phase)
                 .map((row, meta) -> row.get("total", Long.class)).one().block();
+    }
+
+    /** Fixture setup only -- bypasses the lease guard that repository.save() enforces. */
+    private void moveToPhase(UUID id, DownloadPhase phase) {
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET phase = :phase WHERE download_id = :id")
+                .bind("phase", phase.name()).bind("id", id)
+                .fetch().rowsUpdated().block();
     }
 
     private String leaseOwnerOf(UUID id) {

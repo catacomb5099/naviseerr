@@ -39,7 +39,7 @@ class DownloadTaskRunnerTest {
         when(repository.countActiveTransfers()).thenReturn(Mono.just(0L));
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean()))
                 .thenReturn(Flux.empty());
-        when(repository.save(any())).thenReturn(Mono.just(1L));
+        when(repository.save(any(), any())).thenReturn(Mono.just(1L));
         when(downloadService.finishDownload(any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskdService.getAllSearches()).thenReturn(Flux.empty());
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
@@ -153,7 +153,7 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        verify(repository).save(next);
+        verify(repository).save(eq(next), any());
         verify(downloadService, never()).finishDownload(any(), any(), any(), any());
     }
 
@@ -167,7 +167,7 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        verify(repository).save(next);
+        verify(repository).save(eq(next), any());
     }
 
     @Test
@@ -180,7 +180,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(downloadService).finishDownload(eq(ID), eq(DownloadStatus.FAILED), any(), any());
-        verify(repository, never()).save(any());
+        verify(repository, never()).save(any(), any());
     }
 
     @Test
@@ -196,7 +196,7 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        verify(repository).save(goodNext);
+        verify(repository).save(eq(goodNext), any());
     }
 
     @Test
@@ -205,11 +205,11 @@ class DownloadTaskRunnerTest {
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(2)))));
-        when(repository.save(any())).thenReturn(Mono.error(new RuntimeException("db down")));
+        when(repository.save(any(), any())).thenReturn(Mono.error(new RuntimeException("db down")));
 
         runner.pass().block();   // must complete, not throw
 
-        verify(repository).save(any());
+        verify(repository).save(any(), any());
     }
 
     @Test
