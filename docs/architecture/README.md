@@ -24,14 +24,15 @@ These are deep-dive reference documents for the Naviseerr backend. They exist so
 - [slskd-integration.md](slskd-integration.md) - the Soulseek (slskd) search -> select -> download -> poll pipeline and its retry/failover.
 - [download-manager.md](download-manager.md) - the durable download state machine: the admit/claim/step pass loop, leases, `next_attempt_at`, capacity bounds, and the atomic terminal write.
 - [persistence.md](persistence.md) - R2DBC + Postgres, the `downloads` and `download_tasks` tables, the Flyway migration layout, claim/admit/terminal SQL, the patterns used.
-- [lastfm-integration.md](lastfm-integration.md) - LastFM metadata search and response mapping.
+- [ytmusic-integration.md](ytmusic-integration.md) - YouTube Music metadata search (via the sidecar `ytmusic-adapter` service) and response mapping. The active search provider.
+- [lastfm-integration.md](lastfm-integration.md) - LastFM metadata search and response mapping. **Superseded, unused, retained on disk** - see the doc above and its ADR.
 - [reactive-patterns.md](reactive-patterns.md) - the project's Reactor cookbook: the level-triggered pass loop and the pass-vs-row concurrency split (`concatMap` vs `flatMap`).
 - [testing.md](testing.md) - unit (Mockito + StepVerifier) and integration (Testcontainers) testing, and how to run them.
 - [gotchas.md](gotchas.md) - known bugs, foot-guns, and hygiene issues to be aware of before touching related code.
 
 ## Suggested read order
 
-`codebase-map` -> the subsystem you are touching (`slskd-integration`, `download-manager`, `persistence`, or `lastfm-integration`) -> `reactive-patterns` -> `gotchas`. Read `testing` before adding or changing tests.
+`codebase-map` -> the subsystem you are touching (`slskd-integration`, `download-manager`, `persistence`, or `ytmusic-integration` — search runs through YouTube Music now, not `lastfm-integration`) -> `reactive-patterns` -> `gotchas`. Read `testing` before adding or changing tests.
 
 ## Current vs target (important)
 

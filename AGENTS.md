@@ -2,7 +2,7 @@
 
 This file is the primary project guide for AI agents working in this repository. Read it before making changes.
 
-For detailed, agent-oriented subsystem context (how the slskd pipeline, download manager, persistence, LastFM, and reactive patterns actually work today, plus testing and known gotchas), see the deep-dive guides in [docs/architecture/](docs/architecture/README.md).
+For detailed, agent-oriented subsystem context (how the slskd pipeline, download manager, persistence, YouTube Music search, and reactive patterns actually work today, plus testing and known gotchas), see the deep-dive guides in [docs/architecture/](docs/architecture/README.md).
 
 ## Project Identity
 
@@ -21,7 +21,10 @@ The product direction is intentionally track-first. Existing tools such as Lidar
 - Flyway for schema creation and migration, with versioned files under `src/main/resources/db/migration/` — see schema management note below
 - Gradle
 - Lombok
-- LastFM for search metadata
+- YouTube Music (via the sidecar `ytmusic-adapter` service, see below) for search metadata. LastFM's
+  client code is retained on disk but unused as of 10-08-2026 — see
+  [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md) and the
+  [ADR](docs/decisions/ytmusic-search-provider-10-08-2026.md).
 - slskd for Soulseek search/download orchestration
 - JUnit Platform with MockK present for tests
 
@@ -46,7 +49,11 @@ The durable state machine described in "Download Manager Architecture" below is 
 
 The current application is a small Java REST/WebFlux service that:
 
-- Calls LastFM for track, album, and artist search.
+- Calls a sidecar service, `ytmusic-adapter` (a standalone Python/FastAPI process wrapping
+  `ytmusicapi`, in the sibling repo `~/IdeaProjects/ytmusic-adapter`, wired into
+  [compose.yaml](compose.yaml)), for track, album, and artist search. LastFM previously filled this
+  role; its client code still compiles but is no longer called — see
+  [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md).
 - Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread).
 - Runs a durable, Postgres-backed download state machine that turns those rows into real slskd downloads (see "Download Execution Flow" below) and survives a restart mid-download — nothing about a download's position is held in the JVM heap.
 - Calls slskd to search Soulseek, select candidates, enqueue downloads, poll to completion, and retry/fail over across candidates, driven by `DownloadStateMachine` — a pure function (no fields, no I/O, no clock of its own) that maps `(task, slskd response, now)` to one of three decisions.
@@ -76,10 +83,10 @@ The current application does not have:
 
 Current endpoints:
 
-- `GET /search/{query}` — LastFM general search
-- `GET /search/{query}/tracks` — LastFM track search
-- `GET /search/{query}/albums` — LastFM album search
-- `GET /search/{query}/artists` — LastFM artist search
+- `GET /search/{query}` — general search (YouTube Music, via `ytmusic-adapter`)
+- `GET /search/{query}/tracks` — track search
+- `GET /search/{query}/albums` — album search
+- `GET /search/{query}/artists` — artist search
 - `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
 
 ## Deeper Context (docs/architecture)
@@ -90,7 +97,8 @@ Deep-dive guides for agents and developers live in [docs/architecture/](docs/arc
 - [slskd-integration.md](docs/architecture/slskd-integration.md) — the Soulseek search -> select -> download -> poll pipeline and retry/failover.
 - [download-manager.md](docs/architecture/download-manager.md) — the durable download task loop (admit, claim, step, apply; leases; the three capacity bounds).
 - [persistence.md](docs/architecture/persistence.md) — R2DBC + Postgres, the `downloads`/`download_tasks` tables, claim/status SQL, Flyway.
-- [lastfm-integration.md](docs/architecture/lastfm-integration.md) — LastFM metadata search and response mapping.
+- [ytmusic-integration.md](docs/architecture/ytmusic-integration.md) — YouTube Music metadata search (via the sidecar `ytmusic-adapter`) and response mapping. The active search provider.
+- [lastfm-integration.md](docs/architecture/lastfm-integration.md) — LastFM metadata search and response mapping. Superseded, unused, retained on disk.
 - [reactive-patterns.md](docs/architecture/reactive-patterns.md) — Reactor cookbook: the level-triggered interval loop, `flatMap` vs `concatMap`.
 - [testing.md](docs/architecture/testing.md) — unit (Mockito + StepVerifier) and integration (Testcontainers) testing, and how to run them.
 - [gotchas.md](docs/architecture/gotchas.md) — known bugs and hygiene issues (e.g. committed secrets, unverified `SlskdSearchState` values).
@@ -168,8 +176,8 @@ Cancellation should be treated as a first-class action. Prefer correctness and e
 ## Engineering Guidelines
 
 - Keep the backend reactive unless there is a strong reason not to. Do not introduce blocking calls into reactive paths without isolating them.
-- Preserve clear boundaries between provider clients (`lastfm`, `slskd`), orchestration services, domain models, and API controllers.
-- Model external-provider failures explicitly. slskd and LastFM can be slow, incomplete, or inconsistent.
+- Preserve clear boundaries between provider clients (`ytmusic`, `slskd`; `lastfm` is unused, retained on disk), orchestration services, domain models, and API controllers.
+- Model external-provider failures explicitly. slskd and ytmusic-adapter can be slow, incomplete, or inconsistent. `YtMusicService` is the first provider client with real timeout/retry/typed-error handling (`YtMusicBadRequestException` vs `YtMusicUnavailableException`) — follow that pattern for new provider clients rather than the untimed, untyped LastFM/slskd ones it replaces.
 - Use fuzzy matching and metadata checks carefully; prioritize high-confidence track matches over downloading the first result.
 - Keep API behavior user-centered: report "no good match" distinctly from provider errors, timeouts, and cancellations.
 - Do not write byte-level progress changes (transferred bytes, percent complete) to the primary database. This rule is about churn measured in hundreds of writes per download — it does **not** prohibit persisting step transitions and poll timestamps, which are roughly one row-write per poll per download (tens of writes per second at the busiest, which Postgres does not notice) and which are what makes crash recovery possible at all.

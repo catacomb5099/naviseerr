@@ -12,6 +12,11 @@ import reactor.core.publisher.Mono;
 
 import static reactor.netty.http.HttpConnectionLiveness.log;
 
+/**
+ * @deprecated Search now runs through {@link com.catacomb5099.naviseerr.services.ytmusic.YtMusicService}.
+ * Nothing calls this after that repoint; retained on disk, unused, pending removal.
+ */
+@Deprecated(since = "2026-08-10", forRemoval = true)
 @Service
 public class LastFMService {
     private static final String API_KEY_HEADER = "api_key";

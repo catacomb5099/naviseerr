@@ -1,8 +1,16 @@
 # LastFM Integration
 
+> [!WARNING]
+> **Superseded as of 10-08-2026. This describes code that is no longer called.**
+> Search runs through YouTube Music — see [ytmusic-integration.md](ytmusic-integration.md) and the
+> [ADR](../decisions/ytmusic-search-provider-10-08-2026.md). The `lastfm` package still compiles and is
+> retained on disk, but `SearchService` no longer references it. Kept for the rollback path and for
+> context on the mapper bug in [gotchas.md](gotchas.md) #7; read this only if you are re-enabling or
+> deleting Last.fm.
+
 > Status: current as of 2026-06-29, branch `event-driven-download-queue`. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
-LastFM is the metadata source for search (tracks, albums, artists). It is read-only and reactive (`Mono`), exposed through [SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java).
+LastFM *was* the metadata source for search (tracks, albums, artists). It is read-only and reactive (`Mono`), and was exposed through [SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) until the YouTube Music repoint.
 
 ## Client
 

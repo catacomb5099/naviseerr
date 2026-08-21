@@ -22,20 +22,23 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - `schema/response/` - API response DTOs returned to clients: `Track`, `Album`, `Artist`, `SearchResponse`.
 - `schema/slskd/` - slskd API DTOs: `SearchState`, `SearchResponseItem`, `SearchFile`, `TransferedFile`, `QueueDownloadResponse`, the `TransferState` enum, and `SlskdSearchState` (search-state classification, added with the durable-download-state-machine work). Details in [slskd-integration.md](slskd-integration.md).
 - `services/`
-  - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) - `@RestController` for the LastFM search endpoints (LastFM only on this branch).
-  - `lastfm/` - `LastFMService`, `LastFMConfig`, `model/LastFmSearchResponse`. See [lastfm-integration.md](lastfm-integration.md).
+  - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) - `@RestController` for the search endpoints, backed by YouTube Music.
+  - `ytmusic/` - `YtMusicService`, `YtMusicConfig`, `YtMusicSearchType`, `model/YtMusicSearchResponse`, and the typed errors `YtMusicException` / `YtMusicBadRequestException` / `YtMusicUnavailableException`. The active search provider; calls the `ytmusic-adapter` sidecar. See [ytmusic-integration.md](ytmusic-integration.md).
+  - `lastfm/` - `LastFMService`, `LastFMConfig`, `model/LastFmSearchResponse`. **Unused since 10-08-2026**, retained on disk. See [lastfm-integration.md](lastfm-integration.md).
   - `slskd/` - `SlskdService`, `SlskdConfig`, `SlskdSearchResultProcessor`. See [slskd-integration.md](slskd-integration.md).
 - `download/` - the durable download state machine: `Download`, `DownloadStatus`, `DownloadController`, `DownloadService`, `DownloadCandidate`, `DownloadPhase`, `DownloadTask`, `DownloadDecision`, `DownloadStateMachine`, `DownloadTaskRepository`, `DownloadStepExecutor`, `DownloadTaskRunner`. See [download-manager.md](download-manager.md) and [persistence.md](persistence.md).
 - `util/`
-  - `LastFMAPIMethod`, `LastFMAPIMethodHelper`, `SearchResponseMapper` - LastFM helpers/mapping.
+  - [YtMusicSearchResponseMapper.java](../../src/main/java/com/catacomb5099/naviseerr/util/YtMusicSearchResponseMapper.java) - maps an adapter response to the `schema/response/` DTOs. The active search mapper.
+  - `LastFMAPIMethod`, `LastFMAPIMethodHelper`, `SearchResponseMapper` - LastFM helpers/mapping. Unused, retained on disk alongside the `lastfm` package.
+  - `networkcalls/ReactivePoller` - shared retry policy (`defaultBackoff`) for outbound provider calls; used by `YtMusicService`. The slskd poll/failover helpers it also held were deleted with the durable state machine, which drives download polling from the DB instead.
   - [TrackMatchingService.java](../../src/main/java/com/catacomb5099/naviseerr/util/TrackMatchingService.java) - fuzzy match (fuzzywuzzy) of a track title against a slskd filename.
   - [TransferedFileUtil.java](../../src/main/java/com/catacomb5099/naviseerr/util/TransferedFileUtil.java) - parses the slskd transfer state string into `TransferState`s, matching on `getValue()` (the fix landed with this work - see [slskd-integration.md](slskd-integration.md)).
 
 ## Entry points / HTTP endpoints
 
 - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) (`@RestController`):
-  - `GET /search/{query}` - combined LastFM search
-  - `GET /search/{query}/tracks` | `/albums` | `/artists` - per-type LastFM search
+  - `GET /search/{query}` - combined search (YouTube Music, via `ytmusic-adapter`)
+  - `GET /search/{query}/tracks` | `/albums` | `/artists` - per-type search
 - [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) (`@RestController`):
   - `POST /download/{songName}` - inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously (see [download-manager.md](download-manager.md)).
 
