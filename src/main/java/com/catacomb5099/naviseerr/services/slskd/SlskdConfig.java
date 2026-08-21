@@ -14,11 +14,19 @@ public class SlskdConfig {
     @Value("${slskd-service.api_key}")
     private String apiKey;
 
+    // getSearchWithResponses fetches a search including every peer response, which for a popular
+    // track on a live instance measured over 1 MiB decoded -- 4x the framework's 256 KiB default
+    // in-memory buffer limit. WebClient.builder() here (rather than the Boot-injected
+    // WebClient.Builder) never picks up Spring's codec configuration, so the limit must be set
+    // explicitly. 16 MiB leaves headroom for a broader query while bounding the worst case at
+    // download-task.batch-size in-flight refetches per pass.
     @Bean
     public WebClient slskdWebClient() {
         return WebClient.builder()
                 .baseUrl(url)
                 .defaultHeader(API_KEY_HEADER, apiKey)
+                .codecs(configurer -> configurer.defaultCodecs()
+                        .maxInMemorySize(16 * 1024 * 1024))
                 .build();
     }
 
