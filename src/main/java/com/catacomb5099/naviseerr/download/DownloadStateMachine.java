@@ -9,6 +9,8 @@ import com.catacomb5099.naviseerr.util.TransferedFileUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -110,9 +112,24 @@ public class DownloadStateMachine {
                     ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TRANSFER_NOT_FOUND)
                     : new DownloadDecision.Continue(task.dueAt(now.plus(downloadPollInterval)));
         }
-        return task.isPastBudget(now, downloadBudget)
+        // Genuinely still transferring: the only branch with a percentComplete worth reading.
+        DownloadTask observed = task.withProgress(toProgress(file.getPercentComplete()));
+        return observed.isPastBudget(now, downloadBudget)
                 ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TIMED_OUT)
-                : new DownloadDecision.Continue(task.dueAt(now.plus(downloadPollInterval)));
+                : new DownloadDecision.Continue(observed.dueAt(now.plus(downloadPollInterval)));
+    }
+
+    /**
+     * slskd omits {@code percentComplete} depending on transfer state, so null/NaN/infinite must be
+     * treated as "no observation" rather than defaulted to zero -- see {@link TransferedFile}'s
+     * javadoc. Clamped to [0, 100] because slskd is not contractually bound to stay inside that range.
+     */
+    static BigDecimal toProgress(Float percentComplete) {
+        if (percentComplete == null || percentComplete.isNaN() || percentComplete.isInfinite()) {
+            return null;
+        }
+        double clamped = Math.max(0d, Math.min(100d, percentComplete.doubleValue()));
+        return BigDecimal.valueOf(clamped).setScale(2, RoundingMode.HALF_UP);
     }
 
     public DownloadDecision onCallFailed(DownloadTask task, Throwable error, Instant now) {
@@ -124,8 +141,11 @@ public class DownloadStateMachine {
     }
 
     private DownloadDecision retryOrAdvanceCandidate(DownloadTask task, Instant now) {
+        // Reset, not carried forward: a retry or a failover to the next candidate starts a new
+        // transfer from zero, and the previous one's progress has nothing to do with it.
         DownloadTask base = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now)
-                .dueAt(now.plus(downloadPollInterval));
+                .dueAt(now.plus(downloadPollInterval))
+                .withProgressReset();
         if (task.retryIndex() < retryLimit) {
             return new DownloadDecision.Continue(rebuild(base, task.candidateIndex(),
                     task.retryIndex() + 1));
@@ -139,6 +159,6 @@ public class DownloadStateMachine {
     private DownloadTask rebuild(DownloadTask base, int candidateIndex, int retryIndex) {
         return new DownloadTask(base.downloadId(), base.songName(), base.phase(),
                 base.phaseEnteredAt(), base.nextAttemptAt(), base.searchId(), base.candidates(),
-                candidateIndex, retryIndex, null, null, null, null);
+                candidateIndex, retryIndex, null, null, null, null, base.progressPercent());
     }
 }

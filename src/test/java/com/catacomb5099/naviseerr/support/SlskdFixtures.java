@@ -29,8 +29,13 @@ public final class SlskdFixtures {
     }
 
     public static TransferedFile transfer(String id, String username, String state) {
+        return transfer(id, username, state, 0f);
+    }
+
+    public static TransferedFile transfer(String id, String username, String state,
+                                          Float percentComplete) {
         return new TransferedFile(id, username, "Download", "path/song.flac", 100L, null, state,
-                null, null, null, null, 0L, 0f, 100L, null, 0f, null);
+                null, null, null, null, 0L, 0f, 100L, null, percentComplete, null);
     }
 
     public static QueueDownloadResponse enqueued(String id, String username) {
