@@ -62,7 +62,9 @@ The current application is a small Java REST/WebFlux service that:
 Two tables live in `com.catacomb5099.naviseerr.download`:
 
 - `downloads` (`download_id UUID`, `song_name TEXT`, `status TEXT CHECK (...)`, `created_at TIMESTAMPTZ`) — the low-churn, user-facing record that history queries read. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale).
-- `download_tasks` (`download_id UUID PRIMARY KEY REFERENCES downloads`, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`) — the working state of one download's pipeline, written every few seconds. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+- `download_tasks` (`download_id UUID PRIMARY KEY REFERENCES downloads`, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`, `progress_percent NUMERIC(5,2)`) — the working state of one download's pipeline, written every few seconds. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+
+`progress_percent` (0-100, everywhere, no exceptions) is written by `DownloadStateMachine.afterDownloadPoll` from slskd's `percentComplete` on the same `Continue`/`Advance` write every other field rides on — no separate statement, no new write volume. It is reset to zero on retry or candidate failover (a resumed transfer is a new transfer, not a continuation), left untouched when a transfer is briefly absent from the batched response (an absent source value must never overwrite a real one), and normalised to exactly `100` on `SUCCEEDED` by `DownloadService.finishDownload`'s CTE. `FAILED` deliberately keeps its last observed value rather than being forced to either end — see `docs/decisions/download-progress-reporting-17-08-2026.md`. `DownloadTaskRepository.save` now takes `(task, owner)` and only writes when the row is still non-terminal **and** still held by that owner's lease — the guard that was missing before this landed. `GET /downloads/active` (`DownloadController` + `ActiveDownloadRepository`) returns one row per non-terminal download plus `pollIntervalMs`, so a client can size a CSS transition to the data's real update cadence instead of guessing one.
 
 ### Download Execution Flow
 
@@ -88,6 +90,7 @@ Current endpoints:
 - `GET /search/{query}/albums` — album search
 - `GET /search/{query}/artists` — artist search
 - `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
+- `GET /downloads/active` — one row per non-terminal download (status, phase, `progress_percent`, `phaseEnteredAt`) plus `pollIntervalMs`; the client polls this, no SSE
 
 ## Deeper Context (docs/architecture)
 
