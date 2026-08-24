@@ -95,7 +95,8 @@ class DownloadRecoveryIT {
         repository.admitNewDownloads(10, NOW).block();
 
         downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishDownload(id, DownloadStatus.FAILED, "boom", NOW).block();
+        downloadService.finishDownload(id, DownloadStatus.FAILED,
+                DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
 
         assertEquals("SUCCEEDED", template.getDatabaseClient()
                 .sql("SELECT status FROM downloads WHERE download_id = :id").bind("id", id)

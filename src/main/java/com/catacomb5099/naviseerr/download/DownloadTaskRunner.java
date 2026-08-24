@@ -211,9 +211,9 @@ public class DownloadTaskRunner {
             case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {
                 log.info("Download {} finished as {}{}", task.downloadId(), terminal.status(),
-                        terminal.message() == null ? "" : " (" + terminal.message() + ")");
+                        terminal.failureCode() == null ? "" : " (" + terminal.failureCode() + ")");
                 yield downloadService.finishDownload(task.downloadId(), terminal.status(),
-                        terminal.message(), clock.instant()).then();
+                        terminal.failureCode(), clock.instant()).then();
             }
         };
     }

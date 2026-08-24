@@ -97,14 +97,17 @@ public class DownloadService {
                         status, downloadId, error));
     }
 
-    public Mono<Long> finishDownload(UUID downloadId, DownloadStatus status, String reason,
-                                     Instant now) {
+    public Mono<Long> finishDownload(UUID downloadId, DownloadStatus status,
+                                     DownloadFailureCode failureCode, Instant now) {
         DatabaseClient.GenericExecuteSpec spec = entityTemplate.getDatabaseClient()
                 .sql(FINISH_DOWNLOAD_SQL)
                 .bind("status", status.name())
                 .bind("id", downloadId)
                 .bind("now", now);
-        spec = reason == null ? spec.bindNull("reason", String.class) : spec.bind("reason", reason);
+        // Stored by NAME, not prose: the client words it, so copy changes never touch this table.
+        spec = failureCode == null
+                ? spec.bindNull("reason", String.class)
+                : spec.bind("reason", failureCode.name());
         return spec.fetch()
                 .rowsUpdated()
                 .doOnError(error -> log.error("Could not finish download {} as {}",

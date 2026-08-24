@@ -170,10 +170,12 @@ class DownloadTaskRepositoryIT {
         UUID id = insertDownload("PENDING");
         repository.admitNewDownloads(10, NOW).block();
 
-        downloadService.finishDownload(id, DownloadStatus.FAILED, "timed out", NOW).block();
+        downloadService.finishDownload(id, DownloadStatus.FAILED,
+                DownloadFailureCode.TIMED_OUT, NOW).block();
 
         assertEquals("FAILED", phaseOf(id));
-        assertEquals("timed out", template.getDatabaseClient()
+        // The NAME, not prose: the client owns the wording, so copy edits never touch this column.
+        assertEquals("TIMED_OUT", template.getDatabaseClient()
                 .sql("SELECT failure_reason FROM download_tasks WHERE download_id = :id")
                 .bind("id", id)
                 .map((row, meta) -> row.get("failure_reason", String.class)).one().block());
@@ -187,7 +189,8 @@ class DownloadTaskRepositoryIT {
 
         // A duplicated step reaching Terminal a second time — legal, because a lease can expire
         // while the work is still alive.
-        downloadService.finishDownload(id, DownloadStatus.FAILED, "boom", NOW).block();
+        downloadService.finishDownload(id, DownloadStatus.FAILED,
+                DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
 
         assertEquals("SUCCEEDED", statusOf(id), "must not overwrite a terminal status");
         assertEquals("FAILED", phaseOf(id),

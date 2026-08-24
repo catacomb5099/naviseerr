@@ -14,9 +14,10 @@ public sealed interface DownloadDecision {
     record Continue(DownloadTask next) implements DownloadDecision {}
 
     /**
-     * Done. Write the download's status and mark the task terminal. {@code message} is the reason,
-     * persisted as {@code failure_reason} so a self-hoster can see why. The task row is RETAINED, not
-     * deleted — history a self-hoster needs, and free at read time because of a partial index (Task 3).
+     * Done. Write the download's status and mark the task terminal. {@code failureCode} is why, null on
+     * success, persisted by name as {@code failure_reason} so a self-hoster can see it and the client
+     * can word it. The task row is RETAINED, not deleted — history a self-hoster needs, and free at
+     * read time because of a partial index (Task 3).
      */
-    record Terminal(DownloadStatus status, String message) implements DownloadDecision {}
+    record Terminal(DownloadStatus status, DownloadFailureCode failureCode) implements DownloadDecision {}
 }

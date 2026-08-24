@@ -120,7 +120,7 @@ class DownloadTaskProgressIT {
                 .blockFirst();
         repository.save(claimed.withProgress(new BigDecimal("62.00")), "a").block();
 
-        downloadService.finishDownload(id, DownloadStatus.FAILED, "boom", NOW).block();
+        downloadService.finishDownload(id, DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
 
         assertEquals(0, progressOf(id).compareTo(new BigDecimal("62.00")),
                 "unsettled per the ADR: FAILED is deliberately not forced to 100");

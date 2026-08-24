@@ -175,7 +175,7 @@ class DownloadTaskRunnerTest {
         DownloadTask task = searchPolling("s1");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
-                new DownloadDecision.Terminal(DownloadStatus.FAILED, "no candidates")));
+                new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES)));
 
         runner.pass().block();
 

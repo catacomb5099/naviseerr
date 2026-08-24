@@ -70,7 +70,8 @@ class ActiveDownloadRepositoryIT {
         UUID failed = insertDownload("PENDING");
         taskRepository.admitNewDownloads(10, NOW).block();
         downloadService.finishDownload(succeeded, DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishDownload(failed, DownloadStatus.FAILED, "boom", NOW).block();
+        downloadService.finishDownload(failed, DownloadStatus.FAILED,
+                DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
 
         assertTrue(activeDownloadRepository.findActive().collectList().block().isEmpty());
     }
