@@ -90,7 +90,7 @@ class DownloadRecoveryIT {
     }
 
     @Test
-    void aDownloadReachingTerminalTwiceKeepsItsFirstStatus() {
+    void aDownloadReachingTerminalTwiceKeepsItsFirstOutcome() {
         UUID id = insert("PENDING");
         repository.admitNewDownloads(10, NOW).block();
 
@@ -101,10 +101,14 @@ class DownloadRecoveryIT {
         assertEquals("SUCCEEDED", template.getDatabaseClient()
                 .sql("SELECT status FROM downloads WHERE download_id = :id").bind("id", id)
                 .map((row, meta) -> row.get("status", String.class)).one().block());
-        assertEquals("FAILED", template.getDatabaseClient()
+        // The task row keeps the first outcome too, rather than being overwritten by the duplicate.
+        // The livelock this guard used to prevent by writing unconditionally is now handled by the
+        // other half of it -- "or the task is still non-terminal" -- which a duplicate finish does not
+        // satisfy but an orphaned task does. See DownloadService.FINISH_DOWNLOAD_SQL.
+        assertEquals("SUCCEEDED", template.getDatabaseClient()
                 .sql("SELECT phase FROM download_tasks WHERE download_id = :id").bind("id", id)
                 .map((row, meta) -> row.get("phase", String.class)).one().block(),
-                "the task write is unconditional, which is what prevents a livelock");
+                "a duplicate finish must not rewrite a settled outcome");
     }
 
     @Test

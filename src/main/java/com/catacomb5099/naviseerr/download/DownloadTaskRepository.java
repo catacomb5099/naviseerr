@@ -81,6 +81,13 @@ public class DownloadTaskRepository {
                    slskd_transfer_id = :slskdTransferId,
                    last_error = :lastError,
                    progress_percent = :progressPercent,
+                   -- Wall clock, not the injected Clock, and deliberately: this is bookkeeping about
+                   -- when the row was written, the same thing downloads.created_at uses now() for. It
+                   -- also has to agree with FINISH_DOWNLOAD_SQL, since the feed sorts on it -- mixing a
+                   -- test clock here with now() there would order rows inconsistently. Anything the
+                   -- state machine actually reasons about (finished_at, next_attempt_at) stays on the
+                   -- injected clock.
+                   updated_at = now(),
                    lease_owner = NULL,
                    lease_expires_at = NULL
              WHERE download_id = :id
