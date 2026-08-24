@@ -217,3 +217,131 @@ whether to expand. Settle that when collections are written.
    which keeps the column meaning exactly one thing forever.
 3. **`percentComplete` and `startOffset` on a partial resume** — see the reset decision above. Observe
    during Task 8.
+
+---
+
+# Addendum: the download feed (24-08-2026)
+
+The decisions above settled how progress is *stored* and that the client *polls one endpoint*. They did
+not settle what that endpoint returns, and integrating a real client surfaced three gaps in it. This
+addendum records what was decided, including one option deliberately rejected.
+
+## Decision: the feed includes downloads with no task row
+
+**Context:** `GET /downloads/active` inner-joined `download_tasks`, so a download only appeared once the
+runner had admitted it. Admission is gated on `max-concurrent-downloads` and happens on the loop's own
+tick, so the gap is arbitrarily long under load — and it is precisely the window in which the user has
+just clicked and is watching for a response.
+
+**Final Choice:** LEFT JOIN. A download with no task row reports `stage = QUEUED`.
+
+**Rationale:** The client has to show *something* the instant the POST returns `202`, so it holds an
+optimistic card either way. The only question is whether the server confirms or silently contradicts it.
+Contradiction is worse than useless: it forces the client to distinguish "not admitted yet" from "lost",
+and it cannot, so it has to guess with a timer. Returning the row removes the guess.
+
+**Consequence recorded:** both `phase_entered_at` and `updated_at` are read through
+`COALESCE(..., d.created_at)`. A null sort key is how a batch of queued cards ends up in arbitrary
+order, and for a queued download "when did this stage begin" genuinely *is* when it was requested.
+
+## Decision: terminal rows stay in the feed for a retention window, plus a by-id lookup
+
+**Context:** The feed filtered `status NOT IN ('SUCCEEDED','FAILED')`, so a download vanished the instant
+it finished. **The one update the user was actually waiting for was the only one the feed never
+delivered.** The client saw the row disappear and could not tell success from failure from loss.
+
+The underlying problem is delivery: the server must decide which finished downloads to send a client
+that it knows nothing about.
+
+**Options Considered:**
+1. *Retention window + by-id lookup.* The feed also returns rows whose `finished_at` is within
+   `download-task.terminal-retention-ms` (default 10 min); `GET /downloads?ids=` resolves specific ids
+   ignoring both the filter and the window.
+2. *Retention window alone.* Two-line change. A client away longer than the window holds cards it can
+   never resolve, so it must drop them silently — which is the original defect with a longer fuse.
+3. *Cursor / `?since=` change feed.* Client sends a watermark, server returns everything changed since.
+   Needs a monotonic version column and cursor handling on both sides.
+4. *`acknowledged_by_client` flag plus an ack endpoint.* Server stops sending a row once acked.
+
+**Final Choice:** Option 1.
+
+**Rationale:** Option 4 is the intuitive answer and the wrong shape. An ack protocol is how a work queue
+with one consumer gets at-least-once delivery; this is a UI feed with N stateless readers. It needs a
+client identity (two tabs, or two browsers, and the flag means nothing), a GC story for rows nobody ever
+acks, and it turns a cacheable read into stateful mutation. Options 1 and 4 give the user the same
+guarantee; only one of them adds per-client server state.
+
+Option 3 is correct and is what this would become at scale, but it buys bandwidth savings that do not
+exist for a self-hoster with a handful of downloads in flight. The `updated_at` column added here is its
+foundation, so adopting it later needs no migration.
+
+Option 1's window is a *heuristic*, and the by-id lookup is what makes it safe to be one: the window
+handles the common case with no state, and the exact question — "what happened to these specific
+downloads?" — is always answerable. An id absent from *that* response has no row at all, which is the
+only signal that justifies dropping a card the user never dismissed.
+
+**Consequence recorded:** the client must reconcile by id on startup *and* whenever a non-terminal card
+goes unmentioned by the feed for longer than a grace period. Startup alone is not enough — a tab left in
+the background past the retention window comes back to rows that are simply gone, and a client that
+treats absence as "keep" would pin that card forever. Absence never mutates a card; it only triggers a
+lookup.
+
+## Decision: the feed reports a computed `stage`, not `status` and `phase`
+
+**Final Choice:** One `DownloadStage` — `QUEUED`, `STARTING`, `SEARCHING`, `READY_TO_DOWNLOAD`,
+`DOWNLOADING`, `SUCCEEDED`, `FAILED` — computed in `ActiveDownloadRepository.toStage`. Neither `status`
+nor `phase` appears on the wire.
+
+**Rationale:** The client needs six distinguishable labels, and every one of them is a *combination* of
+the two columns. Shipping both and letting the client combine them means shipping the combination rule
+too, in a place where getting it wrong is invisible.
+
+It also removes a live hazard rather than documenting one. The `phase` CHECK constraint admits
+`'SUCCEEDED'` and `'FAILED'`, which the four-value `DownloadPhase` enum cannot parse — so
+`DownloadPhase.valueOf` on the read path was one retention-window change away from throwing on the
+feed's own rows. `toStage` reads `status` first and only consults `phase` on the `IN_PROGRESS` branch,
+where it is always one of the four. Its switch stays exhaustive over `DownloadPhase`, so adding a working
+phase is a compile error rather than a silently mislabelled card.
+
+**Rejected:** widening `DownloadPhase` to include the terminal values. It would add two unreachable cases
+to every exhaustive switch in the state machine to serve a presentation concern.
+
+## Decision: the failure reason is a code; the client owns the wording
+
+**Final Choice:** `DownloadFailureCode` — `SEARCH_FAILED`, `NO_CANDIDATES`, `SOURCES_EXHAUSTED`,
+`TIMED_OUT`, `TRANSFER_NOT_FOUND` — stored by NAME in the existing `failure_reason` column and exposed as
+`failureCode`. No migration.
+
+**Rationale:** The column already held one of exactly five prose strings, so the closed set existed
+already and was merely untyped. Splitting it into a machine-readable code plus client-side copy means the
+two audiences are served separately: `TIMED_OUT` is greppable in the row, and "Timed out" is what the user
+reads. Copy edits then never touch the server or raise a question about rows already written.
+
+`failureCode` is typed `String` on the wire, not the enum. Rows written before this change hold prose,
+and a read path that throws on its own history is worse than one the client cannot word — so unknown
+values fall back to a generic message.
+
+## Decision: `progress_percent` and `updated_at` use different clocks, deliberately
+
+**Final Choice:** `updated_at` is written with SQL `now()`. Everything the state machine reasons about —
+`finished_at`, `next_attempt_at`, `phase_entered_at` — stays on the injected `Clock`.
+
+**Rationale:** `updated_at` is bookkeeping about when a row was written, which is what
+`downloads.created_at DEFAULT now()` already uses wall clock for. More practically, the feed *sorts* on
+it: mixing a fixed test clock in one statement with `now()` in another would order rows inconsistently.
+Business rules stay steerable from tests; the sort key does not need to be.
+
+## Correction to an earlier decision: `finishDownload` is now idempotent
+
+The state-machine ADR recorded that the task-row write inside `FINISH_DOWNLOAD_SQL` is unconditional,
+and gave a reason: if `downloads` goes terminal by a path that does not mark the task (i.e.
+`markStatusIfInProgress`), gating the write on the CTE would leave the task row non-terminal forever, so
+it would stay in the due-work partial index and the runner would claim it in a livelock.
+
+That reason is sound, but unconditional writing has its own cost, which only appears once a retention
+window exists: a duplicate finish re-stamps `finished_at`, sliding a long-finished row back inside the
+window and resurrecting a card the user dismissed hours ago.
+
+**Final Choice:** the write applies when the CTE won the row **OR** the task is still non-terminal.
+A duplicate finish satisfies neither and is a true no-op; an orphaned task satisfies the second and is
+closed. Both properties hold, and both are now asserted.
