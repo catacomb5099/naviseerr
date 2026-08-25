@@ -126,6 +126,12 @@ public class DownloadTaskRunner {
      * are in flight."
      */
     private Mono<Void> stepAll(List<DownloadTask> claimed) {
+        slskdService.getServerState()
+                .then()
+                .onErrorResume(error -> {
+                    log.warn("slskd keep-alive check failed", error);
+                    return Mono.empty();
+                });
         if (claimed.isEmpty()) {
             return Mono.empty();
         }

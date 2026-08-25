@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
@@ -14,6 +15,7 @@ import java.time.Duration;
 import java.time.ZoneOffset;
 
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -43,6 +45,7 @@ class DownloadTaskRunnerTest {
         when(downloadService.finishDownload(any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskdService.getAllSearches()).thenReturn(Flux.empty());
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
+        when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
                 Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20);
@@ -96,11 +99,19 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
-    void pass_whenNothingIsClaimed_neverCallsEitherBatchedSlskdEndpoint() {
+    void pass_whenNothingIsClaimed_stillMakesAKeepAliveCall_toExerciseTheConnectionPool() {
         runner.pass().block();
 
+        verify(slskdService).getServerState();
         verify(slskdService, never()).getAllSearches();
         verify(slskdService, never()).getAllDownloads();
+    }
+
+    @Test
+    void pass_whenNothingIsClaimed_andTheKeepAliveCallFails_isSwallowedNotPropagated() {
+        when(slskdService.getServerState()).thenReturn(Mono.error(new RuntimeException("slskd is down")));
+
+        assertDoesNotThrow(() -> runner.pass().block());
     }
 
     @Test
