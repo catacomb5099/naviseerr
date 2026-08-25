@@ -9,6 +9,8 @@ import com.catacomb5099.naviseerr.util.TransferedFileUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -20,12 +22,6 @@ import java.util.List;
  */
 @Component
 public class DownloadStateMachine {
-
-    public static final String SEARCH_FAILED = "Searching for downloads failed";
-    public static final String NO_CANDIDATES = "No download candidates found";
-    public static final String SOURCES_EXHAUSTED = "All download sources exhausted";
-    public static final String TIMED_OUT = "timed out";
-    public static final String TRANSFER_NOT_FOUND = "slskd has no record of this transfer";
 
     private final Duration searchPollInterval;
     private final Duration downloadPollInterval;
@@ -51,7 +47,8 @@ public class DownloadStateMachine {
 
     public DownloadDecision afterSearchInit(DownloadTask task, SearchState started, Instant now) {
         if (started == null || started.getId() == null || started.getId().isBlank()) {
-            return new DownloadDecision.Terminal(DownloadStatus.FAILED, SEARCH_FAILED);
+            return new DownloadDecision.Terminal(DownloadStatus.FAILED,
+                    DownloadFailureCode.SEARCH_FAILED);
         }
         DownloadTask next = task.withPhase(DownloadPhase.SEARCH_POLL, now);
         return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
@@ -63,15 +60,17 @@ public class DownloadStateMachine {
     public DownloadDecision afterSearchPoll(DownloadTask task, SearchState state,
                                             List<DownloadCandidate> selected, Instant now) {
         if (state != null && SlskdSearchState.isFailure(state.getState())) {
-            return new DownloadDecision.Terminal(DownloadStatus.FAILED, SEARCH_FAILED);
+            return new DownloadDecision.Terminal(DownloadStatus.FAILED,
+                    DownloadFailureCode.SEARCH_FAILED);
         }
         if (state == null || !Boolean.TRUE.equals(state.getIsComplete())) {
             return task.isPastBudget(now, searchBudget)
-                    ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TIMED_OUT)
+                    ? new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT)
                     : new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
         }
         if (selected == null || selected.isEmpty()) {
-            return new DownloadDecision.Terminal(DownloadStatus.FAILED, NO_CANDIDATES);
+            return new DownloadDecision.Terminal(DownloadStatus.FAILED,
+                    DownloadFailureCode.NO_CANDIDATES);
         }
         DownloadTask next = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now);
         return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
@@ -107,25 +106,45 @@ public class DownloadStateMachine {
             // moved a byte. A short grace window absorbs the gap between enqueueing and the transfer
             // appearing in the list; past that, stop polling and say so.
             return task.isPastBudget(now, missingTransferGrace)
-                    ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TRANSFER_NOT_FOUND)
+                    ? new DownloadDecision.Terminal(DownloadStatus.FAILED,
+                            DownloadFailureCode.TRANSFER_NOT_FOUND)
                     : new DownloadDecision.Continue(task.dueAt(now.plus(downloadPollInterval)));
         }
-        return task.isPastBudget(now, downloadBudget)
-                ? new DownloadDecision.Terminal(DownloadStatus.FAILED, TIMED_OUT)
-                : new DownloadDecision.Continue(task.dueAt(now.plus(downloadPollInterval)));
+        // Genuinely still transferring: the only branch with a percentComplete worth reading.
+        DownloadTask observed = task.withProgress(toProgress(file.getPercentComplete()));
+        return observed.isPastBudget(now, downloadBudget)
+                ? new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT)
+                : new DownloadDecision.Continue(observed.dueAt(now.plus(downloadPollInterval)));
+    }
+
+    /**
+     * slskd omits {@code percentComplete} depending on transfer state, so null/NaN/infinite must be
+     * treated as "no observation" rather than defaulted to zero -- see {@link TransferedFile}'s
+     * javadoc. Clamped to [0, 100] because slskd is not contractually bound to stay inside that range.
+     */
+    static BigDecimal toProgress(Float percentComplete) {
+        if (percentComplete == null || percentComplete.isNaN() || percentComplete.isInfinite()) {
+            return null;
+        }
+        double clamped = Math.clamp(percentComplete.doubleValue(), 0d, 100d);
+        return BigDecimal.valueOf(clamped).setScale(2, RoundingMode.HALF_UP);
     }
 
     public DownloadDecision onCallFailed(DownloadTask task, Throwable error, Instant now) {
         return switch (task.phase()) {
             case SEARCH_INIT, SEARCH_POLL ->
-                    new DownloadDecision.Terminal(DownloadStatus.FAILED, SEARCH_FAILED);
+                    new DownloadDecision.Terminal(DownloadStatus.FAILED,
+                            DownloadFailureCode.SEARCH_FAILED);
             case DOWNLOAD_INIT, DOWNLOAD_POLL -> retryOrAdvanceCandidate(task, now);
         };
     }
 
     private DownloadDecision retryOrAdvanceCandidate(DownloadTask task, Instant now) {
+        // Reset, not carried forward: a retry or a failover to the next candidate starts a new
+        // transfer from zero, and the previous one's progress has nothing to do with it.
         DownloadTask base = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now)
-                .dueAt(now.plus(downloadPollInterval));
+                .dueAt(now.plus(downloadPollInterval))
+                .withProgressReset();
         if (task.retryIndex() < retryLimit) {
             return new DownloadDecision.Continue(rebuild(base, task.candidateIndex(),
                     task.retryIndex() + 1));
@@ -133,12 +152,13 @@ public class DownloadStateMachine {
         if (task.candidateIndex() + 1 < task.candidates().size()) {
             return new DownloadDecision.Continue(rebuild(base, task.candidateIndex() + 1, 0));
         }
-        return new DownloadDecision.Terminal(DownloadStatus.FAILED, SOURCES_EXHAUSTED);
+        return new DownloadDecision.Terminal(DownloadStatus.FAILED,
+                DownloadFailureCode.SOURCES_EXHAUSTED);
     }
 
     private DownloadTask rebuild(DownloadTask base, int candidateIndex, int retryIndex) {
         return new DownloadTask(base.downloadId(), base.songName(), base.phase(),
                 base.phaseEnteredAt(), base.nextAttemptAt(), base.searchId(), base.candidates(),
-                candidateIndex, retryIndex, null, null, null, null);
+                candidateIndex, retryIndex, null, null, null, null, base.progressPercent());
     }
 }

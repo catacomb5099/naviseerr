@@ -61,10 +61,12 @@ public class DownloadTaskRepository {
                     LIMIT :limit)
             RETURNING download_id, song_name, phase, phase_entered_at, next_attempt_at, search_id,
                       candidates, candidate_index, retry_index, slskd_username,
-                      slskd_filename, slskd_transfer_id, last_error
+                      slskd_filename, slskd_transfer_id, last_error, progress_percent
             """;
 
-    // Writes every field (DownloadTask is the complete state) and clears the lease.
+    // Writes every field (DownloadTask is the complete state) and clears the lease. Guarded on the
+    // row still being non-terminal and still held by the caller's lease: a read-then-write would
+    // have the same race this closes, so it has to be this one statement.
     private static final String SAVE_SQL = """
             UPDATE download_tasks
                SET phase = :phase,
@@ -78,9 +80,19 @@ public class DownloadTaskRepository {
                    slskd_filename = :slskdFilename,
                    slskd_transfer_id = :slskdTransferId,
                    last_error = :lastError,
+                   progress_percent = :progressPercent,
+                   -- Wall clock, not the injected Clock, and deliberately: this is bookkeeping about
+                   -- when the row was written, the same thing downloads.created_at uses now() for. It
+                   -- also has to agree with FINISH_DOWNLOAD_SQL, since the feed sorts on it -- mixing a
+                   -- test clock here with now() there would order rows inconsistently. Anything the
+                   -- state machine actually reasons about (finished_at, next_attempt_at) stays on the
+                   -- injected clock.
+                   updated_at = now(),
                    lease_owner = NULL,
                    lease_expires_at = NULL
              WHERE download_id = :id
+               AND phase NOT IN ('SUCCEEDED', 'FAILED')
+               AND lease_owner = :owner
             """;
 
     // Counts DOWNLOADS in flight, not tasks, so one large collection can't lock out admission.
@@ -138,15 +150,17 @@ public class DownloadTaskRepository {
                 .all();
     }
 
-    public Mono<Long> save(DownloadTask task) {
+    public Mono<Long> save(DownloadTask task, String owner) {
         DatabaseClient.GenericExecuteSpec spec = client.sql(SAVE_SQL)
                 .bind("id", task.downloadId())
+                .bind("owner", owner)
                 .bind("phase", task.phase().name())
                 .bind("phaseEnteredAt", task.phaseEnteredAt())
                 .bind("nextAttemptAt", task.nextAttemptAt())
                 .bind("candidates", writeCandidates(task.candidates()))
                 .bind("candidateIndex", task.candidateIndex())
-                .bind("retryIndex", task.retryIndex());
+                .bind("retryIndex", task.retryIndex())
+                .bind("progressPercent", task.progressPercent());
         spec = bindNullable(spec, "searchId", task.searchId());
         spec = bindNullable(spec, "slskdUsername", task.slskdUsername());
         spec = bindNullable(spec, "slskdFilename", task.slskdFilename());
@@ -174,7 +188,8 @@ public class DownloadTaskRepository {
                 row.get("slskd_username", String.class),
                 row.get("slskd_filename", String.class),
                 row.get("slskd_transfer_id", String.class),
-                row.get("last_error", String.class));
+                row.get("last_error", String.class),
+                row.get("progress_percent", java.math.BigDecimal.class));
     }
 
     private String writeCandidates(List<DownloadCandidate> candidates) {

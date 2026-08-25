@@ -112,8 +112,8 @@ class DownloadStepExecutorTest {
         DownloadDecision d = executor
                 .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
 
-        assertEquals(DownloadStateMachine.NO_CANDIDATES,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
+        assertEquals(DownloadFailureCode.NO_CANDIDATES,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
     @Test
@@ -203,7 +203,7 @@ class DownloadStepExecutorTest {
 
         DownloadDecision.Terminal terminal = assertInstanceOf(DownloadDecision.Terminal.class, d);
         assertEquals(DownloadStatus.FAILED, terminal.status());
-        assertEquals(DownloadStateMachine.SOURCES_EXHAUSTED, terminal.message());
+        assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED, terminal.failureCode());
     }
 
     @Test

@@ -60,7 +60,7 @@ class DownloadStateMachineTest {
 
         DownloadDecision.Terminal t = assertInstanceOf(DownloadDecision.Terminal.class, d);
         assertEquals(DownloadStatus.FAILED, t.status());
-        assertEquals(DownloadStateMachine.SEARCH_FAILED, t.message());
+        assertEquals(DownloadFailureCode.SEARCH_FAILED, t.failureCode());
     }
 
     @Test
@@ -77,8 +77,8 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterSearchPoll(
                 searchPolling("s1"), SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
 
-        assertEquals(DownloadStateMachine.NO_CANDIDATES,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
+        assertEquals(DownloadFailureCode.NO_CANDIDATES,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
     @Test
@@ -111,8 +111,8 @@ class DownloadStateMachineTest {
                 searchPolling("s1"), SlskdFixtures.searchState("s1", false, "InProgress"),
                 List.of(), T0.plus(SEARCH_BUDGET).plusSeconds(1));
 
-        assertEquals(DownloadStateMachine.TIMED_OUT,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
+        assertEquals(DownloadFailureCode.TIMED_OUT,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
     @Test
@@ -190,7 +190,7 @@ class DownloadStateMachineTest {
 
         DownloadDecision.Terminal terminal = assertInstanceOf(DownloadDecision.Terminal.class, d);
         assertEquals(DownloadStatus.FAILED, terminal.status());
-        assertEquals(DownloadStateMachine.TRANSFER_NOT_FOUND, terminal.message());
+        assertEquals(DownloadFailureCode.TRANSFER_NOT_FOUND, terminal.failureCode());
         assertTrue(Duration.between(T0, T0.plusSeconds(61)).compareTo(DOWNLOAD_BUDGET) < 0,
                 "must fail well before the download budget, otherwise this proves nothing");
     }
@@ -204,8 +204,8 @@ class DownloadStateMachineTest {
                 SlskdFixtures.transfer("abc", "alice", "SomethingSlskdInventedLater"),
                 T0.plusSeconds(61));
 
-        assertEquals(DownloadStateMachine.TRANSFER_NOT_FOUND,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
+        assertEquals(DownloadFailureCode.TRANSFER_NOT_FOUND,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
     @Test
@@ -237,8 +237,8 @@ class DownloadStateMachineTest {
                 downloadPolling(candidates("alice"), 0, RETRY_LIMIT, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Errored"), T0);
 
-        assertEquals(DownloadStateMachine.SOURCES_EXHAUSTED,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
+        assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
     @Test
@@ -248,8 +248,8 @@ class DownloadStateMachineTest {
                 SlskdFixtures.transfer("abc", "alice", "InProgress"),
                 T0.plus(DOWNLOAD_BUDGET).plusSeconds(1));
 
-        assertEquals(DownloadStateMachine.TIMED_OUT,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
+        assertEquals(DownloadFailureCode.TIMED_OUT,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
     @Test
@@ -257,8 +257,8 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.onCallFailed(
                 at(DownloadPhase.SEARCH_POLL), new RuntimeException("boom"), T0);
 
-        assertEquals(DownloadStateMachine.SEARCH_FAILED,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).message());
+        assertEquals(DownloadFailureCode.SEARCH_FAILED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
     @Test

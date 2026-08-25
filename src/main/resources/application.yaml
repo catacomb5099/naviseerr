@@ -90,6 +90,14 @@ download-task:
   # is waste, so they get separate intervals.
   search-poll-interval-ms: 2000
   download-poll-interval-ms: 5000
+  # How long a finished download keeps appearing in GET /downloads/active after it completes.
+  #
+  # This is what delivers the outcome to the client at all: without a window a download vanishes from
+  # the feed the instant it finishes, so the one update the user was waiting for is the only one never
+  # delivered. It only has to outlast a plausible gap in polling (a backgrounded tab, a brief network
+  # drop) -- a client away longer than this asks GET /downloads?ids= directly instead, so raising it
+  # buys nothing. Published in the response so the client sizes its own timers against it.
+  terminal-retention-ms: 600000
   # Real duration budgets for SEARCH_POLL/DOWNLOAD_POLL. The old slskd-service polling
   # attempt-count/back-off config keys that used to gate the in-process pollers are gone as of
   # Task 6 (removed along with that dead code); these budgets are now the only polling limits

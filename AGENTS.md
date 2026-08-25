@@ -62,7 +62,17 @@ The current application is a small Java REST/WebFlux service that:
 Two tables live in `com.catacomb5099.naviseerr.download`:
 
 - `downloads` (`download_id UUID`, `song_name TEXT`, `status TEXT CHECK (...)`, `created_at TIMESTAMPTZ`) — the low-churn, user-facing record that history queries read. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale).
-- `download_tasks` (`download_id UUID PRIMARY KEY REFERENCES downloads`, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`) — the working state of one download's pipeline, written every few seconds. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+- `download_tasks` (`download_id UUID PRIMARY KEY REFERENCES downloads`, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`, `progress_percent NUMERIC(5,2)`) — the working state of one download's pipeline, written every few seconds. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+
+`progress_percent` (0-100, everywhere, no exceptions) is written by `DownloadStateMachine.afterDownloadPoll` from slskd's `percentComplete` on the same `Continue`/`Advance` write every other field rides on — no separate statement, no new write volume. It is reset to zero on retry or candidate failover (a resumed transfer is a new transfer, not a continuation), left untouched when a transfer is briefly absent from the batched response (an absent source value must never overwrite a real one), and normalised to exactly `100` on `SUCCEEDED` by `DownloadService.finishDownload`'s CTE. `FAILED` deliberately keeps its last observed value rather than being forced to either end — see `docs/decisions/download-progress-reporting-17-08-2026.md`. `DownloadTaskRepository.save` now takes `(task, owner)` and only writes when the row is still non-terminal **and** still held by that owner's lease — the guard that was missing before this landed.
+
+The client-facing feed is `GET /downloads/active` plus `GET /downloads?ids=` (`DownloadController` + `ActiveDownloadRepository`). Three things about it are load-bearing and easy to undo by accident:
+
+- It reports a computed **`DownloadStage`**, never `downloads.status` or `download_tasks.phase`. `ActiveDownloadRepository.toStage` is the single place they are combined. Do not add `phase` to the wire — the `phase` CHECK constraint admits `'SUCCEEDED'`/`'FAILED'`, which the four-value `DownloadPhase` enum cannot parse, and `toStage` is what keeps that off the read path.
+- The live branch **LEFT JOINs** `download_tasks`, so a download the runner has not admitted yet is reported as `QUEUED` rather than being invisible. Both of its timestamps `COALESCE` to `downloads.created_at` for the same reason.
+- Finished downloads keep appearing for `download-task.terminal-retention-ms`. **Without that window the client never learns any outcome at all** — the row vanishes the instant it finishes. `GET /downloads?ids=` is the escape hatch past the window and ignores every filter; an id absent from *that* response is the only signal that a download does not exist.
+
+`failure_reason` stores a `DownloadFailureCode` **name**, not prose — the client owns the wording. `DownloadService.finishDownload` is idempotent: its task write applies when the CTE won the row **or** the task is still non-terminal, so a duplicate finish cannot re-stamp `finished_at` (which would drag a long-finished row back into the retention window) while an orphaned task is still closed out. `updated_at` is written with SQL `now()` on purpose; see the ADR addendum.
 
 ### Download Execution Flow
 
@@ -88,6 +98,8 @@ Current endpoints:
 - `GET /search/{query}/albums` — album search
 - `GET /search/{query}/artists` — artist search
 - `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
+- `GET /downloads/active` — every non-terminal download plus every one finished within `terminal-retention-ms`, most-recently-updated first, as `{downloadId, songName, stage, progressPercent, stageEnteredAt, updatedAt, failureCode}` plus `pollIntervalMs` and `terminalRetentionMs`; the client polls this, no SSE
+- `GET /downloads?ids=a,b,c` — the same shape for specific ids, ignoring both the terminal filter and the retention window (max 100 ids). Lets a client reconcile cards it held across a restart; absent ids are omitted, not 404'd
 
 ## Deeper Context (docs/architecture)
 

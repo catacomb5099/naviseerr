@@ -13,6 +13,7 @@ import org.springframework.test.context.TestPropertySource;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -137,7 +138,7 @@ class DownloadTaskRepositoryIT {
         DownloadTask updated = new DownloadTask(id, "song", DownloadPhase.DOWNLOAD_POLL,
                 NOW, NOW.plusSeconds(5), "s1", DownloadTaskFixtures.candidates("alice", "bob"),
                 1, 2, "bob", "music/bob/song.flac", "abc", "some error");
-        repository.save(updated).block();
+        repository.save(updated, "a").block();
 
         DownloadTask reread = repository
                 .claimDueTasks(10, "b", NOW.plusSeconds(10), Duration.ofSeconds(60), true).blockFirst();
@@ -170,28 +171,73 @@ class DownloadTaskRepositoryIT {
         UUID id = insertDownload("PENDING");
         repository.admitNewDownloads(10, NOW).block();
 
-        downloadService.finishDownload(id, DownloadStatus.FAILED, "timed out", NOW).block();
+        downloadService.finishDownload(id, DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT, NOW)
+                .block();
 
         assertEquals("FAILED", phaseOf(id));
-        assertEquals("timed out", template.getDatabaseClient()
+        // The NAME, not prose: the client owns the wording, so copy edits never touch this column.
+        assertEquals("TIMED_OUT", template.getDatabaseClient()
                 .sql("SELECT failure_reason FROM download_tasks WHERE download_id = :id")
                 .bind("id", id)
                 .map((row, meta) -> row.get("failure_reason", String.class)).one().block());
     }
 
     @Test
-    void finishDownload_onAnAlreadyTerminalDownload_keepsTheFirstStatusAndStaysTerminal() {
+    void finishDownload_onAnAlreadyTerminalDownload_changesNothingAtAll() {
         UUID id = insertDownload("PENDING");
         repository.admitNewDownloads(10, NOW).block();
         downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
+        Instant firstFinishedAt = finishedAtOf(id);
 
         // A duplicated step reaching Terminal a second time — legal, because a lease can expire
         // while the work is still alive.
-        downloadService.finishDownload(id, DownloadStatus.FAILED, "boom", NOW).block();
+        Long rows = downloadService
+                .finishDownload(id, DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED,
+                        NOW.plusSeconds(3600))
+                .block();
 
+        assertEquals(0L, rows, "a duplicate finish must be a no-op, not a second write");
         assertEquals("SUCCEEDED", statusOf(id), "must not overwrite a terminal status");
-        assertEquals("FAILED", phaseOf(id),
-                "the task write is unconditional, which is what prevents a livelock");
+        assertEquals("SUCCEEDED", phaseOf(id), "must not overwrite a terminal phase either");
+        assertNull(failureReasonOf(id), "a successful download must not acquire a failure reason");
+        // The one that actually bites: re-stamping finished_at would slide this row back inside the
+        // feed's retention window and resurrect a card the user dismissed hours ago.
+        assertEquals(firstFinishedAt, finishedAtOf(id), "finished_at must not move");
+    }
+
+    @Test
+    void finishDownload_closesATaskWhoseDownloadWentTerminalWithoutIt() {
+        UUID id = insertDownload("PENDING");
+        repository.admitNewDownloads(10, NOW).block();
+        // markStatusIfInProgress moves `downloads` without touching the task, leaving the task row
+        // non-terminal and therefore still in the due-work partial index.
+        downloadService.markStatusIfInProgress(id, DownloadStatus.SUCCEEDED).block();
+        assertEquals("SEARCH_INIT", phaseOf(id));
+
+        downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
+
+        // Without the "or the task is still non-terminal" half of the guard this row would never go
+        // terminal, so the runner would keep claiming it forever.
+        assertEquals("SUCCEEDED", phaseOf(id));
+        assertTrue(repository
+                .claimDueTasks(10, "a", NOW.plusSeconds(86_400), Duration.ofSeconds(60), true)
+                .collectList().block().isEmpty());
+    }
+
+    @Test
+    void save_advancesUpdatedAt() {
+        UUID id = insertDownload("PENDING");
+        repository.admitNewDownloads(10, NOW).block();
+        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+                .blockFirst();
+        Instant admitted = updatedAtOf(id);
+
+        repository.save(claimed.withPhase(DownloadPhase.SEARCH_POLL, NOW), "a").block();
+
+        // The feed's recency sort key. phase_entered_at cannot serve as one, because it deliberately
+        // does not move when only progress changes.
+        assertTrue(updatedAtOf(id).isAfter(admitted),
+                "updated_at must move on every write, since the feed orders on it");
     }
 
     @Test
@@ -211,10 +257,10 @@ class DownloadTaskRepositoryIT {
         UUID searching = insertDownload("PENDING");
         UUID starting = insertDownload("PENDING");
         repository.admitNewDownloads(10, NOW).block();
-        // Move one task to DOWNLOAD_INIT; leave the other at SEARCH_INIT.
-        repository.save(new DownloadTask(starting, "song", DownloadPhase.DOWNLOAD_INIT, NOW, NOW,
-                "s1", DownloadTaskFixtures.candidates("alice"), 0, 0,
-                null, null, null, null)).block();
+        // Move one task to DOWNLOAD_INIT; leave the other at SEARCH_INIT. Direct SQL, not
+        // repository.save(): save() now requires a live lease, and this is fixture setup, not a
+        // claimed step.
+        moveToPhase(starting, DownloadPhase.DOWNLOAD_INIT);
 
         List<DownloadTask> claimed = repository
                 .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), false)
@@ -237,9 +283,7 @@ class DownloadTaskRepositoryIT {
         for (int i = 0; i < maxConcurrentTransfers; i++) {
             UUID id = insertDownload("PENDING");
             repository.admitNewDownloads(10, NOW).block();
-            repository.save(new DownloadTask(id, "song", DownloadPhase.DOWNLOAD_INIT, NOW, NOW,
-                    "s" + i, DownloadTaskFixtures.candidates("alice"), 0, 0,
-                    null, null, null, null)).block();
+            moveToPhase(id, DownloadPhase.DOWNLOAD_INIT);
         }
 
         assertEquals(maxConcurrentTransfers, countTaskRowsInPhase("DOWNLOAD_INIT"),
@@ -299,6 +343,34 @@ class DownloadTaskRepositoryIT {
                 .sql("SELECT count(*) AS total FROM download_tasks WHERE phase = :phase")
                 .bind("phase", phase)
                 .map((row, meta) -> row.get("total", Long.class)).one().block();
+    }
+
+    /** Fixture setup only -- bypasses the lease guard that repository.save() enforces. */
+    private void moveToPhase(UUID id, DownloadPhase phase) {
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET phase = :phase WHERE download_id = :id")
+                .bind("phase", phase.name()).bind("id", id)
+                .fetch().rowsUpdated().block();
+    }
+
+    private Instant finishedAtOf(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT finished_at FROM download_tasks WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> row.get("finished_at", Instant.class)).one().block();
+    }
+
+    private Instant updatedAtOf(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT updated_at FROM download_tasks WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> row.get("updated_at", Instant.class)).one().block();
+    }
+
+    private String failureReasonOf(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT failure_reason FROM download_tasks WHERE download_id = :id")
+                .bind("id", id)
+                .map((row, meta) -> Optional.ofNullable(row.get("failure_reason", String.class)))
+                .one().block().orElse(null);
     }
 
     private String leaseOwnerOf(UUID id) {

@@ -35,6 +35,20 @@ public class DownloadService {
             """;
 
     // One statement so the download's status and the task's terminal phase can't be split by a crash.
+    //
+    // The task UPDATE's guard has to satisfy two things that pull in opposite directions:
+    //
+    //   1. Idempotence. Writing unconditionally means a second finish for an already-terminal download
+    //      leaves `downloads` alone (the CTE guard holds) but still re-stamps finished_at -- which would
+    //      slide a long-finished row back inside the feed's retention window and resurrect a card the
+    //      user dismissed hours ago.
+    //   2. No livelock. Gating purely on the CTE means a download whose `downloads` row went terminal by
+    //      some path that did NOT mark the task (markStatusIfInProgress) can never have its task row
+    //      marked terminal either -- so the row stays in the due-work partial index and the runner
+    //      claims it forever.
+    //
+    // So: write if the CTE won the row, OR if the task is still non-terminal. A duplicate finish
+    // satisfies neither and updates nothing; an orphaned task satisfies the second and gets closed.
     private static final String FINISH_DOWNLOAD_SQL = """
             WITH updated AS (
                 UPDATE downloads
@@ -46,11 +60,17 @@ public class DownloadService {
             UPDATE download_tasks
                SET phase = :status,
                    phase_entered_at = :now,
+                   -- now(), not :now -- see the note in DownloadTaskRepository.SAVE_SQL. finished_at
+                   -- stays on :now because the retention window is a rule tests must be able to steer.
+                   updated_at = now(),
                    finished_at = :now,
                    failure_reason = :reason,
+                   progress_percent = CASE WHEN :status = 'SUCCEEDED' THEN 100 ELSE progress_percent END,
                    lease_owner = NULL,
                    lease_expires_at = NULL
              WHERE download_id = :id
+               AND (download_id IN (SELECT download_id FROM updated)
+                    OR phase NOT IN ('SUCCEEDED', 'FAILED'))
             """;
 
     private final R2dbcEntityTemplate entityTemplate;
@@ -96,14 +116,18 @@ public class DownloadService {
                         status, downloadId, error));
     }
 
-    public Mono<Long> finishDownload(UUID downloadId, DownloadStatus status, String reason,
-                                     Instant now) {
+    /** Idempotent: a second call for an already-terminal download updates nothing and returns 0. */
+    public Mono<Long> finishDownload(UUID downloadId, DownloadStatus status,
+                                     DownloadFailureCode failureCode, Instant now) {
         DatabaseClient.GenericExecuteSpec spec = entityTemplate.getDatabaseClient()
                 .sql(FINISH_DOWNLOAD_SQL)
                 .bind("status", status.name())
                 .bind("id", downloadId)
                 .bind("now", now);
-        spec = reason == null ? spec.bindNull("reason", String.class) : spec.bind("reason", reason);
+        // Stored by NAME, not prose: the client words it, so copy changes never touch this table.
+        spec = failureCode == null
+                ? spec.bindNull("reason", String.class)
+                : spec.bind("reason", failureCode.name());
         return spec.fetch()
                 .rowsUpdated()
                 .doOnError(error -> log.error("Could not finish download {} as {}",
