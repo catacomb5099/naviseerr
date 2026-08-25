@@ -253,9 +253,44 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void callFailed_inSearchPhase_fails() {
+    void callFailed_inSearchPhase_withUnrecognisedError_fails() {
         DownloadDecision d = machine.onCallFailed(
                 at(DownloadPhase.SEARCH_POLL), new RuntimeException("boom"), T0);
+
+        assertEquals(DownloadFailureCode.SEARCH_FAILED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void callFailed_inSearchPhase_withTransportFailure_withinBudget_retries() {
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_POLL), SlskdFixtures.transportFailure(), T0.plusSeconds(1));
+
+        assertInstanceOf(DownloadDecision.Continue.class, d);
+    }
+
+    @Test
+    void callFailed_inSearchPhase_with5xx_withinBudget_retries() {
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_POLL), SlskdFixtures.responseFailure(502), T0.plusSeconds(1));
+
+        assertInstanceOf(DownloadDecision.Continue.class, d);
+    }
+
+    @Test
+    void callFailed_inSearchPhase_with4xx_withinBudget_retries() {
+        // 4xx is retried too, not treated as permanent -- see DownloadStateMachine.onSearchCallFailed.
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_POLL), SlskdFixtures.responseFailure(400), T0.plusSeconds(1));
+
+        assertInstanceOf(DownloadDecision.Continue.class, d);
+    }
+
+    @Test
+    void callFailed_inSearchPhase_withRetryableError_pastBudget_fails() {
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_POLL), SlskdFixtures.transportFailure(),
+                T0.plus(SEARCH_BUDGET).plusSeconds(1));
 
         assertEquals(DownloadFailureCode.SEARCH_FAILED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());

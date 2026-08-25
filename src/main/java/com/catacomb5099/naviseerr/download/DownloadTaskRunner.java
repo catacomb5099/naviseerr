@@ -127,7 +127,19 @@ public class DownloadTaskRunner {
      */
     private Mono<Void> stepAll(List<DownloadTask> claimed) {
         if (claimed.isEmpty()) {
-            return Mono.empty();
+            // Nothing due this pass means the batched calls below never run, so a fully idle system
+            // would otherwise make zero slskd calls between real downloads -- leaving the connection
+            // pool free to go stale for however long that gap is (see SlskdConfig's timeout/pool
+            // comment for what that costs once a real download finally does reuse one). GET /server
+            // is the cheapest call slskd exposes (a single small object, no list to page through),
+            // so it's used purely to exercise the pool on the same loop-interval-ms cadence as normal
+            // operation -- no new schedule, and a lighter endpoint than reusing GET /searches.
+            return slskdService.getServerState()
+                    .then()
+                    .onErrorResume(error -> {
+                        log.warn("slskd keep-alive check failed", error);
+                        return Mono.empty();
+                    });
         }
         // slskd returns its whole search history, so narrow to our own rows -- and drop null ids,
         // which collectMap would otherwise key on (the nested-response bug, search-side).

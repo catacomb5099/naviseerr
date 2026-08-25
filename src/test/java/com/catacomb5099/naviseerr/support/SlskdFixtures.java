@@ -3,8 +3,15 @@ package com.catacomb5099.naviseerr.support;
 import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 
@@ -44,5 +51,22 @@ public final class SlskdFixtures {
 
     public static QueueDownloadResponse enqueueRejected() {
         return new QueueDownloadResponse(List.of(), List.of(transfer("x", "peer", "Rejected")));
+    }
+
+    public static ServerState serverState() {
+        return new ServerState("vps.slsknet.org:2242", "208.76.170.59:2242", "Connected, LoggedIn",
+                true, false, true, false, false);
+    }
+
+    /** A dropped/timed-out connection -- the transport-level failure, not an HTTP response at all. */
+    public static WebClientRequestException transportFailure() {
+        return new WebClientRequestException(new java.io.IOException("Operation timed out"),
+                HttpMethod.POST, URI.create("https://slskd.example/api/v0/searches"), new HttpHeaders());
+    }
+
+    /** slskd responding with an HTTP error status, e.g. 400 (rejected) or 502 (upstream failure). */
+    public static WebClientResponseException responseFailure(int statusCode) {
+        return WebClientResponseException.create(statusCode, "error", new HttpHeaders(),
+                new byte[0], StandardCharsets.UTF_8);
     }
 }
