@@ -3,6 +3,7 @@ package com.catacomb5099.naviseerr.services.slskd;
 import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.schema.slskd.UserTransfers;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,6 +21,7 @@ public class SlskdService {
     private static final String SEARCH_QUERY_HEADER = "searchText";
     private final static String SEARCHES_ENDPOINT = "/searches";
     private final static String TRANSFERS_ENDPOINT = "/transfers/downloads";
+    private final static String SERVER_ENDPOINT = "/server";
 
     private final WebClient webClient;
 
@@ -28,6 +30,19 @@ public class SlskdService {
 
     public SlskdService(WebClient slskdWebClient) {
         this.webClient = slskdWebClient;
+    }
+
+    /**
+     * slskd's own connection state to the Soulseek network. A single small object, not a list --
+     * the cheapest possible call to slskd, used to check the connection is alive without touching
+     * search or transfer state at all.
+     */
+    public Mono<ServerState> getServerState() {
+        return webClient
+                .get()
+                .uri(SERVER_ENDPOINT)
+                .retrieve()
+                .bodyToMono(ServerState.class);
     }
 
     public Mono<SearchState> searchResults(String query) {
