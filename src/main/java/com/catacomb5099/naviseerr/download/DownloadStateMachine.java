@@ -8,6 +8,8 @@ import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.util.TransferedFileUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -132,11 +134,28 @@ public class DownloadStateMachine {
 
     public DownloadDecision onCallFailed(DownloadTask task, Throwable error, Instant now) {
         return switch (task.phase()) {
-            case SEARCH_INIT, SEARCH_POLL ->
-                    new DownloadDecision.Terminal(DownloadStatus.FAILED,
-                            DownloadFailureCode.SEARCH_FAILED);
+            case SEARCH_INIT, SEARCH_POLL -> onSearchCallFailed(task, error, now);
             case DOWNLOAD_INIT, DOWNLOAD_POLL -> retryOrAdvanceCandidate(task, now);
         };
+    }
+
+    /**
+     * A failed slskd call during search is retried in place -- same phase, no candidate/progress
+     * reset -- rather than failing the download outright, as long as the {@code searchBudget} isn't
+     * already spent. This covers both a dropped/timed-out connection ({@link WebClientRequestException})
+     * and slskd itself erroring the call ({@link WebClientResponseException}, 4xx or 5xx alike: a
+     * rejected search is retried the same as a dropped one, on the theory that a transient rejection
+     * recovering is worth more than a genuinely bad one failing sooner -- the budget already bounds
+     * the cost either way). Anything else is an error shape this code doesn't recognise, so it fails
+     * fast rather than guess.
+     */
+    private DownloadDecision onSearchCallFailed(DownloadTask task, Throwable error, Instant now) {
+        boolean retryable = error instanceof WebClientRequestException
+                || error instanceof WebClientResponseException;
+        if (retryable && !task.isPastBudget(now, searchBudget)) {
+            return new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
+        }
+        return new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.SEARCH_FAILED);
     }
 
     private DownloadDecision retryOrAdvanceCandidate(DownloadTask task, Instant now) {
