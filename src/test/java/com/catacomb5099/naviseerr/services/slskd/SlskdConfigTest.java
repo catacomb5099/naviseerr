@@ -9,8 +9,12 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@code slskdWebClient()} is built with the static {@code WebClient.builder()}, which never applies
@@ -69,5 +73,36 @@ class SlskdConfigTest {
         assertDoesNotThrow(() -> new SlskdService(webClient)
                 .getSearchWithResponses("x")
                 .block());
+    }
+
+    /**
+     * Regression test for the incident this timeout was added for: a connection that never
+     * responds (a silently dropped one, in production) used to hang until the OS gave up on the TCP
+     * read -- around 90s. {@code responseTimeout} bounds that to a small, configured value instead.
+     */
+    @Test
+    void slskdWebClient_boundsAHungResponse_ratherThanWaitingForTheSocketToTimeOut() {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBodyDelay(2, TimeUnit.SECONDS)
+                .setBody("{}"));
+
+        SlskdConfig config = new SlskdConfig();
+        ReflectionTestUtils.setField(config, "url", server.url("/").toString());
+        ReflectionTestUtils.setField(config, "apiKey", "test-key");
+        ReflectionTestUtils.setField(config, "responseTimeout", Duration.ofMillis(200));
+
+        WebClient webClient = config.slskdWebClient();
+
+        long start = System.nanoTime();
+        assertThrows(Exception.class, () -> new SlskdService(webClient)
+                .getSearchWithResponses("x")
+                .block());
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        // Well under the mock server's 2s delay -- proves responseTimeout cut the call short rather
+        // than the call eventually succeeding or some other timeout (e.g. .block()'s own) kicking in.
+        assertTrue(elapsedMs < 1_000, "expected the call to fail near responseTimeout (200ms), took "
+                + elapsedMs + "ms");
     }
 }
