@@ -2,6 +2,42 @@ The aim of this project is to provide a service that can be used to search track
 
 This is only the backend or server, for a visual experience this needs to be paired with a client.
 
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/diagrams/system-architecture-dark.png">
+  <img alt="Naviseerr system architecture. The React client calls two Spring entry points: SearchService for GET /search/**, and DownloadController for POST /download and the polled GET /downloads/active. Search resolves through the ytmusic-adapter FastAPI sidecar to YouTube Music. Downloads are written to Postgres, reconciled by DownloadTaskRunner, and executed through DownloadStepExecutor and slskd against the Soulseek network." src="docs/architecture/diagrams/system-architecture-light.png">
+</picture>
+
+Three repositories, one stack: this one, [`naviseerr-client`](https://github.com/catacomb5099/naviseerr-client)
+(React 18 + Vite), and [`ytmusic-adapter`](https://github.com/catacomb5099/ytmusic-adapter)
+(a FastAPI sidecar over `ytmusicapi`). The client reaches search and downloads the same way —
+plain REST against two controllers. Nothing streams; the client polls `/downloads/active`.
+
+The diagram above is a static export. The **interactive** version — pan and zoom, click any
+component to trace its relationships, plus guided walkthroughs of the search path, the
+download-initiation path and the download lifecycle — is one self-contained HTML file:
+[`docs/architecture/diagrams/system-architecture.html`](docs/architecture/diagrams/system-architecture.html).
+
+GitHub serves `.html` as source rather than rendering it, so open it one of these ways:
+
+- **[Open the interactive diagram](https://raw.githack.com/catacomb5099/naviseerr/master/docs/architecture/diagrams/system-architecture.html)** (via raw.githack.com)
+- `git clone` and open the file in any browser — it has no dependencies and needs no server
+
+### Download lifecycle
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/diagrams/download-lifecycle-dark.png">
+  <img alt="Naviseerr download lifecycle. The client-visible DownloadStage rail runs QUEUED, STARTING, SEARCHING, READY_TO_DOWNLOAD, DOWNLOADING, with a retry and next-candidate loop from DOWNLOADING back to READY_TO_DOWNLOAD. Terminal outcomes in downloads.status are SUCCEEDED and FAILED." src="docs/architecture/diagrams/download-lifecycle-light.png">
+</picture>
+
+`DownloadStage` is the only vocabulary on the wire — `ActiveDownloadRepository.toStage` is the
+single place `downloads.status` and `download_tasks.phase` are combined. `PENDING` renders as
+`QUEUED`; `IN_PROGRESS` covers all four `DownloadPhase` steps. A failed transfer returns to
+`DOWNLOAD_INIT` with progress reset, and only gives up once retries and candidates are spent.
+
+[Open the interactive lifecycle diagram](https://raw.githack.com/catacomb5099/naviseerr/master/docs/architecture/diagrams/download-lifecycle.html)
+
 ## Local setup
 
 Copy `.env.example` to `.env` and fill in `SLSKD_API_KEY` (required; the app fails fast at startup
