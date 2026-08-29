@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Naviseerr Download Lifecycle",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [
+      860,
+      640
+    ],
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "Happy path",
+        "focus": [
+          "queued",
+          "starting",
+          "searching",
+          "ready",
+          "downloading",
+          "succeeded"
+        ],
+        "note": "Accepted, admitted, searched, enqueued, transferred — the whole path the client watches."
+      },
+      {
+        "id": "recovery",
+        "label": "Retry and failover",
+        "focus": [
+          "ready",
+          "downloading",
+          "failed"
+        ],
+        "note": "A failed transfer returns to DOWNLOAD_INIT with progress reset, not to the search."
+      },
+      {
+        "id": "outcomes",
+        "label": "Terminal outcomes",
+        "focus": [
+          "searching",
+          "downloading",
+          "succeeded",
+          "failed"
+        ],
+        "note": "Where each failure code is decided, and how success is stamped."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Client-visible stage (DownloadStage)"
+    },
+    {
+      "id": "terminal",
+      "label": "Terminal outcome (downloads.status)"
+    }
+  ],
+  "states": [
+    {
+      "id": "queued",
+      "type": "start",
+      "label": "QUEUED",
+      "sublabel": "accepted, no task row",
+      "tag": "PENDING",
+      "step": "01",
+      "lane": "main",
+      "col": 0
+    },
+    {
+      "id": "starting",
+      "type": "active",
+      "label": "STARTING",
+      "sublabel": "admitted · SEARCH_INIT",
+      "tag": "IN_PROGRESS",
+      "step": "02",
+      "lane": "main",
+      "col": 1
+    },
+    {
+      "id": "searching",
+      "type": "waiting",
+      "label": "SEARCHING",
+      "sublabel": "SEARCH_POLL · GET /searches",
+      "tag": "IN_PROGRESS",
+      "step": "03",
+      "lane": "main",
+      "col": 2
+    },
+    {
+      "id": "ready",
+      "type": "waiting",
+      "label": "READY_TO_DOWNLOAD",
+      "sublabel": "DOWNLOAD_INIT · awaiting slot",
+      "tag": "IN_PROGRESS",
+      "step": "04",
+      "lane": "main",
+      "col": 3
+    },
+    {
+      "id": "downloading",
+      "type": "active",
+      "label": "DOWNLOADING",
+      "sublabel": "DOWNLOAD_POLL · progress",
+      "tag": "IN_PROGRESS",
+      "step": "05",
+      "lane": "main",
+      "col": 4
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "FAILED",
+      "sublabel": "failure_reason holds a code",
+      "tag": "terminal",
+      "lane": "terminal",
+      "col": 1
+    },
+    {
+      "id": "succeeded",
+      "type": "success",
+      "label": "SUCCEEDED",
+      "sublabel": "progress normalised to 100",
+      "tag": "terminal",
+      "lane": "terminal",
+      "col": 2
+    }
+  ],
+  "transitions": [
+    {
+      "id": "admit",
+      "from": "queued",
+      "to": "starting",
+      "label": "runner admits",
+      "variant": "emphasis",
+      "labelDy": 55,
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "search-issued",
+      "from": "starting",
+      "to": "searching",
+      "label": "slskd search id",
+      "variant": "emphasis",
+      "labelDy": 55,
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDx": -30
+    },
+    {
+      "id": "candidates",
+      "from": "searching",
+      "to": "ready",
+      "label": "candidates selected",
+      "variant": "emphasis",
+      "labelDy": 58,
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDx": -70
+    },
+    {
+      "id": "enqueued",
+      "from": "ready",
+      "to": "downloading",
+      "label": "transfer enqueued",
+      "variant": "emphasis",
+      "labelDy": 65,
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDx": -70
+    },
+    {
+      "id": "transfer-ok",
+      "from": "downloading",
+      "to": "succeeded",
+      "label": "transfer Succeeded",
+      "labelDy": 24
+    },
+    {
+      "id": "retry-loop",
+      "from": "downloading",
+      "to": "ready",
+      "label": "retry / next candidate",
+      "route": "top-channel",
+      "fromSide": "top",
+      "toSide": "top"
+    },
+    {
+      "id": "search-failed",
+      "from": "searching",
+      "to": "failed",
+      "label": "search failed",
+      "variant": "security"
+    },
+    {
+      "id": "transfer-lost",
+      "from": "downloading",
+      "to": "failed",
+      "label": "sources exhausted",
+      "variant": "security",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One rail the client renders",
+      "items": [
+        "downloads.status PENDING renders as QUEUED",
+        "IN_PROGRESS covers all four DownloadPhase steps",
+        "ActiveDownloadRepository.toStage folds status and phase",
+        "Only DOWNLOADING carries a meaningful progressPercent"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Recovery loop",
+      "items": [
+        "retryIndex climbs to slskd-service.retry-count on one candidate",
+        "Then candidateIndex advances to the next peer",
+        "Progress resets to zero on every retry and failover"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Failure codes (closed set)",
+      "items": [
+        "SEARCH_FAILED · NO_CANDIDATES — the search side",
+        "SOURCES_EXHAUSTED — every candidate and retry spent",
+        "TIMED_OUT · TRANSFER_NOT_FOUND — the transfer side"
+      ]
+    }
+  ]
+}

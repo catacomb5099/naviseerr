@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Naviseerr System Architecture",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1320,
+      690
+    ],
+    "views": [
+      {
+        "id": "search-path",
+        "label": "Search path",
+        "focus": [
+          "client",
+          "searchsvc",
+          "ytadapter",
+          "ytm"
+        ],
+        "note": "One client GET resolves metadata through the sidecar adapter to YouTube Music."
+      },
+      {
+        "id": "initiate-download",
+        "label": "Initiate download",
+        "focus": [
+          "client",
+          "dlctl",
+          "pg"
+        ],
+        "note": "The same kind of client call: POST /download inserts a PENDING row and acks 202."
+      },
+      {
+        "id": "download-lifecycle",
+        "label": "Download lifecycle",
+        "focus": [
+          "pg",
+          "runner",
+          "stepexec",
+          "slskd",
+          "soulseek"
+        ],
+        "note": "PENDING to IN_PROGRESS to SUCCEEDED or FAILED, driven off Postgres by the runner."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "frontend",
+      "label": "Naviseerr Client",
+      "sublabel": "React 18 · Vite · Tailwind",
+      "pos": [
+        40,
+        330
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "searchsvc",
+      "type": "backend",
+      "label": "SearchService",
+      "sublabel": "@RestController /search/**",
+      "pos": [
+        300,
+        110
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "ytadapter",
+      "type": "backend",
+      "label": "ytmusic-adapter",
+      "sublabel": "Python · FastAPI :8000",
+      "pos": [
+        800,
+        110
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "ytm",
+      "type": "external",
+      "label": "YouTube Music",
+      "sublabel": "unofficial internal web API",
+      "pos": [
+        1080,
+        110
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "dlctl",
+      "type": "backend",
+      "label": "DownloadController",
+      "sublabel": "/download · /downloads",
+      "pos": [
+        300,
+        330
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "pg",
+      "type": "database",
+      "label": "PostgreSQL 16",
+      "sublabel": "downloads · download_tasks",
+      "pos": [
+        40,
+        560
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "DownloadTaskRunner",
+      "sublabel": "admit → claim → step loop",
+      "pos": [
+        300,
+        560
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "stepexec",
+      "type": "backend",
+      "label": "DownloadStepExecutor",
+      "sublabel": "SlskdService · state machine",
+      "pos": [
+        560,
+        560
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "slskd",
+      "type": "external",
+      "label": "slskd",
+      "sublabel": "Soulseek daemon API",
+      "pos": [
+        820,
+        560
+      ],
+      "size": [
+        176,
+        70
+      ]
+    },
+    {
+      "id": "soulseek",
+      "type": "external",
+      "label": "Soulseek network",
+      "sublabel": "peer uploads",
+      "pos": [
+        1080,
+        560
+      ],
+      "size": [
+        176,
+        70
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "naviseerr-client · React + Vite",
+      "wraps": [
+        "client"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "naviseerr · Java 21 / Spring Boot 4",
+      "wraps": [
+        "searchsvc",
+        "dlctl",
+        "runner",
+        "stepexec"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "ytmusic-adapter · Python / FastAPI",
+      "wraps": [
+        "ytadapter"
+      ],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-search",
+      "from": "client",
+      "to": "searchsvc",
+      "label": "GET /search/{query}",
+      "variant": "emphasis"
+    },
+    {
+      "id": "client-download",
+      "from": "client",
+      "to": "dlctl",
+      "label": "POST /download/{songName}",
+      "variant": "emphasis",
+      "labelDx": 130,
+      "labelDy": -37
+    },
+    {
+      "id": "client-poll",
+      "from": "client",
+      "to": "dlctl",
+      "label": "GET /downloads/active · 5s",
+      "variant": "dashed",
+      "labelDx": -80,
+      "labelDy": 51
+    },
+    {
+      "id": "search-adapter",
+      "from": "searchsvc",
+      "to": "ytadapter",
+      "label": "GET /v1/search · 10s timeout"
+    },
+    {
+      "id": "adapter-ytm",
+      "from": "ytadapter",
+      "to": "ytm",
+      "label": "ytmusicapi 1.12.2"
+    },
+    {
+      "id": "dlctl-pg",
+      "from": "dlctl",
+      "to": "pg",
+      "label": "insert PENDING · read stage feed"
+    },
+    {
+      "id": "runner-pg",
+      "from": "runner",
+      "to": "pg",
+      "label": "claim due tasks · SKIP LOCKED",
+      "labelDx": -90,
+      "labelDy": -36
+    },
+    {
+      "id": "runner-step",
+      "from": "runner",
+      "to": "stepexec",
+      "label": "one slskd call per phase",
+      "labelDy": -29
+    },
+    {
+      "id": "step-slskd",
+      "from": "stepexec",
+      "to": "slskd",
+      "label": "search, enqueue, poll transfers",
+      "labelDy": -29
+    },
+    {
+      "id": "slskd-peers",
+      "from": "slskd",
+      "to": "soulseek",
+      "label": "peer downloads"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Three repositories, one stack",
+      "items": [
+        "naviseerr — Java 21 · Spring Boot 4 WebFlux · R2DBC",
+        "naviseerr-client — React 18 + Vite SPA",
+        "ytmusic-adapter — FastAPI sidecar over ytmusicapi 1.12.2"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Client triggers, all alike",
+      "items": [
+        "GET /search/{query} — hits SearchService directly",
+        "POST /download/{songName} — hits DownloadController, 202",
+        "GET /downloads/active — polled every 5s for stage"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Deliberate omissions",
+      "items": [
+        "No broker, no cache tier — Postgres is the workflow engine",
+        "No SSE — the client polls /downloads/active",
+        "No user accounts or authorization"
+      ]
+    }
+  ]
+}
