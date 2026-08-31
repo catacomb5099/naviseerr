@@ -91,4 +91,15 @@ public class DownloadController {
                 .collectList()
                 .map(downloads -> ResponseEntity.ok(new DownloadsByIdResponse(downloads)));
     }
+
+    @GetMapping("/downloads/all")
+    Mono<ResponseEntity<AllDownloadsResponse>> allDownloads(
+            @RequestParam(defaultValue = "20") Integer pageSize,
+            @RequestParam(defaultValue = "1") Integer pageNumber) {
+        if (pageSize < 1 || pageNumber < 1) {
+            return Mono.just(ResponseEntity.badRequest().build());
+        }
+        return activeDownloadRepository.findAll(pageSize, pageNumber)
+                .map(ResponseEntity::ok);
+    }
 }
