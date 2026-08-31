@@ -112,23 +112,20 @@ public class ActiveDownloadRepository {
                 .all();
     }
 
-    public Mono<DownloadPage> findAll(Integer pageSize, Integer pageNumber) {
-        if (pageNumber <= 0 || pageSize <= 0) {
-            return Mono.error(new IllegalArgumentException("Page Number and/or Page Size is below 1"));
-        }
+    public Mono<AllDownloadsResponse> findAll(Integer pageSize, Integer pageNumber) {
         return client.sql(ALL_DOWNLOADS_SQL)
                 .bind("pageSize", pageSize)
                 .bind("pageNumber", pageNumber)
                 .map((row, meta) -> new PagedRow(toView(row, meta), row.get("total_count", Long.class)))
                 .all()
                 .collectList()
-                .map(rows -> new DownloadPage(
+                .map(rows -> new AllDownloadsResponse(
                         rows.stream().map(PagedRow::view).toList(),
                         // A page past the end returns no rows, so the window function has nothing to
                         // report and the true total is unknowable from this query alone. Reporting 0
                         // here rather than issuing a second query is the signal the client uses to go
                         // back to page 1, which then returns the real total.
-                        rows.isEmpty() ? 0L : rows.get(0).totalCount()));
+                        rows.isEmpty() ? 0 : (int) Math.ceilDiv(rows.get(0).totalCount(), pageSize)));
     }
 
     /** Every row of the paged query repeats the same total, so it is read once off the first row. */
