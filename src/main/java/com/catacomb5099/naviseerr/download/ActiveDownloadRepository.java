@@ -6,6 +6,7 @@ import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -64,6 +65,16 @@ public class ActiveDownloadRepository {
              ORDER BY updated_at DESC
             """.formatted(PROJECTION, PROJECTION);
 
+    private static final String ALL_DOWNLOADS_SQL = """
+            SELECT %s,
+                   COUNT(*) OVER () AS total_count
+              FROM downloads d
+              LEFT JOIN download_tasks t ON t.download_id = d.download_id
+             ORDER BY updated_at DESC, d.download_id DESC
+             OFFSET (:pageSize * (:pageNumber - 1)) ROWS
+             FETCH NEXT :pageSize ROWS ONLY
+            """.formatted(PROJECTION);
+
     /**
      * No status filter and no window: this answers "what happened to these?" for a client that held
      * cards across a restart and outlived the retention window. An id with no row is simply absent from
@@ -99,6 +110,29 @@ public class ActiveDownloadRepository {
                 .bind("ids", ids.toArray(UUID[]::new))
                 .map(ActiveDownloadRepository::toView)
                 .all();
+    }
+
+    public Mono<DownloadPage> findAll(Integer pageSize, Integer pageNumber) {
+        if (pageNumber <= 0 || pageSize <= 0) {
+            return Mono.error(new IllegalArgumentException("Page Number and/or Page Size is below 1"));
+        }
+        return client.sql(ALL_DOWNLOADS_SQL)
+                .bind("pageSize", pageSize)
+                .bind("pageNumber", pageNumber)
+                .map((row, meta) -> new PagedRow(toView(row, meta), row.get("total_count", Long.class)))
+                .all()
+                .collectList()
+                .map(rows -> new DownloadPage(
+                        rows.stream().map(PagedRow::view).toList(),
+                        // A page past the end returns no rows, so the window function has nothing to
+                        // report and the true total is unknowable from this query alone. Reporting 0
+                        // here rather than issuing a second query is the signal the client uses to go
+                        // back to page 1, which then returns the real total.
+                        rows.isEmpty() ? 0L : rows.get(0).totalCount()));
+    }
+
+    /** Every row of the paged query repeats the same total, so it is read once off the first row. */
+    private record PagedRow(ActiveDownloadView view, long totalCount) {
     }
 
     private static ActiveDownloadView toView(Row row, RowMetadata meta) {
