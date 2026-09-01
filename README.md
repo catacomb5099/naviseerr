@@ -2,7 +2,7 @@ The aim of this project is to provide a service that can be used to search track
 
 This is only the backend or server, for a visual experience this needs to be paired with a client.
 
-## Architecture
+## [Architecture](https://raw.githack.com/catacomb5099/naviseerr/master/docs/architecture/diagrams/system-architecture.html)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/diagrams/system-architecture-dark.png">
