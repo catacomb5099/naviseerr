@@ -10,8 +10,8 @@ import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.test.context.TestPropertySource;
 import reactor.test.StepVerifier;
 
-import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -75,15 +75,29 @@ class DownloadServiceRequestIT {
         assertEquals(List.of(), song.artists());
         assertNull(song.imageUrl());
         assertEquals("Legacy Route Song", saved.getSongName(),
-                "downloads.song_name must still be written -- ADMIT_SQL still reads it until task 3");
+                "the returned Download still carries the name in memory -- the controller serialises it");
+    }
+
+    @Test
+    void theDownloadsSongNameColumnIsNoLongerWritten() {
+        // Nothing reads it any more: ADMIT_SQL joins `songs` for the name instead, so writing it
+        // would only store a second copy of the same fact for a column V7 drops. The column itself
+        // survives one release so that rolling back to the previous image keeps working for rows
+        // created before this change.
+        Download saved = downloadService.requestDownload("Riptide", List.of("Vance Joy"), null).block();
+
+        assertNull(songNameColumnOf(saved.getDownloadId()));
+        assertEquals("Riptide", findSongFor(saved.getDownloadId()).name(),
+                "the name lives in songs now, so it is still recorded -- just once");
     }
 
     @Test
     void aSongInsertThatViolatesANotNullConstraintLeavesNoDownloadRowEither() {
-        // songs.name is NOT NULL and downloads.song_name is not (V5 dropped that NOT NULL). Calling
-        // the service directly with a null songName -- bypassing the controller's own 400 check --
-        // reaches a genuine constraint violation on the SECOND insert in the CTE, which is exactly
-        // what proves the two inserts share one atomic statement rather than two separate ones.
+        // songs.name is NOT NULL, and the downloads insert no longer has a name column to reject a
+        // null in. Calling the service directly with a null songName -- bypassing the controller's
+        // own 400 check -- therefore reaches a genuine constraint violation on the SECOND insert in
+        // the CTE, which is exactly what proves the two inserts share one atomic statement rather
+        // than two separate ones.
         StepVerifier.create(downloadService.requestDownload(null, List.of(), null))
                 .expectErrorMatches(error -> true)
                 .verify();
@@ -98,6 +112,16 @@ class DownloadServiceRequestIT {
                 .map((row, meta) -> row.get("total", Long.class))
                 .one()
                 .block();
+    }
+
+    private String songNameColumnOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT song_name FROM downloads WHERE download_id = :id")
+                .bind("id", downloadId)
+                .map((row, meta) -> Optional.ofNullable(row.get("song_name", String.class)))
+                .one()
+                .block()
+                .orElse(null);
     }
 
     private record SongRow(UUID downloadId, String name, List<String> artists, String imageUrl) {

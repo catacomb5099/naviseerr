@@ -53,7 +53,7 @@ public class DownloadStateMachine {
                     DownloadFailureCode.SEARCH_FAILED);
         }
         DownloadTask next = task.withPhase(DownloadPhase.SEARCH_POLL, now);
-        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
+        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.query(),
                 next.phase(), next.phaseEnteredAt(), now, started.getId(), next.candidates(),
                 next.candidateIndex(), next.retryIndex(), null, null, null, null));
     }
@@ -75,7 +75,7 @@ public class DownloadStateMachine {
                     DownloadFailureCode.NO_CANDIDATES);
         }
         DownloadTask next = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now);
-        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
+        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.query(),
                 next.phase(), next.phaseEnteredAt(), now, next.searchId(), selected, 0, 0,
                 null, null, null, null));
     }
@@ -87,7 +87,7 @@ public class DownloadStateMachine {
         }
         TransferedFile enqueued = response.getEnqueued().getFirst();
         DownloadTask next = task.withPhase(DownloadPhase.DOWNLOAD_POLL, now);
-        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
+        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.query(),
                 next.phase(), next.phaseEnteredAt(), now, next.searchId(), next.candidates(),
                 next.candidateIndex(), next.retryIndex(), enqueued.getUsername(),
                 enqueued.getFilename(), enqueued.getId(), null));
@@ -176,7 +176,7 @@ public class DownloadStateMachine {
     }
 
     private DownloadTask rebuild(DownloadTask base, int candidateIndex, int retryIndex) {
-        return new DownloadTask(base.downloadId(), base.songName(), base.phase(),
+        return new DownloadTask(base.downloadId(), base.query(), base.phase(),
                 base.phaseEnteredAt(), base.nextAttemptAt(), base.searchId(), base.candidates(),
                 candidateIndex, retryIndex, null, null, null, null, base.progressPercent());
     }

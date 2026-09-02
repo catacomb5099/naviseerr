@@ -75,16 +75,20 @@ public class DownloadService {
             """;
 
     // One statement so a download can never exist without its song -- no transaction manager needed,
-    // same reasoning as ADMIT_SQL and FINISH_DOWNLOAD_SQL. `downloads.song_name` is still written
-    // here on purpose: the un-migrated `ADMIT_SQL` in DownloadTaskRepository still reads
-    // `d.song_name` to admit a download into the loop, so if this stopped writing it, every newly
-    // requested download would become silently unprocessable. Task 3 of
-    // docs/superpowers/plans/2026-08-31-download-request-metadata.md rewrites ADMIT_SQL to join
-    // `songs` instead, and only then can this column stop being written.
+    // same reasoning as ADMIT_SQL and FINISH_DOWNLOAD_SQL.
+    //
+    // `downloads.song_name` is deliberately NOT written any more. It was still written until
+    // DownloadTaskRepository.ADMIT_SQL stopped reading it (it joins `songs` for the name instead), and
+    // now that nothing reads it, writing it would be storing a second copy of the same fact for a
+    // column V7 drops. The column itself stays for one release so that rolling back to the previous
+    // image -- which still queries it -- keeps working for every row created before this change; see
+    // the plan's "V5 expands, V6 contracts" note. ActiveDownloadRepository still selects it until
+    // task 4 joins `songs` there too, so between this change and that one the feed reports a null
+    // song name for downloads created after it.
     private static final String REQUEST_DOWNLOAD_SQL = """
             WITH created AS (
-                INSERT INTO downloads (download_id, song_name, status, created_at)
-                VALUES (:downloadId, :songName, 'PENDING', :now)
+                INSERT INTO downloads (download_id, status, created_at)
+                VALUES (:downloadId, 'PENDING', :now)
                 RETURNING download_id
             )
             INSERT INTO songs (song_id, download_id, name, artists, image_url)

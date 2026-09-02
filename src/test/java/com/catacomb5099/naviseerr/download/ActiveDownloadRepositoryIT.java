@@ -42,12 +42,24 @@ class ActiveDownloadRepositoryIT {
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
     }
 
+    /**
+     * A download and its song. The song row is what {@code ADMIT_SQL} joins for {@code song_id}, so
+     * without it none of the tests below that admit a task would get one. {@code downloads.song_name}
+     * is no longer written by production either, so it is not written here -- this repository's
+     * projection still selects it, which is why these views report a null song name until the read
+     * path joins {@code songs} too.
+     */
     private UUID insertDownload(String status) {
         UUID id = UUID.randomUUID();
         template.getDatabaseClient()
-                .sql("INSERT INTO downloads (download_id, song_name, status, created_at) "
-                        + "VALUES (:id, 'song', :status, now())")
+                .sql("INSERT INTO downloads (download_id, status, created_at) "
+                        + "VALUES (:id, :status, now())")
                 .bind("id", id).bind("status", status)
+                .fetch().rowsUpdated().block();
+        template.getDatabaseClient()
+                .sql("INSERT INTO songs (song_id, download_id, name) "
+                        + "VALUES (gen_random_uuid(), :id, 'song')")
+                .bind("id", id)
                 .fetch().rowsUpdated().block();
         return id;
     }

@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.schema.request.TrackQuery;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.r2dbc.core.DatabaseClient;
@@ -23,21 +24,37 @@ import java.util.UUID;
 @Repository
 public class DownloadTaskRepository {
 
-    /** Admits, in one atomic statement, every non-terminal download that has no task row yet. */
+    /**
+     * Admits, in one atomic statement, every non-terminal download that has no task row yet.
+     *
+     * <p>The join to {@code songs} is what supplies {@code song_id}, which is {@code NOT NULL} as of
+     * {@code V6__download_tasks_song_id_not_null.sql}. It is an INNER join, and safely so: a download
+     * and its song are created by one CTE in {@code DownloadService.requestDownload}, so a download
+     * without a song cannot exist. Today that is 1:1, so the join can neither drop a row nor fan one
+     * out; when collections land and a download has many songs, this is the statement that decides
+     * what "one task per song" means and it will need revisiting (the {@code ON CONFLICT} below would
+     * currently keep exactly one of them).
+     *
+     * <p>{@code FOR UPDATE OF d SKIP LOCKED}, not a bare {@code FOR UPDATE}: a bare lock clause takes
+     * row locks in every table in the {@code FROM}, so with the join above it would start locking
+     * {@code songs} rows that this statement has never locked and nothing needs locked. Naming the
+     * alias keeps the lock exactly where it was -- on the {@code downloads} rows being admitted.
+     */
     private static final String ADMIT_SQL = """
             WITH admitted AS (
-                SELECT d.download_id, d.song_name
+                SELECT d.download_id, s.song_id
                   FROM downloads d
+                  JOIN songs s ON s.download_id = d.download_id
                  WHERE d.status IN ('PENDING', 'IN_PROGRESS')
                    AND NOT EXISTS (SELECT 1 FROM download_tasks t
                                     WHERE t.download_id = d.download_id)
                  ORDER BY d.created_at
-                   FOR UPDATE SKIP LOCKED
+                   FOR UPDATE OF d SKIP LOCKED
                  LIMIT :limit
             ), created AS (
                 INSERT INTO download_tasks
-                    (download_id, song_name, phase, phase_entered_at, next_attempt_at)
-                SELECT download_id, song_name, 'SEARCH_INIT', :now, :now FROM admitted
+                    (download_id, song_id, phase, phase_entered_at, next_attempt_at)
+                SELECT download_id, song_id, 'SEARCH_INIT', :now, :now FROM admitted
                 ON CONFLICT (download_id) DO NOTHING
                 RETURNING download_id
             )
@@ -45,12 +62,41 @@ public class DownloadTaskRepository {
              WHERE download_id IN (SELECT download_id FROM created)
             """;
 
-    /** Claims due, unleased, non-terminal tasks; excludes DOWNLOAD_INIT rows when no transfer slot is free. */
+    /**
+     * Claims due, unleased, non-terminal tasks; excludes DOWNLOAD_INIT rows when no transfer slot is
+     * free.
+     *
+     * <p>This reverses V2's decision to denormalise {@code song_name} onto {@code download_tasks} so
+     * that the due-work query needed no join. The reversal is deliberate: song metadata moved to its
+     * own table (see {@code V5__song_metadata.sql}), because a name on {@code download_tasks} makes
+     * the state-machine table a metadata carrier and a collection download has many names, not one.
+     * The cost is a primary-key lookup into {@code songs} for at most {@code batch-size} rows per
+     * pass, which is why it was judged affordable on a statement that runs every few seconds.
+     *
+     * <p>The join arrives through {@code FROM}, not a subquery in the {@code RETURNING} list, because
+     * {@code UPDATE ... RETURNING} can only return columns of the table being updated. Two properties
+     * of the original statement survive that rewrite and must keep surviving it:
+     *
+     * <ul>
+     *   <li>{@code FOR UPDATE SKIP LOCKED} still selects from {@code download_tasks} alone, so it
+     *       still locks only task rows -- the {@code songs} join sits in the outer UPDATE, which
+     *       merely reads it.</li>
+     *   <li>The lease guard ({@code lease_expires_at IS NULL OR lease_expires_at < :now}) is still
+     *       what excludes a row another process holds. {@code DownloadTaskRepositoryIT} asserts that
+     *       directly against this statement rather than trusting the pre-rewrite coverage.</li>
+     * </ul>
+     *
+     * <p>The join is on {@code song_id}, a primary key, so it can never fan a task row out into two
+     * claims. It is an INNER join, so a task row with a {@code song_id} pointing at nothing would go
+     * unclaimable rather than throw -- {@code NOT NULL} plus the foreign key are what rule that out.
+     */
     private static final String CLAIM_DUE_SQL = """
-            UPDATE download_tasks
+            UPDATE download_tasks t
                SET lease_owner = :owner,
                    lease_expires_at = :leaseExpiresAt
-             WHERE download_id IN (
+              FROM songs s
+             WHERE s.song_id = t.song_id
+               AND t.download_id IN (
                    SELECT download_id FROM download_tasks
                     WHERE next_attempt_at <= :now
                       AND phase NOT IN ('SUCCEEDED', 'FAILED')
@@ -59,9 +105,10 @@ public class DownloadTaskRepository {
                     ORDER BY next_attempt_at
                       FOR UPDATE SKIP LOCKED
                     LIMIT :limit)
-            RETURNING download_id, song_name, phase, phase_entered_at, next_attempt_at, search_id,
-                      candidates, candidate_index, retry_index, slskd_username,
-                      slskd_filename, slskd_transfer_id, last_error, progress_percent
+            RETURNING t.download_id, s.name, s.artists, t.phase, t.phase_entered_at,
+                      t.next_attempt_at, t.search_id, t.candidates, t.candidate_index,
+                      t.retry_index, t.slskd_username, t.slskd_filename, t.slskd_transfer_id,
+                      t.last_error, t.progress_percent
             """;
 
     // Writes every field (DownloadTask is the complete state) and clears the lease. Guarded on the
@@ -177,7 +224,7 @@ public class DownloadTaskRepository {
     private DownloadTask toTask(io.r2dbc.spi.Row row, io.r2dbc.spi.RowMetadata meta) {
         return new DownloadTask(
                 row.get("download_id", UUID.class),
-                row.get("song_name", String.class),
+                toQuery(row),
                 DownloadPhase.valueOf(row.get("phase", String.class)),
                 row.get("phase_entered_at", Instant.class),
                 row.get("next_attempt_at", Instant.class),
@@ -190,6 +237,18 @@ public class DownloadTaskRepository {
                 row.get("slskd_transfer_id", String.class),
                 row.get("last_error", String.class),
                 row.get("progress_percent", java.math.BigDecimal.class));
+    }
+
+    /**
+     * Reads the two {@code songs} columns {@link #CLAIM_DUE_SQL} joins for. {@code artists} is
+     * {@code TEXT[] NOT NULL DEFAULT '{}'}, so it should never arrive null -- but a null-guard costs
+     * nothing here and {@link TrackQuery} promises an empty list, not a null one, to every caller
+     * downstream of this row mapping.
+     */
+    private TrackQuery toQuery(io.r2dbc.spi.Row row) {
+        String[] artists = row.get("artists", String[].class);
+        return new TrackQuery(row.get("name", String.class),
+                artists == null ? List.of() : List.of(artists));
     }
 
     private String writeCandidates(List<DownloadCandidate> candidates) {

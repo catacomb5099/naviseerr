@@ -25,8 +25,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * context runs Flyway to the latest version (V5 included) before any test code gets to touch the
  * database -- there is no way to insert "pre-V5" rows through it. So this test drives Flyway
  * directly against its own container: migrate to V4, insert rows with plain JDBC exactly as an
- * existing install would have them, then migrate the rest of the way to V5 and check what came
+ * existing install would have them, then migrate the rest of the way and check what came
  * out. No Spring context is involved at all.
+ *
+ * <p>Since V6 (which sets {@code download_tasks.song_id} {@code NOT NULL}) that final
+ * {@code migrateTo(LATEST)} covers a second property for free: the constraint has to hold against a
+ * populated, backfilled database, not just an empty one. If V5's backfill ever missed a row, V6
+ * would fail there and this test would fail with it.
  */
 @Testcontainers
 class SongMetadataMigrationIT {
