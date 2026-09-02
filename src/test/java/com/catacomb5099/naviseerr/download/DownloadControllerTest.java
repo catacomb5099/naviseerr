@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -18,6 +19,9 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -114,5 +118,81 @@ class DownloadControllerTest {
                 .limit(DownloadController.MAX_RESOLVE_IDS).toList();
 
         assertEquals(HttpStatus.OK, controller.downloadsByIds(exactly).block().getStatusCode());
+    }
+
+    // ---- deprecated POST /download/{songName} ---------------------------------------------------
+
+    @Test
+    void download_deprecatedPathRoute_stillReturns202() {
+        Download saved = Download.builder()
+                .downloadId(UUID.randomUUID()).songName("song")
+                .status(DownloadStatus.PENDING).createdAt(NOW).build();
+        when(downloadService.requestDownload("song")).thenReturn(Mono.just(saved));
+
+        ResponseEntity<Download> response = controller.download("song").block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(saved, response.getBody());
+    }
+
+    @Test
+    void download_deprecatedPathRoute_rejectsBlankSongName() {
+        ResponseEntity<Download> response = controller.download(" ").block();
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        verify(downloadService, never()).requestDownload(anyString());
+    }
+
+    // ---- POST /download (body route) ------------------------------------------------------------
+
+    @Test
+    void requestDownload_returns202WithTheServicesSavedDownload() {
+        Download saved = Download.builder()
+                .downloadId(UUID.randomUUID()).songName("Riptide")
+                .status(DownloadStatus.PENDING).createdAt(NOW).build();
+        when(downloadService.requestDownload(eq("Riptide"), eq(List.of("Vance Joy")),
+                eq("https://example.com/cover.jpg"))).thenReturn(Mono.just(saved));
+
+        ResponseEntity<Download> response = controller.requestDownload(
+                new DownloadRequest("Riptide", List.of("Vance Joy"), "https://example.com/cover.jpg"))
+                .block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(saved, response.getBody());
+    }
+
+    @Test
+    void requestDownload_withNullSongName_isRejectedWithoutCallingTheService() {
+        ResponseEntity<Download> response =
+                controller.requestDownload(new DownloadRequest(null, List.of(), null)).block();
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        verify(downloadService, never()).requestDownload(any(), anyList(), any());
+    }
+
+    @Test
+    void requestDownload_withBlankSongName_isRejectedWithoutCallingTheService() {
+        ResponseEntity<Download> response =
+                controller.requestDownload(new DownloadRequest("   ", List.of(), null)).block();
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        verify(downloadService, never()).requestDownload(any(), anyList(), any());
+    }
+
+    @Test
+    void requestDownload_withNullArtists_passesAnEmptyListToTheServiceRatherThanRejecting() {
+        Download saved = Download.builder()
+                .downloadId(UUID.randomUUID()).songName("song")
+                .status(DownloadStatus.PENDING).createdAt(NOW).build();
+        when(downloadService.requestDownload(eq("song"), eq(List.of()), isNull()))
+                .thenReturn(Mono.just(saved));
+
+        // DownloadRequest itself normalises null artists to List.of() in its canonical constructor,
+        // which is what this asserts end to end through the controller.
+        ResponseEntity<Download> response =
+                controller.requestDownload(new DownloadRequest("song", null, null)).block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        verify(downloadService).requestDownload("song", List.of(), null);
     }
 }

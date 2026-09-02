@@ -34,6 +34,10 @@ class DownloadRecoveryIT {
     @BeforeEach
     void clean() {
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
+        // songs.download_id has no ON DELETE CASCADE, so it must go before downloads -- otherwise a
+        // songs row left behind by another test class in this shared Testcontainers instance (e.g.
+        // one exercising DownloadService.requestDownload) blocks this delete with a FK violation.
+        template.getDatabaseClient().sql("DELETE FROM songs").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
     }
 
