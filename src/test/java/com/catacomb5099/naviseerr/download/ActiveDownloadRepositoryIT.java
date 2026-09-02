@@ -45,9 +45,9 @@ class ActiveDownloadRepositoryIT {
     /**
      * A download and its song. The song row is what {@code ADMIT_SQL} joins for {@code song_id}, so
      * without it none of the tests below that admit a task would get one. {@code downloads.song_name}
-     * is no longer written by production either, so it is not written here -- this repository's
-     * projection still selects it, which is why these views report a null song name until the read
-     * path joins {@code songs} too.
+     * is no longer written by production either, so it is not written here -- the read path's
+     * projection joins {@code songs} for the name instead, which is why these views still report the
+     * song name (the literal {@code 'song'} inserted below) rather than a null one.
      */
     private UUID insertDownload(String status) {
         UUID id = UUID.randomUUID();

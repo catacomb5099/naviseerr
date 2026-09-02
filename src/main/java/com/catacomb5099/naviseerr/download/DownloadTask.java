@@ -34,8 +34,11 @@ public record DownloadTask(
 
     /**
      * Not a record component, so the record's arity is unchanged and every positional constructor
-     * call site kept compiling when {@code songName} became {@code query}. Callers that only need
-     * the name (the slskd search and match paths) stay written against this.
+     * call site kept compiling when {@code songName} became {@code query}. The slskd search and
+     * match paths that used to call this were both converted to take the whole {@code TrackQuery}
+     * instead (task 5 of the song-metadata-table plan); no production caller of this accessor
+     * remains. It stays for test/debugging convenience -- tests that only care about the name still
+     * use it rather than unwrapping {@code query} themselves.
      */
     public String songName() {
         return query.songName();

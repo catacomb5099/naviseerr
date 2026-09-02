@@ -172,6 +172,22 @@ so that a rollback all the way to a pre-`V5` image (not just the previous one) i
 problem to solve, and because a migration, once committed, is immutable: editing `V5` after it merged
 would change its checksum and make Flyway refuse to run against every install that already applied it.
 
+This reasoning covers *reads* cleanly but not *writes*, and that gap matters specifically for `V6`.
+A downgraded server (the previous image, from before this plan) still knows how to read
+`downloads.song_name`/`download_tasks.song_name` - both columns are still there, still nullable-safe
+for that old code path, and still hold correct values for every row created before this plan landed.
+But that old image's `ADMIT_SQL` never wrote `download_tasks.song_id` at all - it wrote `song_name`
+instead, because `song_id` did not exist yet in its world. If a self-hoster rolls back to that image
+*after* their database has already run `V5` and `V6` (not just `V5`), every new download admission
+from that point on hits `download_tasks.song_id`'s `NOT NULL` constraint (added by `V6`) with no value
+to put there, and the insert fails. Nothing about that failure is visible to the user: the `downloads`
+row the old code inserted stays `PENDING` forever, and the only symptom is a repeating error log line
+from the failed admit. The fix, if this happens, is to run
+`ALTER TABLE download_tasks ALTER COLUMN song_id DROP NOT NULL` against the database before rolling
+back - or to roll back Flyway's migration history to before `V6` - so the downgraded image's writes
+succeed again. See [gotchas.md](../architecture/gotchas.md) for the same note in the format that gets
+found while debugging a stuck `PENDING` download.
+
 ---
 
 ## Decision: `POST /download/{songName}` survives one release, deprecated

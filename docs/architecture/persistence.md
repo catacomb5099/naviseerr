@@ -68,10 +68,13 @@ that is a flat list of strings and nothing more. See
 the full rationale, including why the foreign key runs `download_tasks -> songs` rather than the other
 way around.
 
-`downloads.song_name` and `download_tasks.song_name` (below) are both **dead**: nothing in this
-codebase writes or reads either any more. Both are kept, nullable, only so a rollback to a
-pre-`songs`-table server image still has a column to read; a future `V7` migration drops them. Do not
-reintroduce a write or a read of either - see [gotchas.md](gotchas.md).
+`downloads.song_name` and `download_tasks.song_name` (below) are both **dead**: no production code
+path writes or reads either any more. The one exception is the already-dead
+`DownloadService.claimPendingDownloads`/`CLAIM_PENDING_SQL` (still selecting `song_name`) and
+`Download.songName` (the `@Column("song_name")` field it reads through) - both must be removed
+alongside the column drop, not just the column itself. Both columns are kept, nullable, only so a
+rollback to a pre-`songs`-table server image still has a column to read; a future `V7` migration
+drops them. Do not reintroduce a write or a read of either - see [gotchas.md](gotchas.md).
 
 `download_tasks` ([V2__download_tasks.sql](../../src/main/resources/db/migration/V2__download_tasks.sql), `song_id` added by [V5](../../src/main/resources/db/migration/V5__song_metadata.sql)/[V6](../../src/main/resources/db/migration/V6__download_tasks_song_id_not_null.sql)):
 
