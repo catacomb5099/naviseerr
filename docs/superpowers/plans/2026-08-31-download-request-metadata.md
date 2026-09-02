@@ -51,7 +51,7 @@ Plus a new route, `POST /download`, taking `{songName, artists, imageUrl}`, and 
 
 **Artists is a `TEXT[]`, not JSON in a `TEXT` column.** `download_tasks.candidates` is JSON because it is written once, read whole, and never queried by content. Artists are read on a path a UI polls every few seconds, so skipping a Jackson round trip per row is worth more than schema flexibility. Postgres 16 (pinned in `compose.yaml`) also gives us `gen_random_uuid()` with no extension.
 
-**V5 expands, V6 contracts.** V5 creates `songs`, backfills it, adds `song_id`, and drops the `NOT NULL` on both `song_name` columns. It does not drop the columns. For self-hosted software a rollback means pulling the previous image, which would then query a column that no longer exists. V6 drops them next release, alongside the deprecated route.
+**V5 expands, V7 contracts.** V5 creates `songs`, backfills it, adds `song_id`, and drops the `NOT NULL` on both `song_name` columns. It does not drop the columns. For self-hosted software a rollback means pulling the previous image, which would then query a column that no longer exists. V7 drops them next release, alongside the deprecated route. (V6, within this release, only tightens `download_tasks.song_id` to `NOT NULL` once Task 3's `ADMIT_SQL` rewrite populates it — see Task 3.)
 
 **`POST /download/{songName}` survives one release, deprecated.** Same reason: a self-hoster who pulls a new server image with an old client image has to keep working. The path form creates a song row with the raw string as its name, empty artists, no image.
 
