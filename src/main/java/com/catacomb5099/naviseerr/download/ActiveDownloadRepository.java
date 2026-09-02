@@ -11,6 +11,7 @@ import reactor.core.publisher.Mono;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -30,10 +31,23 @@ public class ActiveDownloadRepository {
      * a null sort key is how a batch of queued cards ends up in arbitrary order. For a queued
      * download, "when did this stage begin" genuinely is when it was requested. The COALESCE is a
      * no-op on the terminal branch, where the task row is always present.
+     *
+     * <p>{@code song_name} now comes from {@code songs.name}, aliased back to {@code song_name} so
+     * {@link #toView} does not need to change how it reads that column. {@code downloads.song_name}
+     * itself is dead: Task 3 stopped the download loop reading or writing it, so it is permanently
+     * null on every download created since. {@code songs.artists}/{@code image_url} are new; see
+     * {@link ActiveDownloadView} for what each means to the client.
+     *
+     * <p>Every query below therefore returns one row per {@code songs} row, not per {@code downloads}
+     * row. Today those are identical -- a download has exactly one song -- so nothing changes. Once
+     * collections let a download have more than one song, that stops being 1:1, and
+     * {@code ALL_DOWNLOADS_SQL}'s {@code COUNT(*) OVER ()} (and the {@code totalPages} derived from
+     * it) will start counting songs rather than downloads. Flagged for whoever builds that, not fixed
+     * here.
      */
     private static final String PROJECTION = """
-            d.download_id, d.song_name, d.status, t.phase, t.progress_percent,
-                   t.failure_reason,
+            d.download_id, s.name AS song_name, s.artists, s.image_url, d.status, t.phase,
+                   t.progress_percent, t.failure_reason,
                    COALESCE(t.phase_entered_at, d.created_at) AS stage_entered_at,
                    COALESCE(t.updated_at, d.created_at)       AS updated_at""";
 
@@ -41,9 +55,22 @@ public class ActiveDownloadRepository {
      * A UNION ALL of two separately-indexed branches rather than one query with an OR, because the two
      * halves are found in completely different ways and an OR would let neither use its index.
      *
-     * <p>The live branch LEFT JOINs: a download the runner has not admitted yet has no task row at all,
-     * and it is exactly the window in which the user is staring at the card wondering if the click
-     * registered. An inner join here is what made every PENDING download invisible.
+     * <p>The live branch LEFT JOINs {@code download_tasks}: a download the runner has not admitted yet
+     * has no task row at all, and it is exactly the window in which the user is staring at the card
+     * wondering if the click registered. An inner join here is what made every PENDING download
+     * invisible.
+     *
+     * <p>The join to {@code songs} is the opposite kind, deliberately: {@code JOIN}, not
+     * {@code LEFT JOIN}, in every {@code FROM} clause in this class. {@code download_tasks} rows are
+     * created asynchronously by the loop, well after the {@code downloads} row exists, so a download
+     * genuinely can be without one for a while -- that is the state the LEFT JOIN above exists to
+     * report. {@code songs} rows are not created that way: {@code DownloadService.requestDownload}
+     * inserts the {@code downloads} row and its {@code songs} row in the same statement, atomically
+     * (Task 2), so a {@code downloads} row without a matching {@code songs} row cannot exist --
+     * {@code DownloadServiceRequestIT} asserts exactly that atomicity. Do not "fix" this to a
+     * {@code LEFT JOIN} by analogy with {@code download_tasks} above; there is no missing-row window
+     * here for it to compensate for, and doing so would only let a genuine data-integrity bug (a
+     * download with no song) pass silently as a null-metadata row instead of surfacing as a bug.
      *
      * <p>The finished branch is bounded by {@code finished_at}, and its predicate is written to match
      * {@code idx_download_tasks_recently_finished} so it never scans the history that V2 deliberately
@@ -53,12 +80,14 @@ public class ActiveDownloadRepository {
     private static final String ACTIVE_DOWNLOADS_SQL = """
             SELECT %s
               FROM downloads d
+              JOIN songs s ON s.download_id = d.download_id
               LEFT JOIN download_tasks t ON t.download_id = d.download_id
              WHERE d.status IN ('PENDING', 'IN_PROGRESS')
              UNION ALL
             SELECT %s
               FROM download_tasks t
               JOIN downloads d ON d.download_id = t.download_id
+              JOIN songs s ON s.download_id = d.download_id
              WHERE t.phase IN ('SUCCEEDED', 'FAILED')
                AND d.status IN ('SUCCEEDED', 'FAILED')
                AND t.finished_at >= :cutoff
@@ -69,6 +98,7 @@ public class ActiveDownloadRepository {
             SELECT %s,
                    COUNT(*) OVER () AS total_count
               FROM downloads d
+              JOIN songs s ON s.download_id = d.download_id
               LEFT JOIN download_tasks t ON t.download_id = d.download_id
              ORDER BY updated_at DESC, d.download_id DESC
              OFFSET (:pageSize * (:pageNumber - 1)) ROWS
@@ -83,6 +113,7 @@ public class ActiveDownloadRepository {
     private static final String BY_IDS_SQL = """
             SELECT %s
               FROM downloads d
+              JOIN songs s ON s.download_id = d.download_id
               LEFT JOIN download_tasks t ON t.download_id = d.download_id
              WHERE d.download_id = ANY(:ids)
              ORDER BY updated_at DESC
@@ -134,9 +165,15 @@ public class ActiveDownloadRepository {
 
     private static ActiveDownloadView toView(Row row, RowMetadata meta) {
         DownloadStatus status = DownloadStatus.valueOf(row.get("status", String.class));
+        // Same String[] -> null-guarded List<String> idiom as DownloadTaskRepository.toTask: artists
+        // is TEXT[] NOT NULL DEFAULT '{}', so it should never arrive null, but an array can't itself
+        // be a List and a null-guard here costs nothing against the promise ActiveDownloadView makes.
+        String[] artists = row.get("artists", String[].class);
         return new ActiveDownloadView(
                 row.get("download_id", UUID.class),
                 row.get("song_name", String.class),
+                artists == null ? List.of() : List.of(artists),
+                row.get("image_url", String.class),
                 toStage(status, row.get("phase", String.class)),
                 row.get("progress_percent", BigDecimal.class),
                 row.get("stage_entered_at", Instant.class),

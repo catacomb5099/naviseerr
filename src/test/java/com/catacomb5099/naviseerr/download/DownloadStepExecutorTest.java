@@ -4,6 +4,7 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
+import com.catacomb5099.naviseerr.services.slskd.SlskdQueryBuilder;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
@@ -29,22 +30,25 @@ class DownloadStepExecutorTest {
 
     private SlskdService slskdService;
     private SlskdSearchResultProcessor searchProcessor;
+    private SlskdQueryBuilder queryBuilder;
     private DownloadStepExecutor executor;
 
     @BeforeEach
     void setUp() {
         slskdService = mock(SlskdService.class);
         searchProcessor = mock(SlskdSearchResultProcessor.class);
+        queryBuilder = mock(SlskdQueryBuilder.class);
+        when(queryBuilder.build(any())).thenReturn("Rick Astley never gonna give you up");
         DownloadStateMachine machine = new DownloadStateMachine(
                 Duration.ofSeconds(2), Duration.ofSeconds(5),
                 Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofSeconds(60), 2);
-        executor = new DownloadStepExecutor(slskdService, searchProcessor, machine,
+        executor = new DownloadStepExecutor(slskdService, searchProcessor, queryBuilder, machine,
                 Clock.fixed(T0, ZoneOffset.UTC));
     }
 
     @Test
     void searchInit_callsSearchOnceAndAdvances() {
-        when(slskdService.searchResults("never gonna give you up"))
+        when(slskdService.searchResults("Rick Astley never gonna give you up"))
                 .thenReturn(Mono.just(SlskdFixtures.searchState("s1", false, "InProgress")));
 
         DownloadDecision d = executor

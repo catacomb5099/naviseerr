@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
+import com.catacomb5099.naviseerr.services.slskd.SlskdQueryBuilder;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import lombok.extern.slf4j.Slf4j;
@@ -28,15 +29,18 @@ public class DownloadStepExecutor {
 
     private final SlskdService slskdService;
     private final SlskdSearchResultProcessor searchResultProcessor;
+    private final SlskdQueryBuilder queryBuilder;
     private final DownloadStateMachine stateMachine;
     private final Clock clock;
 
     public DownloadStepExecutor(SlskdService slskdService,
                                 SlskdSearchResultProcessor searchResultProcessor,
+                                SlskdQueryBuilder queryBuilder,
                                 DownloadStateMachine stateMachine,
                                 Clock clock) {
         this.slskdService = slskdService;
         this.searchResultProcessor = searchResultProcessor;
+        this.queryBuilder = queryBuilder;
         this.stateMachine = stateMachine;
         this.clock = clock;
     }
@@ -54,7 +58,7 @@ public class DownloadStepExecutor {
     private Mono<DownloadDecision> step(DownloadTask task, Map<String, SearchState> searchesById,
                                         Map<String, TransferedFile> transfersById, Instant now) {
         return switch (task.phase()) {
-            case SEARCH_INIT -> slskdService.searchResults(task.songName())
+            case SEARCH_INIT -> slskdService.searchResults(queryBuilder.build(task.query()))
                     .map(state -> stateMachine.afterSearchInit(task, state, now));
 
             // A missing entry (task.searchId() not in the map) is passed through as null and handled
@@ -99,7 +103,7 @@ public class DownloadStepExecutor {
                                 + "returned {} response(s)",
                         task.searchId(), task.downloadId(), full.getState(), full.getResponseCount(),
                         full.getFileCount(), size(state.getResponses()), size(full.getResponses())))
-                .flatMap(full -> searchResultProcessor.selectBestFiles(full, task.songName())
+                .flatMap(full -> searchResultProcessor.selectBestFiles(full, task.query())
                         .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
                         .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
     }

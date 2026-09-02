@@ -70,6 +70,11 @@ slskd-service:
     min-bit-rate: 320
     retry-count: 2
     max-files-per-download: 10
+    query-builder:
+      # A four-way collab is rarely filed under all four artist names on Soulseek, so joining
+      # every credited artist narrows the search too hard. Primary-artist-only is the default;
+      # flip this for catalogs/uploaders that DO credit everyone. See SlskdQueryBuilder.
+      use-all-artists: false
 
 download-task:
   loop-interval-ms: 2000

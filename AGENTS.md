@@ -54,15 +54,18 @@ The current application is a small Java REST/WebFlux service that:
   [compose.yaml](compose.yaml)), for track, album, and artist search. LastFM previously filled this
   role; its client code still compiles but is no longer called — see
   [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md).
-- Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread).
+- Accepts `POST /download`, a JSON body of `{songName, artists, imageUrl}`, and creates both a `PENDING` row in the `downloads` table and its matching `songs` row atomically, returning `202 Accepted` immediately (fast ack; no work on the request thread). The older `POST /download/{songName}` path-based route still exists but is deprecated - see "Current endpoints" below.
 - Runs a durable, Postgres-backed download state machine that turns those rows into real slskd downloads (see "Download Execution Flow" below) and survives a restart mid-download — nothing about a download's position is held in the JVM heap.
 - Calls slskd to search Soulseek, select candidates, enqueue downloads, poll to completion, and retry/fail over across candidates, driven by `DownloadStateMachine` — a pure function (no fields, no I/O, no clock of its own) that maps `(task, slskd response, now)` to one of three decisions.
 - Persists a terminal `SUCCEEDED`/`FAILED` status per download once the state machine reaches a success/fail state.
 
-Two tables live in `com.catacomb5099.naviseerr.download`:
+Three tables live in `com.catacomb5099.naviseerr.download`:
 
-- `downloads` (`download_id UUID`, `song_name TEXT`, `status TEXT CHECK (...)`, `created_at TIMESTAMPTZ`) — the low-churn, user-facing record that history queries read. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale).
-- `download_tasks` (`download_id UUID PRIMARY KEY REFERENCES downloads`, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`, `progress_percent NUMERIC(5,2)`) — the working state of one download's pipeline, written every few seconds. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+- `downloads` (`download_id UUID`, `song_name TEXT` — **dead**, see below, `status TEXT CHECK (...)`, `created_at TIMESTAMPTZ`) — the low-churn, user-facing record that history queries read. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale).
+- `songs` (`song_id UUID`, `download_id UUID REFERENCES downloads`, `name TEXT`, `artists TEXT[] NOT NULL DEFAULT '{}'`, `image_url TEXT`) — one song's metadata, written once, atomically with its `downloads` row (`DownloadService.requestDownload`'s single CTE), so a download without a song cannot exist. `download_tasks.song_id` is a foreign key to it. Added in `V5__song_metadata.sql`; see `docs/decisions/song-metadata-table-31-08-2026.md`.
+- `download_tasks` (`download_id UUID PRIMARY KEY REFERENCES downloads`, `song_id UUID NOT NULL REFERENCES songs` (as of `V6`), `song_name TEXT` — **dead**, see below, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`, `progress_percent NUMERIC(5,2)`) — the working state of one download's pipeline, written every few seconds. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+
+`downloads.song_name` and `download_tasks.song_name` are both **dead columns**: no production code path reads or writes either any more (the write path inserts into `songs` instead; the loop and the read feed both join `songs` for the name). The one exception is the already-dead `DownloadService.claimPendingDownloads`/`CLAIM_PENDING_SQL` and the `Download.songName` field it reads through - both must be removed in the same pass that drops the column, not just the column itself. Both columns stay, nullable, only so a rollback to a pre-`songs`-table server image still has a column to read; they are dropped in a future `V7` migration, next release. See `docs/decisions/song-metadata-table-31-08-2026.md` for why the columns weren't dropped immediately, and [gotchas.md](docs/architecture/gotchas.md) for the "don't reintroduce a write" note and the removal caveat.
 
 `progress_percent` (0-100, everywhere, no exceptions) is written by `DownloadStateMachine.afterDownloadPoll` from slskd's `percentComplete` on the same `Continue`/`Advance` write every other field rides on — no separate statement, no new write volume. It is reset to zero on retry or candidate failover (a resumed transfer is a new transfer, not a continuation), left untouched when a transfer is briefly absent from the batched response (an absent source value must never overwrite a real one), and normalised to exactly `100` on `SUCCEEDED` by `DownloadService.finishDownload`'s CTE. `FAILED` deliberately keeps its last observed value rather than being forced to either end — see `docs/decisions/download-progress-reporting-17-08-2026.md`. `DownloadTaskRepository.save` now takes `(task, owner)` and only writes when the row is still non-terminal **and** still held by that owner's lease — the guard that was missing before this landed.
 
@@ -97,9 +100,11 @@ Current endpoints:
 - `GET /search/{query}/tracks` — track search
 - `GET /search/{query}/albums` — album search
 - `GET /search/{query}/artists` — artist search
-- `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
-- `GET /downloads/active` — every non-terminal download plus every one finished within `terminal-retention-ms`, most-recently-updated first, as `{downloadId, songName, stage, progressPercent, stageEnteredAt, updatedAt, failureCode}` plus `pollIntervalMs` and `terminalRetentionMs`; the client polls this, no SSE
+- `POST /download` — body `{songName, artists, imageUrl}` (`DownloadRequest`); creates a `PENDING` download and its `songs` row atomically, returns `202 Accepted`; processed asynchronously by the download execution flow. `songName` is required (400 on null/blank); a null `artists` is normalised to empty, not rejected, since not knowing the artist is a legitimate caller.
+- `POST /download/{songName}` — **deprecated**, kept for one release so a self-hoster running an old client image against a new server image keeps working; delegates to the same insert with empty artists and no image. A song title containing `/` is unrequestable through this route under any encoding, which is part of why the body route exists. Removed alongside `V7`; see `docs/decisions/song-metadata-table-31-08-2026.md`.
+- `GET /downloads/active` — every non-terminal download plus every one finished within `terminal-retention-ms`, most-recently-updated first, as `{downloadId, songName, artists, imageUrl, stage, progressPercent, stageEnteredAt, updatedAt, failureCode}` plus `pollIntervalMs` and `terminalRetentionMs`; the client polls this, no SSE. `artists` is always present, never null (empty list when unknown); `imageUrl` is nullable (null for the deprecated route and for pre-`songs`-table backfilled rows).
 - `GET /downloads?ids=a,b,c` — the same shape for specific ids, ignoring both the terminal filter and the retention window (max 100 ids). Lets a client reconcile cards it held across a restart; absent ids are omitted, not 404'd
+- `GET /downloads/all?pageSize=&pageNumber=` — paginated full download history (not filtered by the retention window), same per-item shape as `/downloads/active`, plus pagination metadata
 
 ## Deeper Context (docs/architecture)
 
@@ -167,9 +172,15 @@ The current authoritative design lives in `docs/superpowers/specs/2026-08-13-dur
 
 ## Domain Model Direction
 
-Expected core entities:
+`Song` now exists, not just as a future target: `com.catacomb5099.naviseerr.download.Song` is an
+R2DBC entity (`songs` table) holding `name`, `artists` (`List<String>`, never null, empty by
+default), and `imageUrl`. One row per download today — the 1:1 with `downloads` is enforced by both
+being written in the same atomic statement — ready to become one-of-many once collections land
+(a download referencing several `songs` rows rather than exactly one). It deliberately does not yet
+carry discovered download links or validity windows; those remain future scope.
 
-- `Song`: metadata plus discovered download links and validity windows.
+Remaining expected core entities:
+
 - `Download`: one song download for one user, optionally attached to a collection.
 - `CollectionDownload`: a batch/playlist-style download with per-song counts and aggregate status.
 

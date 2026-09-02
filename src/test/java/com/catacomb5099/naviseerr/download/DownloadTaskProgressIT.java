@@ -35,15 +35,25 @@ class DownloadTaskProgressIT {
     @BeforeEach
     void clean() {
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
+        // songs.download_id has no ON DELETE CASCADE, so it must go before downloads -- otherwise a
+        // songs row left behind by another test class in this shared Testcontainers instance (e.g.
+        // one exercising DownloadService.requestDownload) blocks this delete with a FK violation.
+        template.getDatabaseClient().sql("DELETE FROM songs").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
     }
 
+    /** A download and its song: ADMIT_SQL joins `songs`, so a download without one is never admitted. */
     private UUID insertDownload(String status) {
         UUID id = UUID.randomUUID();
         template.getDatabaseClient()
-                .sql("INSERT INTO downloads (download_id, song_name, status, created_at) "
-                        + "VALUES (:id, 'song', :status, now())")
+                .sql("INSERT INTO downloads (download_id, status, created_at) "
+                        + "VALUES (:id, :status, now())")
                 .bind("id", id).bind("status", status)
+                .fetch().rowsUpdated().block();
+        template.getDatabaseClient()
+                .sql("INSERT INTO songs (song_id, download_id, name) "
+                        + "VALUES (gen_random_uuid(), :id, 'song')")
+                .bind("id", id)
                 .fetch().rowsUpdated().block();
         return id;
     }

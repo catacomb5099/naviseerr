@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services.slskd;
 
+import com.catacomb5099.naviseerr.schema.request.TrackQuery;
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
@@ -38,7 +39,7 @@ public class SlskdSearchResultProcessor {
         this.trackMatchingService = trackMatchingService;
     }
 
-    public Mono<List<Map.Entry<SearchResponseItem, SearchFile>>> selectBestFiles(SearchState state, String query) {
+    public Mono<List<Map.Entry<SearchResponseItem, SearchFile>>> selectBestFiles(SearchState state, TrackQuery query) {
         return Mono.fromCallable(() -> {
             // Null rather than empty when the caller handed us a search fetched without
             // includeResponses. Degrade to "no candidates" instead of an NPE, so the failure reads as
@@ -52,13 +53,16 @@ public class SlskdSearchResultProcessor {
                     .sorted(BY_AVAILABILITY)
                     .toList();
 
-            log.info("Completed candidate selection for query='{}' - {} response(s), {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, responses.size(), state.getFileCount(), candidates.size(), maxFilesPerDownload);
+            // songName and artists are logged as separate fields (rather than the old single
+            // query='...') so that a bad match can be diagnosed as "wrong song name" vs "artist
+            // metadata missing/wrong" without having to unpick a single interpolated string.
+            log.info("Completed candidate selection for songName='{}' artists={} - {} response(s), {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query.songName(), query.artists(), responses.size(), state.getFileCount(), candidates.size(), maxFilesPerDownload);
             return candidates.stream().limit(maxFilesPerDownload).toList();
         });
     }
 
-    private boolean isRelevant(SearchFile file, String trackTitle) {
-        return trackMatchingService.isMatch(trackTitle, file.getFilename());
+    private boolean isRelevant(SearchFile file, TrackQuery query) {
+        return trackMatchingService.isMatch(query, file.getFilename());
     }
 
     private boolean isFlacAndHighBitrate(SearchFile file) {

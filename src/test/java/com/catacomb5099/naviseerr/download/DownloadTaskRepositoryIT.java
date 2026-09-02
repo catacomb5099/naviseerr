@@ -1,11 +1,13 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.TestcontainersConfiguration;
+import com.catacomb5099.naviseerr.schema.request.TrackQuery;
 import com.catacomb5099.naviseerr.support.DownloadTaskFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.test.context.TestPropertySource;
@@ -32,15 +34,37 @@ class DownloadTaskRepositoryIT {
     @BeforeEach
     void clean() {
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
+        // songs.download_id has no ON DELETE CASCADE, so it must go before downloads -- otherwise a
+        // songs row left behind by another test class in this shared Testcontainers instance (e.g.
+        // one exercising DownloadService.requestDownload) blocks this delete with a FK violation.
+        template.getDatabaseClient().sql("DELETE FROM songs").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
     }
 
     private UUID insertDownload(String status) {
+        return insertDownload(status, "song", List.of());
+    }
+
+    /**
+     * A download AND its song, because that is the only shape production can produce: both rows are
+     * written by one CTE in {@link DownloadService#requestDownload}, and {@code ADMIT_SQL} now inner
+     * joins {@code songs} for the {@code song_id} it writes. A bare {@code downloads} insert with no
+     * song row is not a download the loop would ever see -- it would simply never be admitted.
+     * {@code downloads.song_name} is deliberately left unwritten here too, matching what
+     * {@code requestDownload} now does.
+     */
+    private UUID insertDownload(String status, String songName, List<String> artists) {
         UUID id = UUID.randomUUID();
         template.getDatabaseClient()
-                .sql("INSERT INTO downloads (download_id, song_name, status, created_at) "
-                        + "VALUES (:id, 'song', :status, now())")
+                .sql("INSERT INTO downloads (download_id, status, created_at) "
+                        + "VALUES (:id, :status, now())")
                 .bind("id", id).bind("status", status)
+                .fetch().rowsUpdated().block();
+        template.getDatabaseClient()
+                .sql("INSERT INTO songs (song_id, download_id, name, artists) "
+                        + "VALUES (gen_random_uuid(), :id, :name, :artists)")
+                .bind("id", id).bind("name", songName)
+                .bind("artists", artists.toArray(String[]::new))
                 .fetch().rowsUpdated().block();
         return id;
     }
@@ -79,6 +103,114 @@ class DownloadTaskRepositoryIT {
         insertDownload("FAILED");
 
         assertEquals(0L, repository.admitNewDownloads(10, NOW).block());
+    }
+
+    @Test
+    void admit_writesTheSongIdItJoinedFor_andNoSongNameAtAll() {
+        UUID id = insertDownload("PENDING", "Riptide", List.of("Vance Joy"));
+
+        assertEquals(1L, repository.admitNewDownloads(10, NOW).block());
+
+        assertEquals(songIdOf(id), taskSongIdOf(id),
+                "the task must point at THIS download's song, not merely at some song");
+        assertNull(taskSongNameOf(id),
+                "the loop stopped carrying metadata: the column it used to copy is left null");
+    }
+
+    /**
+     * V6's constraint, asserted rather than assumed. It is the thing that stops the failure mode
+     * described in that migration: a task row with no {@code song_id} would not error on read, it
+     * would silently drop out of {@code CLAIM_DUE_SQL}'s inner join and stall its download forever.
+     */
+    @Test
+    void songIdIsNotNull_soARowThatCouldNeverBeClaimedCannotBeWrittenAtAll() {
+        UUID id = insertDownload("PENDING");
+
+        assertThrows(DataIntegrityViolationException.class, () -> template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks "
+                        + "(download_id, phase, phase_entered_at, next_attempt_at) "
+                        + "VALUES (:id, 'SEARCH_INIT', :now, :now)")
+                .bind("id", id).bind("now", NOW)
+                .fetch().rowsUpdated().block());
+    }
+
+    @Test
+    void admit_ignoresADownloadWithNoSongRow() {
+        // Unreachable through production code -- DownloadService.requestDownload writes both rows in
+        // one CTE -- but it is what the inner join means, and it is better stated than discovered.
+        // If this ever fires in anger, the fix is a missing song row upstream, not a LEFT JOIN here:
+        // download_tasks.song_id is NOT NULL, so there is nothing a left join could insert.
+        UUID id = UUID.randomUUID();
+        template.getDatabaseClient()
+                .sql("INSERT INTO downloads (download_id, status, created_at) "
+                        + "VALUES (:id, 'PENDING', now())")
+                .bind("id", id).fetch().rowsUpdated().block();
+
+        assertEquals(0L, repository.admitNewDownloads(10, NOW).block());
+        assertEquals(0L, countTaskRows());
+    }
+
+    @Test
+    void claim_returnsNameAndArtistsFromTheSongsJoin() {
+        insertDownload("PENDING", "Riptide", List.of("Vance Joy", "Someone Else"));
+        repository.admitNewDownloads(10, NOW).block();
+
+        DownloadTask claimed = repository
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).blockFirst();
+
+        assertNotNull(claimed);
+        assertEquals("Riptide", claimed.songName());
+        assertEquals(List.of("Vance Joy", "Someone Else"), claimed.query().artists(),
+                "artists come back off the join, in order, not as a flattened string");
+    }
+
+    @Test
+    void claim_reportsEmptyArtistsAsAnEmptyList_neverNull() {
+        // Every download made through the deprecated path route, and every row V5 backfilled, looks
+        // like this. A null here would NPE in whatever words the provider query.
+        insertDownload("PENDING", "No Artist Known", List.of());
+        repository.admitNewDownloads(10, NOW).block();
+
+        DownloadTask claimed = repository
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).blockFirst();
+
+        assertNotNull(claimed.query().artists());
+        assertEquals(List.of(), claimed.query().artists());
+    }
+
+    /**
+     * The regression the {@code UPDATE ... FROM songs ... RETURNING} rewrite could plausibly have
+     * introduced, asserted directly against the rewritten statement rather than inherited from the
+     * coverage that predates it. Both halves matter: a live lease must be skipped AND left alone
+     * (not restamped with the new owner), and the unleased row beside it must still be claimed in
+     * the same pass -- otherwise a statement that had stopped claiming anything at all would look
+     * like the skip working correctly.
+     *
+     * <p>Verified to fail for the right reason: with the
+     * {@code lease_expires_at IS NULL OR lease_expires_at < :now} guard commented out of
+     * {@code CLAIM_DUE_SQL}, this claims 2 rows and reports {@code instance-b} as the leased row's
+     * owner.
+     */
+    @Test
+    void claim_afterTheJoinRewrite_skipsALiveLeaseWhileStillClaimingTheUnleasedRowBesideIt() {
+        UUID leased = insertDownload("PENDING", "leased song", List.of("A"));
+        UUID free = insertDownload("PENDING", "free song", List.of("B"));
+        repository.admitNewDownloads(10, NOW).block();
+        // Leased directly rather than by a first claimDueTasks call with a limit of 1: which row that
+        // would pick depends on next_attempt_at ordering between two rows admitted in the same
+        // statement. This is fixture setup, so it should not be order-dependent.
+        leaseDirectly(leased, "instance-a", NOW.plusSeconds(60));
+
+        List<DownloadTask> claimed = repository
+                .claimDueTasks(10, "instance-b", NOW.plusSeconds(1), Duration.ofSeconds(60), true)
+                .collectList().block();
+
+        assertEquals(1, claimed.size(), "the row another instance holds must not be claimed");
+        assertEquals(free, claimed.getFirst().downloadId());
+        assertEquals("instance-a", leaseOwnerOf(leased),
+                "a live lease must not be overwritten by the claim that skipped it");
+        assertEquals("instance-b", leaseOwnerOf(free),
+                "and the claim must still be doing its job on the row that was free");
     }
 
     @Test
@@ -135,7 +267,10 @@ class DownloadTaskRepositoryIT {
         DownloadTask claimed = repository
                 .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).blockFirst();
 
-        DownloadTask updated = new DownloadTask(id, "song", DownloadPhase.DOWNLOAD_POLL,
+        // The query deliberately differs from the song row's: SAVE_SQL writes no metadata columns, so
+        // this must be discarded rather than persisted. The loop reads metadata; it never owns it.
+        DownloadTask updated = new DownloadTask(id, new TrackQuery("not the song's name",
+                List.of("nobody")), DownloadPhase.DOWNLOAD_POLL,
                 NOW, NOW.plusSeconds(5), "s1", DownloadTaskFixtures.candidates("alice", "bob"),
                 1, 2, "bob", "music/bob/song.flac", "abc", "some error");
         repository.save(updated, "a").block();
@@ -144,6 +279,9 @@ class DownloadTaskRepositoryIT {
                 .claimDueTasks(10, "b", NOW.plusSeconds(10), Duration.ofSeconds(60), true).blockFirst();
 
         assertNotNull(reread, "lease must have been cleared by save()");
+        assertEquals("song", reread.songName(),
+                "save() must not be able to rewrite metadata -- it comes back off the songs join");
+        assertEquals(List.of(), reread.query().artists());
         assertEquals(DownloadPhase.DOWNLOAD_POLL, reread.phase());
         assertEquals("s1", reread.searchId());
         assertEquals(2, reread.candidates().size());
@@ -371,6 +509,37 @@ class DownloadTaskRepositoryIT {
                 .bind("id", id)
                 .map((row, meta) -> Optional.ofNullable(row.get("failure_reason", String.class)))
                 .one().block().orElse(null);
+    }
+
+    private UUID songIdOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT song_id FROM songs WHERE download_id = :id").bind("id", downloadId)
+                .map((row, meta) -> row.get("song_id", UUID.class)).one().block();
+    }
+
+    private UUID taskSongIdOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT song_id FROM download_tasks WHERE download_id = :id")
+                .bind("id", downloadId)
+                .map((row, meta) -> Optional.ofNullable(row.get("song_id", UUID.class)))
+                .one().block().orElse(null);
+    }
+
+    private String taskSongNameOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT song_name FROM download_tasks WHERE download_id = :id")
+                .bind("id", downloadId)
+                .map((row, meta) -> Optional.ofNullable(row.get("song_name", String.class)))
+                .one().block().orElse(null);
+    }
+
+    /** Fixture setup only -- stamps a lease without going through the statement under test. */
+    private void leaseDirectly(UUID id, String owner, Instant expiresAt) {
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET lease_owner = :owner, lease_expires_at = :expiresAt "
+                        + "WHERE download_id = :id")
+                .bind("owner", owner).bind("expiresAt", expiresAt).bind("id", id)
+                .fetch().rowsUpdated().block();
     }
 
     private String leaseOwnerOf(UUID id) {

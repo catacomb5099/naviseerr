@@ -85,6 +85,92 @@ Polling every in-flight download's search or transfer individually costs one sls
 
 Pruning completed searches (`DELETE /searches/{id}`) was in the original design and has been **dropped**. Two reasons: the refetch above means a completed search's results are still needed after the `isComplete` observation, and deleting made `SEARCH_POLL` non-idempotent — if the delete landed but the decision write did not (lost lease, crash between the two), the re-claimed row would poll a search slskd no longer has, read that as "still running", and burn the full `search-budget-ms` before failing. Leaving the search in place makes the phase safely re-runnable, and slskd ages its own searches out.
 
+## The admit and claim SQL
+
+Both of `DownloadTaskRepository`'s hot statements now join `songs`, since the song-metadata-table
+plan moved a download's name and artists off `download_tasks` and into their own table (see
+[docs/decisions/song-metadata-table-31-08-2026.md](../decisions/song-metadata-table-31-08-2026.md)).
+Neither statement's actual job changed; both simply have one more table to read from, and each had
+to be written carefully so the new join doesn't widen what it locks.
+
+**`ADMIT_SQL`** now joins `songs` for the `song_id` it inserts into the new task row:
+
+```sql
+WITH admitted AS (
+    SELECT d.download_id, s.song_id
+      FROM downloads d
+      JOIN songs s ON s.download_id = d.download_id
+     WHERE d.status IN ('PENDING', 'IN_PROGRESS')
+       AND NOT EXISTS (SELECT 1 FROM download_tasks t
+                        WHERE t.download_id = d.download_id)
+     ORDER BY d.created_at
+       FOR UPDATE OF d SKIP LOCKED
+     LIMIT :limit
+), created AS (
+    INSERT INTO download_tasks
+        (download_id, song_id, phase, phase_entered_at, next_attempt_at)
+    SELECT download_id, song_id, 'SEARCH_INIT', :now, :now FROM admitted
+    ON CONFLICT (download_id) DO NOTHING
+    RETURNING download_id
+)
+UPDATE downloads SET status = 'IN_PROGRESS'
+ WHERE download_id IN (SELECT download_id FROM created)
+```
+
+The join is safe as an inner join, not a `LEFT JOIN`: a download and its song are created by one CTE
+(`DownloadService.requestDownload`), so a download without a song cannot exist, and today's
+cardinality is exactly 1:1 (collections will change that — see the ADR's cardinality note). **The
+lock clause changed from a bare `FOR UPDATE` to `FOR UPDATE OF d SKIP LOCKED`.** A bare `FOR UPDATE`
+over a joined query takes row locks in every table named in the `FROM`, so once the `songs` join was
+added, a bare lock clause would have started taking row locks on `songs` rows this statement has
+never needed to lock and does not write to. Naming the `d` alias keeps the lock exactly where it was
+before the join existed — on the `downloads` rows actually being admitted.
+
+**`CLAIM_DUE_SQL`** now joins `songs` to return the name and artists `DownloadStepExecutor` needs to
+word a Soulseek query, reversing the denormalisation V2 chose specifically to avoid this:
+
+```sql
+UPDATE download_tasks t
+   SET lease_owner = :owner,
+       lease_expires_at = :leaseExpiresAt
+  FROM songs s
+ WHERE s.song_id = t.song_id
+   AND t.download_id IN (
+       SELECT download_id FROM download_tasks
+        WHERE next_attempt_at <= :now
+          AND phase NOT IN ('SUCCEEDED', 'FAILED')
+          AND (:transferSlotsFree OR phase <> 'DOWNLOAD_INIT')
+          AND (lease_expires_at IS NULL OR lease_expires_at < :now)
+        ORDER BY next_attempt_at
+          FOR UPDATE SKIP LOCKED
+        LIMIT :limit)
+RETURNING t.download_id, s.name, s.artists, t.phase, t.phase_entered_at,
+          t.next_attempt_at, t.search_id, t.candidates, t.candidate_index,
+          t.retry_index, t.slskd_username, t.slskd_filename, t.slskd_transfer_id,
+          t.last_error, t.progress_percent
+```
+
+Two things about the shape are load-bearing:
+
+- **The join arrives through `FROM`, not the `RETURNING` list**, because `UPDATE ... RETURNING` can
+  only return columns of the table actually being updated (`download_tasks`) — `s.name`/`s.artists`
+  have to be read from somewhere else in the statement. `UPDATE ... FROM ... RETURNING` is a shape
+  used nowhere else in this codebase; it exists specifically so the next point still holds.
+- **`FOR UPDATE SKIP LOCKED` still applies only inside the `IN (...)` subquery**, which still selects
+  from `download_tasks` alone. The outer `UPDATE`'s join to `songs` merely *reads* it, under no lock
+  clause at all — so `songs` rows are never locked by a claim, exactly as before the join existed.
+  This is the same lock-scoping concern as `ADMIT_SQL`'s `FOR UPDATE OF d` above, solved by a
+  different mechanism because the two statements have different shapes (a `SELECT ... FOR UPDATE` vs
+  an `UPDATE ... FROM`).
+
+The join itself is on `s.song_id = t.song_id`, `songs`' primary key, so it can never fan one task row
+out into two claimed rows. It costs a primary-key lookup into `songs` for at most `batch-size` rows
+per pass (default 10) — accepted as affordable on a statement that runs every few seconds, but **not
+confirmed with `EXPLAIN` against a populated table**, and `download_tasks.song_id` itself carries no
+index of its own. See the ADR linked above for that caveat in full, and
+[persistence.md](persistence.md) for the SQL as the reference copy (this doc explains why; that one
+is the copy to diff against the live code).
+
 ## The atomic terminal write
 
 Finishing a download touches two tables — `downloads.status` and the task's terminal phase — and a crash between two separate statements would reopen the stranded-row bug this design exists to close. `DownloadService.finishDownload` does both in one data-modifying CTE:
@@ -111,12 +197,14 @@ Postgres runs a data-modifying CTE exactly once even when nothing references it,
 
 ## The `download_tasks` DDL
 
-From [V2__download_tasks.sql](../../src/main/resources/db/migration/V2__download_tasks.sql):
+From [V2__download_tasks.sql](../../src/main/resources/db/migration/V2__download_tasks.sql), with
+`song_id` added by [V5](../../src/main/resources/db/migration/V5__song_metadata.sql)/[V6](../../src/main/resources/db/migration/V6__download_tasks_song_id_not_null.sql):
 
 ```sql
 CREATE TABLE download_tasks (
     download_id       UUID PRIMARY KEY REFERENCES downloads (download_id),
-    song_name         TEXT        NOT NULL,
+    song_id           UUID        NOT NULL REFERENCES songs (song_id),  -- added V5, NOT NULL as of V6
+    song_name         TEXT,                                             -- dead; NOT NULL dropped by V5
     phase             TEXT        NOT NULL
                                   CHECK (phase IN ('SEARCH_INIT', 'SEARCH_POLL',
                                                    'DOWNLOAD_INIT', 'DOWNLOAD_POLL',
@@ -141,7 +229,19 @@ CREATE INDEX idx_download_tasks_due ON download_tasks (next_attempt_at)
     WHERE phase NOT IN ('SUCCEEDED', 'FAILED');
 ```
 
-`song_name` is denormalised so the hot due-work query needs no join. `candidates` is `TEXT` holding a JSON array of `DownloadCandidate`, not `JSONB` — the list is written once and read whole, never queried by content, so `JSONB`'s indexing/operators buy nothing, and storing it as JSON means adding a field to `DownloadCandidate` later needs no migration. The index is **partial** — it covers only non-terminal rows — which is what makes "retain terminal rows forever" free: the due-work query's cost is independent of history size. See [persistence.md](persistence.md) for the Flyway layout this migration lives in.
+`song_name` was denormalised so the hot due-work query needed no join — that was V2's reasoning, and
+it no longer holds: `song_name` is dead (nothing reads or writes it) and `CLAIM_DUE_SQL` now joins
+`songs` for the name and artists it needs instead. `song_id` is what makes that join possible, and it
+is `NOT NULL` as of `V6`, once `ADMIT_SQL` (above) started populating it on every row. See "The admit
+and claim SQL" above for the current queries, and
+[docs/decisions/song-metadata-table-31-08-2026.md](../decisions/song-metadata-table-31-08-2026.md) for
+why the reversal happened and what it costs. `candidates` is `TEXT` holding a JSON array of
+`DownloadCandidate`, not `JSONB` — the list is written once and read whole, never queried by content,
+so `JSONB`'s indexing/operators buy nothing, and storing it as JSON means adding a field to
+`DownloadCandidate` later needs no migration. The index is **partial** — it covers only non-terminal
+rows — which is what makes "retain terminal rows forever" free: the due-work query's cost is
+independent of history size. See [persistence.md](persistence.md) for the Flyway layout this
+migration lives in.
 
 ## Recovery walkthrough
 
@@ -186,4 +286,5 @@ Nothing about a download's position is held in memory, so every recovery scenari
 - DB, SQL, and the Flyway layout: [persistence.md](persistence.md)
 - Reactor patterns (the pass/row concurrency split): [reactive-patterns.md](reactive-patterns.md)
 - ADR (rationale, options considered, rejected alternatives): [docs/decisions/durable-download-state-machine-13-08-2026.md](../decisions/durable-download-state-machine-13-08-2026.md)
+- ADR (the `songs` table, the reversed `song_name` denormalisation, the `ADMIT_SQL`/`CLAIM_DUE_SQL` rewrite): [docs/decisions/song-metadata-table-31-08-2026.md](../decisions/song-metadata-table-31-08-2026.md)
 - Design spec: [docs/superpowers/specs/2026-08-13-durable-download-state-machine-design.md](../superpowers/specs/2026-08-13-durable-download-state-machine-design.md)

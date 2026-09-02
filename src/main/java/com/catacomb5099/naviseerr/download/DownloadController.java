@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
@@ -44,12 +45,41 @@ public class DownloadController {
         this.terminalRetention = terminalRetention;
     }
 
+    /**
+     * Superseded by {@link #requestDownload(DownloadRequest)}. A song title containing {@code /}
+     * cannot be represented as a path variable under any encoding, so requests for such songs are
+     * simply unrepresentable here -- the reason the body-based route exists at all.
+     *
+     * <p>Kept working exactly as before -- empty artists, no image -- because a self-hoster who
+     * pulls a new server image can still be running an old client image for a while; breaking this
+     * outright would break every in-flight download request for such a client. Slated for removal
+     * once the client no longer calls it; see
+     * {@code docs/superpowers/plans/2026-08-31-download-request-metadata.md}.
+     */
+    @Deprecated
     @PostMapping("/download/{songName}")
     Mono<ResponseEntity<Download>> download(@PathVariable String songName) {
         if (songName == null || songName.isBlank()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
         return downloadService.requestDownload(songName)
+                .map(saved -> ResponseEntity.status(HttpStatus.ACCEPTED).body(saved))
+                .onErrorResume(error -> Mono.just(
+                        ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));
+    }
+
+    /**
+     * Body-based replacement for the deprecated path-based route above: the client sends the song
+     * name, artist list, and cover image it actually has, instead of gluing them into one string
+     * the server then has to guess how to split -- and instead of being unable to request a song
+     * whose title contains {@code /} at all.
+     */
+    @PostMapping("/download")
+    Mono<ResponseEntity<Download>> requestDownload(@RequestBody DownloadRequest request) {
+        if (request == null || request.songName() == null || request.songName().isBlank()) {
+            return Mono.just(ResponseEntity.badRequest().build());
+        }
+        return downloadService.requestDownload(request.songName(), request.artists(), request.imageUrl())
                 .map(saved -> ResponseEntity.status(HttpStatus.ACCEPTED).body(saved))
                 .onErrorResume(error -> Mono.just(
                         ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));

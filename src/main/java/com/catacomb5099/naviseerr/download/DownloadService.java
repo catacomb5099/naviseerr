@@ -8,6 +8,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
@@ -73,21 +74,75 @@ public class DownloadService {
                     OR phase NOT IN ('SUCCEEDED', 'FAILED'))
             """;
 
+    // One statement so a download can never exist without its song -- no transaction manager needed,
+    // same reasoning as ADMIT_SQL and FINISH_DOWNLOAD_SQL.
+    //
+    // `downloads.song_name` is deliberately NOT written any more. `DownloadTaskRepository.ADMIT_SQL`
+    // and `ActiveDownloadRepository` both now join `songs` for the name instead, so nothing reads this
+    // column, and writing it would be storing a second copy of the same fact for a column `V7` drops.
+    // The column itself stays for one release so that rolling back to the previous image -- which
+    // still queries it -- keeps working for every row created before this change; see the plan's
+    // "V5 expands, V7 contracts" note.
+    private static final String REQUEST_DOWNLOAD_SQL = """
+            WITH created AS (
+                INSERT INTO downloads (download_id, status, created_at)
+                VALUES (:downloadId, 'PENDING', :now)
+                RETURNING download_id
+            )
+            INSERT INTO songs (song_id, download_id, name, artists, image_url)
+            SELECT :songId, download_id, :songName, :artists, :imageUrl FROM created
+            """;
+
     private final R2dbcEntityTemplate entityTemplate;
 
     public DownloadService(R2dbcEntityTemplate entityTemplate) {
         this.entityTemplate = entityTemplate;
     }
 
+    /** Delegates with no known artist and no image -- what the deprecated path-based route sends. */
     public Mono<Download> requestDownload(String songName) {
+        return requestDownload(songName, List.of(), null);
+    }
+
+    /**
+     * Creates a download and its song in one atomic statement (see {@link #REQUEST_DOWNLOAD_SQL}).
+     * A null {@code artists} is normalised to empty here rather than trusting every caller to have
+     * done it already -- {@code songs.artists} is {@code NOT NULL DEFAULT '{}'}, and binding a Java
+     * null against it would fail the insert outright. The returned {@link Download} is built from
+     * the same values used to bind the statement rather than re-read afterwards: every field on it
+     * is one this method generated or was handed, so there is nothing a round trip would add.
+     */
+    public Mono<Download> requestDownload(String songName, List<String> artists, String imageUrl) {
+        UUID downloadId = UUID.randomUUID();
+        UUID songId = UUID.randomUUID();
+        Instant now = Instant.now();
+        List<String> normalisedArtists = artists == null ? List.of() : artists;
         Download download = Download.builder()
-                .downloadId(UUID.randomUUID())
+                .downloadId(downloadId)
                 .songName(songName)
                 .status(DownloadStatus.PENDING)
-                .createdAt(Instant.now())
+                .createdAt(now)
                 .build();
-        // insert() forces an INSERT; save() would treat the pre-set @Id as an UPDATE.
-        return entityTemplate.insert(download);
+        DatabaseClient.GenericExecuteSpec spec = entityTemplate.getDatabaseClient()
+                .sql(REQUEST_DOWNLOAD_SQL)
+                .bind("downloadId", downloadId)
+                .bind("songId", songId)
+                .bind("now", now)
+                .bind("artists", normalisedArtists.toArray(String[]::new));
+        // bind() throws synchronously on a null value; songs.name is NOT NULL so a null songName is
+        // always rejected by Postgres regardless, but binding it safely rather than letting bind()
+        // throw keeps that rejection a reactive error like every other failure path here, instead of
+        // a synchronous exception thrown before the Mono is even returned.
+        spec = songName == null
+                ? spec.bindNull("songName", String.class)
+                : spec.bind("songName", songName);
+        spec = imageUrl == null
+                ? spec.bindNull("imageUrl", String.class)
+                : spec.bind("imageUrl", imageUrl);
+        return spec.fetch()
+                .rowsUpdated()
+                .thenReturn(download)
+                .doOnError(error -> log.error("Could not create download for song {}", songName, error));
     }
 
     // SKIP LOCKED stops two cycles claiming the same row; RETURNING yields exactly the rows won.
