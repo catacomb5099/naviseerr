@@ -77,14 +77,12 @@ public class DownloadService {
     // One statement so a download can never exist without its song -- no transaction manager needed,
     // same reasoning as ADMIT_SQL and FINISH_DOWNLOAD_SQL.
     //
-    // `downloads.song_name` is deliberately NOT written any more. It was still written until
-    // DownloadTaskRepository.ADMIT_SQL stopped reading it (it joins `songs` for the name instead), and
-    // now that nothing reads it, writing it would be storing a second copy of the same fact for a
-    // column V7 drops. The column itself stays for one release so that rolling back to the previous
-    // image -- which still queries it -- keeps working for every row created before this change; see
-    // the plan's "V5 expands, V6 contracts" note. ActiveDownloadRepository still selects it until
-    // task 4 joins `songs` there too, so between this change and that one the feed reports a null
-    // song name for downloads created after it.
+    // `downloads.song_name` is deliberately NOT written any more. `DownloadTaskRepository.ADMIT_SQL`
+    // and `ActiveDownloadRepository` both now join `songs` for the name instead, so nothing reads this
+    // column, and writing it would be storing a second copy of the same fact for a column `V7` drops.
+    // The column itself stays for one release so that rolling back to the previous image -- which
+    // still queries it -- keeps working for every row created before this change; see the plan's
+    // "V5 expands, V7 contracts" note.
     private static final String REQUEST_DOWNLOAD_SQL = """
             WITH created AS (
                 INSERT INTO downloads (download_id, status, created_at)
