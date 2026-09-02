@@ -45,7 +45,8 @@ class DownloadControllerTest {
     }
 
     private static ActiveDownloadView view() {
-        return new ActiveDownloadView(UUID.randomUUID(), "song", DownloadStage.DOWNLOADING,
+        return new ActiveDownloadView(UUID.randomUUID(), "song", List.of("Artist"),
+                "https://example.com/cover.jpg", DownloadStage.DOWNLOADING,
                 new BigDecimal("43.00"), NOW, NOW, null);
     }
 

@@ -68,6 +68,29 @@ class ActiveDownloadRepositoryIT {
         return activeDownloadRepository.findActive(ANCIENT_CUTOFF).collectList().block();
     }
 
+    /**
+     * Like {@link #insertDownload}, but with real song metadata, for the tests below that assert
+     * {@code artists}/{@code imageUrl} round-trip through the read path rather than merely arriving
+     * as the empty-artists/null-image shape {@link #insertDownload} already produces.
+     */
+    private UUID insertDownloadWithSong(String status, String name, List<String> artists,
+                                         String imageUrl) {
+        UUID id = UUID.randomUUID();
+        template.getDatabaseClient()
+                .sql("INSERT INTO downloads (download_id, status, created_at) "
+                        + "VALUES (:id, :status, now())")
+                .bind("id", id).bind("status", status)
+                .fetch().rowsUpdated().block();
+        template.getDatabaseClient()
+                .sql("INSERT INTO songs (song_id, download_id, name, artists, image_url) "
+                        + "VALUES (gen_random_uuid(), :id, :name, :artists, :imageUrl)")
+                .bind("id", id).bind("name", name)
+                .bind("artists", artists.toArray(String[]::new))
+                .bind("imageUrl", imageUrl)
+                .fetch().rowsUpdated().block();
+        return id;
+    }
+
     // ---- stage mapping -------------------------------------------------------------------------
 
     @Test
@@ -235,6 +258,82 @@ class ActiveDownloadRepositoryIT {
     @Test
     void findByIds_withNoIds_doesNotQuery() {
         assertTrue(activeDownloadRepository.findByIds(List.of()).collectList().block().isEmpty());
+    }
+
+    // ---- song metadata (artists / image) --------------------------------------------------------
+
+    @Test
+    void findActive_liveBranch_carriesArtistsAndImage() {
+        // The live branch's FROM clause inner joins songs alongside its LEFT JOIN to download_tasks;
+        // this exercises that join with a task-less (PENDING) row.
+        UUID id = insertDownloadWithSong("PENDING", "Riptide", List.of("Vance Joy"),
+                "https://example.com/cover.jpg");
+
+        ActiveDownloadView view = viewOf(active(), id);
+
+        assertEquals("Riptide", view.songName());
+        assertEquals(List.of("Vance Joy"), view.artists());
+        assertEquals("https://example.com/cover.jpg", view.imageUrl());
+    }
+
+    @Test
+    void findActive_terminalBranch_carriesArtistsAndImage() {
+        // The finished arm of the UNION ALL has its own songs join, separate from the live arm's --
+        // both need covering, not just one.
+        UUID id = insertDownloadWithSong("PENDING", "Riptide", List.of("Vance Joy"),
+                "https://example.com/cover.jpg");
+        taskRepository.admitNewDownloads(10, NOW).block();
+        downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
+
+        ActiveDownloadView view = viewOf(active(), id);
+
+        assertEquals("Riptide", view.songName());
+        assertEquals(List.of("Vance Joy"), view.artists());
+        assertEquals("https://example.com/cover.jpg", view.imageUrl());
+    }
+
+    @Test
+    void findByIds_carriesArtistsAndImage() {
+        UUID id = insertDownloadWithSong("PENDING", "Riptide", List.of("Vance Joy", "Producer X"),
+                "https://example.com/cover.jpg");
+
+        List<ActiveDownloadView> resolved =
+                activeDownloadRepository.findByIds(List.of(id)).collectList().block();
+
+        assertEquals(1, resolved.size());
+        ActiveDownloadView view = resolved.getFirst();
+        assertEquals("Riptide", view.songName());
+        assertEquals(List.of("Vance Joy", "Producer X"), view.artists());
+        assertEquals("https://example.com/cover.jpg", view.imageUrl());
+    }
+
+    @Test
+    void findAll_carriesArtistsAndImage() {
+        insertDownloadWithSong("PENDING", "Riptide", List.of("Vance Joy"),
+                "https://example.com/cover.jpg");
+
+        AllDownloadsResponse response = activeDownloadRepository.findAll(10, 1).block();
+
+        assertEquals(1, response.downloads().size());
+        ActiveDownloadView view = response.downloads().getFirst();
+        assertEquals("Riptide", view.songName());
+        assertEquals(List.of("Vance Joy"), view.artists());
+        assertEquals("https://example.com/cover.jpg", view.imageUrl());
+    }
+
+    @Test
+    void findActive_backfilledStyleRow_reportsNameWithEmptyArtistsAndNullImage() {
+        // What every row created through the deprecated path-based route -- and every row that
+        // existed before this table did -- looks like: songs.artists defaults to '{}' rather than
+        // arriving null, and image_url is genuinely absent. The read path must report that as empty,
+        // not error out reading a NULL array.
+        UUID id = insertDownload("PENDING");
+
+        ActiveDownloadView view = viewOf(active(), id);
+
+        assertEquals("song", view.songName());
+        assertEquals(List.of(), view.artists());
+        assertNull(view.imageUrl());
     }
 
     private static ActiveDownloadView viewOf(List<ActiveDownloadView> views, UUID id) {
