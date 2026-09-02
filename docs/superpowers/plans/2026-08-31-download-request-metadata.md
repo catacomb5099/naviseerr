@@ -102,6 +102,7 @@ A song title containing `/` is currently unrequestable because it breaks the pat
 - [ ] Add `schema/request/TrackQuery.java`, a record of song name plus artists with null artists normalised to empty. It goes in `schema.request` rather than `download` because `services.slskd` has to consume it and `download` already depends on `services.slskd`, so putting it in `download` would make that dependency circular at package level.
 - [ ] Swap `DownloadTask`'s `String songName` component for `TrackQuery query`, and add a non-component `songName()` accessor delegating to it so existing call sites keep compiling. Arity does not change. Update `initial`, `withPhase`, `dueAt`, `withProgress`, `withProgressReset`, the 13-arg legacy constructor, the three explicit `new DownloadTask(...)` calls in `DownloadStateMachine` (lines 56, 78, 90), and `DownloadTaskFixtures`.
 - [ ] `ADMIT_SQL` joins `songs` and inserts `song_id` instead of `song_name`. Use `FOR UPDATE OF d SKIP LOCKED`, not a bare `FOR UPDATE`: a bare lock clause over a join takes row locks in every table in the `FROM`, so it would start locking `songs` rows that today's statement does not touch.
+- [ ] Add `V6__download_tasks_song_id_not_null.sql`: `ALTER TABLE download_tasks ALTER COLUMN song_id SET NOT NULL`. Task 1 deliberately left `song_id` nullable, because at that point `ADMIT_SQL` did not populate it and every existing test inserting through it would have failed. Once the `ADMIT_SQL` change above lands, every newly created task row has a `song_id`, so the constraint can finally hold. This is its own migration, not a hand-edit of `V5`, because `V5` has already been reviewed and merged as of Task 1: migrations are immutable once written, and that rule starts the moment a migration is committed, not only after release.
 - [ ] `CLAIM_DUE_SQL` joins `songs` and returns name and artists. `UPDATE ... RETURNING` can only return columns of the updated table, so the join comes in through `FROM`:
 
   ```sql
@@ -127,6 +128,7 @@ A song title containing `/` is currently unrequestable because it breaks the pat
 - [ ] `toTask` builds the `TrackQuery` from `name` and `artists` (`row.get("artists", String[].class)`, null-guarded to `List.of()`) and stops reading `song_name`.
 - [ ] Drop `song_name` from the insert CTE in task 2. Both columns are now written by nothing and read by nothing until V6.
 - [ ] Tests: admit sets `song_id`; claim returns name and artists off the join; empty artists come back as `List.of()`, not null; and the claim still skips already-leased rows. That last one is the regression the `UPDATE ... FROM` rewrite could plausibly introduce, so assert it rather than trusting existing coverage. `DownloadRecoveryIT`'s raw inserts need song rows, and one case should keep a backfilled task row to prove those still resume.
+- [ ] Run the full suite after adding `V6` last, not before: `ADMIT_SQL` has to be writing `song_id` on every new row before the `NOT NULL` constraint is added, or the same 34-test failure Task 1 hit returns.
 
 ### Task 4: Read path
 
@@ -159,9 +161,11 @@ The only behaviour change. Last and self-contained, so it can be reverted alone 
 - [ ] `docs/architecture/download-manager.md`: the rewritten `ADMIT_SQL` and `CLAIM_DUE_SQL`, including the `FOR UPDATE OF d` note.
 - [ ] `docs/architecture/slskd-integration.md`: the query builder seam and the new matching rule. Delete the description of the hyphen heuristic.
 - [ ] `docs/architecture/codebase-map.md`: `Song`, `TrackQuery`, `DownloadRequest`, `SlskdQueryBuilder`.
-- [ ] `docs/architecture/gotchas.md`: dated entries for the deprecated route and the two dead `song_name` columns awaiting V6. A dated list entry gets found later; a code comment does not.
+- [ ] `docs/architecture/gotchas.md`: dated entries for the deprecated route and the two dead `song_name` columns awaiting removal next release. A dated list entry gets found later; a code comment does not.
 
-## Next release (V6)
+## Next release (V7)
+
+`V6` is used up by this release, for tightening `download_tasks.song_id` to `NOT NULL` in Task 3. The column drop moves to `V7`:
 
 ```sql
 ALTER TABLE downloads      DROP COLUMN song_name;
