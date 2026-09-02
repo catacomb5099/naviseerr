@@ -126,7 +126,7 @@ A song title containing `/` is currently unrequestable because it breaks the pat
   This reverses V2's decision to denormalise `song_name` so the due-work query needed no join. The reversal is deliberate, the reason is the table split above, and the cost is a primary key lookup into `songs` for at most `batch-size` rows per pass. Say that in the comment and the ADR, so a future reader who finds a join where V2 promised none knows it was chosen.
 - [ ] `SAVE_SQL` gains nothing. The loop never rewrites metadata, and adding a column to a statement that runs every few seconds is churn for no benefit.
 - [ ] `toTask` builds the `TrackQuery` from `name` and `artists` (`row.get("artists", String[].class)`, null-guarded to `List.of()`) and stops reading `song_name`.
-- [ ] Drop `song_name` from the insert CTE in task 2. Both columns are now written by nothing and read by nothing until V6.
+- [ ] Drop `song_name` from the insert CTE in task 2. Both columns are now written by nothing and read by nothing until V7.
 - [ ] Tests: admit sets `song_id`; claim returns name and artists off the join; empty artists come back as `List.of()`, not null; and the claim still skips already-leased rows. That last one is the regression the `UPDATE ... FROM` rewrite could plausibly introduce, so assert it rather than trusting existing coverage. `DownloadRecoveryIT`'s raw inserts need song rows, and one case should keep a backfilled task row to prove those still resume.
 - [ ] Run the full suite after adding `V6` last, not before: `ADMIT_SQL` has to be writing `song_id` on every new row before the `NOT NULL` constraint is added, or the same 34-test failure Task 1 hit returns.
 
