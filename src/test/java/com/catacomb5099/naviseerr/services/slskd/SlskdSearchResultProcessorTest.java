@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services.slskd;
 
+import com.catacomb5099.naviseerr.schema.request.TrackQuery;
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
@@ -18,6 +19,9 @@ import static org.mockito.Mockito.*;
 
 class SlskdSearchResultProcessorTest {
 
+    private static final TrackQuery TRACK_QUERY = new TrackQuery("track", List.of());
+    private static final TrackQuery SONG_QUERY = new TrackQuery("song", List.of());
+
     private final SlskdService slskdService = mock(SlskdService.class);
     private final TrackMatchingService trackMatchingService = mock(TrackMatchingService.class);
     private final SlskdSearchResultProcessor processor = new SlskdSearchResultProcessor(slskdService, trackMatchingService);
@@ -35,7 +39,7 @@ class SlskdSearchResultProcessorTest {
         when(state.getResponses()).thenReturn(List.of());
         when(state.getFileCount()).thenReturn(0);
 
-        StepVerifier.create(processor.selectBestFiles(state, "track"))
+        StepVerifier.create(processor.selectBestFiles(state, TRACK_QUERY))
                 .expectNextMatches(List::isEmpty)
                 .verifyComplete();
     }
@@ -57,14 +61,14 @@ class SlskdSearchResultProcessorTest {
         when(fileA.getExtension()).thenReturn("mp3");
         when(fileB.getExtension()).thenReturn("mp3");
 
-        when(trackMatchingService.isMatch(eq("track"), eq("match.mp3"))).thenReturn(true);
-        when(trackMatchingService.isMatch(eq("track"), eq("nope.mp3"))).thenReturn(false);
+        when(trackMatchingService.isMatch(eq(TRACK_QUERY), eq("match.mp3"))).thenReturn(true);
+        when(trackMatchingService.isMatch(eq(TRACK_QUERY), eq("nope.mp3"))).thenReturn(false);
 
         SearchState state = mock(SearchState.class);
         when(state.getResponses()).thenReturn(List.of(itemA, itemB));
         when(state.getFileCount()).thenReturn(2);
 
-        StepVerifier.create(processor.selectBestFiles(state, "track"))
+        StepVerifier.create(processor.selectBestFiles(state, TRACK_QUERY))
                 .expectNextMatches(list -> list.size() == 1 && list.getFirst().getValue().getFilename().equals("match.mp3"))
                 .verifyComplete();
     }
@@ -97,13 +101,13 @@ class SlskdSearchResultProcessorTest {
         when(fileBelow.getExtension()).thenReturn("mp3");
         when(fileFlac.getExtension()).thenReturn("flac");
 
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.isMatch(any(), anyString())).thenReturn(true);
 
         SearchState state = mock(SearchState.class);
         when(state.getResponses()).thenReturn(List.of(above, below, flacItem));
         when(state.getFileCount()).thenReturn(3);
 
-        StepVerifier.create(processor.selectBestFiles(state, "track"))
+        StepVerifier.create(processor.selectBestFiles(state, TRACK_QUERY))
                 .expectNextMatches(list -> list.size() == 2
                         && list.stream().anyMatch(e -> e.getValue().getFilename().equals("a.mp3"))
                         && list.stream().anyMatch(e -> e.getValue().getFilename().equals("c.flac"))
@@ -142,13 +146,13 @@ class SlskdSearchResultProcessorTest {
         when(medFile.getExtension()).thenReturn("mp3");
         when(slowFile.getExtension()).thenReturn("mp3");
 
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.isMatch(any(), anyString())).thenReturn(true);
 
         SearchState state = mock(SearchState.class);
         when(state.getResponses()).thenReturn(List.of(fast, med, slow));
         when(state.getFileCount()).thenReturn(3);
 
-        StepVerifier.create(processor.selectBestFiles(state, "track"))
+        StepVerifier.create(processor.selectBestFiles(state, TRACK_QUERY))
                 .expectNextMatches(list ->
                         list.size() == 3 &&
                                 list.getFirst().getKey().getUploadSpeed() == 300 &&
@@ -159,38 +163,38 @@ class SlskdSearchResultProcessorTest {
 
     @Test
     void selectBestFiles_prefersAFreeSlotOverAFasterBusyPeer() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.isMatch(any(), anyString())).thenReturn(true);
 
         // fast, but 40 people ahead of you
         SearchResponseItem busy = peer("busy", 10_000_000, false, 40, file("busy/song.flac"));
         // slower, but can start right now
         SearchResponseItem free = peer("free", 2_000_000, true, 0, file("free/song.flac"));
 
-        var result = processor.selectBestFiles(state(busy, free), "song").block();
+        var result = processor.selectBestFiles(state(busy, free), SONG_QUERY).block();
 
         assertEquals("free", result.getFirst().getKey().getUsername());
     }
 
     @Test
     void selectBestFiles_amongFreePeers_prefersTheShorterQueue() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.isMatch(any(), anyString())).thenReturn(true);
 
         SearchResponseItem longer = peer("longer", 9_000_000, true, 5, file("longer/song.flac"));
         SearchResponseItem shorter = peer("shorter", 8_000_000, true, 1, file("shorter/song.flac"));
 
-        var result = processor.selectBestFiles(state(longer, shorter), "song").block();
+        var result = processor.selectBestFiles(state(longer, shorter), SONG_QUERY).block();
 
         assertEquals("shorter", result.getFirst().getKey().getUsername());
     }
 
     @Test
     void selectBestFiles_allElseEqual_stillPrefersTheFasterPeer() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.isMatch(any(), anyString())).thenReturn(true);
 
         SearchResponseItem slow = peer("slow", 1_000_000, true, 0, file("slow/song.flac"));
         SearchResponseItem fast = peer("fast", 9_000_000, true, 0, file("fast/song.flac"));
 
-        var result = processor.selectBestFiles(state(slow, fast), "song").block();
+        var result = processor.selectBestFiles(state(slow, fast), SONG_QUERY).block();
 
         assertEquals("fast", result.getFirst().getKey().getUsername());
     }
