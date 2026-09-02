@@ -32,6 +32,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * {@code migrateTo(LATEST)} covers a second property for free: the constraint has to hold against a
  * populated, backfilled database, not just an empty one. If V5's backfill ever missed a row, V6
  * would fail there and this test would fail with it.
+ *
+ * <p>The second test below drives V6's own backfill the same way: migrate to V5 only (the one
+ * version where {@code download_tasks.song_id} can legally be null), insert a row that models an
+ * install caught in the window where V5 had shipped but {@code ADMIT_SQL} still did not populate
+ * {@code song_id}, then migrate the rest of the way and assert V6 fixed the row up instead of
+ * failing {@code SET NOT NULL} against it.
  */
 @Testcontainers
 class SongMetadataMigrationIT {
@@ -42,6 +48,10 @@ class SongMetadataMigrationIT {
     @Test
     void v5_backfillsExactlyOneSongPerDownload_andPopulatesTaskSongIdForAdmittedRows()
             throws Exception {
+        // `POSTGRES` is a single container shared (via the static @Container field) across every
+        // test method in this class, so without a clean() here this test would see whatever schema
+        // state the previous test method left behind instead of starting from empty.
+        clean();
         migrateTo(MigrationVersion.fromVersion("4"));
 
         UUID admitted = UUID.randomUUID();
@@ -74,6 +84,37 @@ class SongMetadataMigrationIT {
         }
     }
 
+    @Test
+    void v6_backfillsPreExistingNullSongId_insteadOfFailingTheNotNullConstraint() throws Exception {
+        // Models the exact window the finding on V6 describes: an install that ran V5 while
+        // ADMIT_SQL still did not populate download_tasks.song_id. That is possible ONLY between V5
+        // and V6 -- V5 leaves song_id nullable for precisely this reason (see V5's comment on that
+        // ALTER TABLE) -- so migrate to V5 only, then insert the row by hand exactly as that
+        // unmodified ADMIT_SQL would have: a downloads row, the songs row V5's own backfill would
+        // have produced for it, and a download_tasks row that joins neither and leaves song_id NULL.
+        clean();
+        migrateTo(MigrationVersion.fromVersion("5"));
+
+        UUID downloadId = UUID.randomUUID();
+        UUID songId;
+        try (Connection connection = jdbcConnection()) {
+            insertDownload(connection, downloadId, "Song Three");
+            songId = insertSong(connection, downloadId, "Song Three");
+            insertDownloadTaskWithNullSongId(connection, downloadId, "Song Three");
+        }
+
+        // V6 must backfill this row from `songs` rather than fail SET NOT NULL against it -- that
+        // is the whole point of the fix: a null here should never stop the application from
+        // booting.
+        migrateTo(MigrationVersion.LATEST);
+
+        try (Connection connection = jdbcConnection()) {
+            assertEquals(songId, taskSongIdFor(connection, downloadId),
+                    "V6 must backfill the pre-existing NULL song_id from songs by download_id, "
+                            + "not merely tolerate it");
+        }
+    }
+
     private void migrateTo(MigrationVersion target) {
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
@@ -81,6 +122,22 @@ class SongMetadataMigrationIT {
                 .target(target)
                 .load()
                 .migrate();
+    }
+
+    /**
+     * Drops the schema back to empty. {@code POSTGRES} is one container shared across every test
+     * method in this class (a static {@code @Container} field), so {@code migrateTo} alone is not
+     * enough to start a test from "empty" -- Flyway will not migrate backwards, so a target below
+     * whatever a previous test method already left the schema at is silently a no-op. Every test
+     * calls this first so its starting state does not depend on method execution order.
+     */
+    private void clean() {
+        Flyway.configure()
+                .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .locations("classpath:db/migration")
+                .cleanDisabled(false)
+                .load()
+                .clean();
     }
 
     private Connection jdbcConnection() throws Exception {
@@ -104,6 +161,33 @@ class SongMetadataMigrationIT {
         try (PreparedStatement statement = connection.prepareStatement(
                 "INSERT INTO download_tasks (download_id, song_name, phase, phase_entered_at, "
                         + "next_attempt_at) VALUES (?, ?, 'SEARCH_INIT', ?, ?)")) {
+            statement.setObject(1, downloadId);
+            statement.setString(2, songName);
+            Timestamp now = Timestamp.from(Instant.now());
+            statement.setTimestamp(3, now);
+            statement.setTimestamp(4, now);
+            statement.executeUpdate();
+        }
+    }
+
+    private UUID insertSong(Connection connection, UUID downloadId, String name) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO songs (download_id, name) VALUES (?, ?) RETURNING song_id")) {
+            statement.setObject(1, downloadId);
+            statement.setString(2, name);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return (UUID) resultSet.getObject(1);
+            }
+        }
+    }
+
+    private void insertDownloadTaskWithNullSongId(
+            Connection connection, UUID downloadId, String songName) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO download_tasks (download_id, song_name, song_id, phase, "
+                        + "phase_entered_at, next_attempt_at) "
+                        + "VALUES (?, ?, NULL, 'SEARCH_INIT', ?, ?)")) {
             statement.setObject(1, downloadId);
             statement.setString(2, songName);
             Timestamp now = Timestamp.from(Instant.now());

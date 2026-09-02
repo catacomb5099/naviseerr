@@ -16,12 +16,24 @@
 -- moment it ships. Flyway records a checksum per file; editing V5 in place would make it complain on
 -- every install that had already run it.
 --
--- Safe on an existing install: V5's backfill covered every row that existed then, and V5 and V6 ship
--- in the same release, so Flyway applies them back to back at one startup with no application code
--- running in between to insert an un-backfilled row. If this ever does fail with a not-null
--- violation, the cause is `download_tasks` rows created by the pre-Task-3 ADMIT_SQL while V5 was
--- applied but V6 was not -- i.e. an install that ran an intermediate build -- and the repair is to
--- populate them from `songs` by `download_id` (the same UPDATE ... FROM V5 uses) before retrying.
+-- Not safe to assume "V5 and V6 ship together, so nothing can slip between them" -- that held for a
+-- brand-new install, but not for one that ran an intermediate build: V5 shipped in an earlier task
+-- while ADMIT_SQL still did not populate song_id (see V5's own comment on that), so any install that
+-- admitted a download in that window has `download_tasks` rows with `song_id IS NULL` on disk right
+-- now, before this migration ever runs. Without a backfill here, SET NOT NULL below would hit that
+-- row and abort Flyway at startup -- the application would not boot, and no test could have caught
+-- it, because every IT starts from a fresh, empty Testcontainer and runs V5 then V6 with no
+-- application code in between to leave such a row behind. So repeat V5's own backfill here rather
+-- than delegate the repair to a human running SQL by hand: it is idempotent (WHERE song_id IS NULL
+-- means rows V5 already backfilled, or admitted after ADMIT_SQL was fixed, are untouched) and uses
+-- the same download_id join as V5, since every download_tasks row's download still has exactly one
+-- songs row to join to.
+UPDATE download_tasks t
+   SET song_id = s.song_id
+  FROM songs s
+ WHERE s.download_id = t.download_id
+   AND t.song_id IS NULL;
+
 ALTER TABLE download_tasks ALTER COLUMN song_id SET NOT NULL;
 
 -- V5's placeholder said "tighten to NOT NULL once ADMIT_SQL populates it". It does; this is that.
