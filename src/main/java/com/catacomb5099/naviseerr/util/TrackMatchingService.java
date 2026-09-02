@@ -4,6 +4,7 @@ import com.catacomb5099.naviseerr.schema.request.TrackQuery;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import me.xdrop.fuzzywuzzy.FuzzySearch;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -13,6 +14,14 @@ public class TrackMatchingService {
 
     private static final int MIN_TOKEN_SCORE = 75;
     private static final int MIN_PARTIAL_SCORE = 85;
+
+    // Mirrors SlskdQueryBuilder.useAllArtists exactly -- same property key, same default. It has
+    // to be duplicated here too: if an operator sets this to true, SlskdQueryBuilder starts
+    // joining every credited artist into the search query, and buildFuzzyComposite below must
+    // join them the same way or the fuzzy-scoring composite silently stops matching what was
+    // actually searched for. See buildFuzzyComposite.
+    @Value("${slskd-service.query-builder.use-all-artists}")
+    private boolean useAllArtists;
 
     public boolean isMatch(TrackQuery query, String torrentFilePath) {
         String filename = extractFilename(torrentFilePath);
@@ -69,15 +78,20 @@ public class TrackMatchingService {
 
     /**
      * Builds "artist song", space-joined -- the same shape {@code SlskdQueryBuilder.build}
-     * produces for the primary artist. Duplicated on purpose rather than shared: this class lives
-     * in {@code util}, which {@code services.slskd} (home of {@code SlskdQueryBuilder}) already
-     * depends on via {@code SlskdSearchResultProcessor}, so calling from here into
-     * {@code services.slskd} would make that package dependency circular. Keep the two wordings
-     * in sync by hand -- see {@code SlskdQueryBuilder.build}.
+     * produces, including honoring the same {@code useAllArtists} toggle: all credited artists
+     * when the toggle is true, primary artist only when false. Duplicated on purpose rather than
+     * shared: this class lives in {@code util}, which {@code services.slskd} (home of
+     * {@code SlskdQueryBuilder}) already depends on via {@code SlskdSearchResultProcessor}, so
+     * calling from here into {@code services.slskd} would make that package dependency circular.
+     * The toggle is mirrored in both places for exactly this reason -- so the two wordings stay
+     * identical in either configuration, not just the default. Keep them in sync by hand -- see
+     * {@code SlskdQueryBuilder.build}.
      */
     private String buildFuzzyComposite(TrackQuery query) {
-        String primaryArtist = query.artists().get(0);
-        return primaryArtist + " " + query.songName();
+        String artistPrefix = useAllArtists
+                ? String.join(" ", query.artists())
+                : query.artists().get(0);
+        return artistPrefix + " " + query.songName();
     }
 
     /**

@@ -30,12 +30,15 @@ public class SlskdQueryBuilder {
      * Empty artists degrades to the song name alone.
      *
      * <p>{@code TrackMatchingService.buildFuzzyComposite} builds this exact same shape, as its own
-     * private helper, to use as the fuzzy-comparison input. The two cannot share code: this class
-     * lives in {@code services.slskd}, which already depends on {@code util} (for
-     * {@code TrackMatchingService} itself, via {@code SlskdSearchResultProcessor}), so a call the
-     * other way -- {@code TrackMatchingService} calling into {@code SlskdQueryBuilder} -- would make
-     * that package dependency circular. The duplication is deliberate; keep the two wordings in
-     * sync by hand.
+     * private helper, to use as the fuzzy-comparison input -- including its own copy of
+     * {@code useAllArtists}, injected from the same property key, so the fuzzy composite still
+     * matches this method's output when the toggle is flipped to {@code true} and not just at the
+     * default. The two cannot share code: this class lives in {@code services.slskd}, which
+     * already depends on {@code util} (for {@code TrackMatchingService} itself, via
+     * {@code SlskdSearchResultProcessor}), so a call the other way --
+     * {@code TrackMatchingService} calling into {@code SlskdQueryBuilder} -- would make that
+     * package dependency circular. The duplication is deliberate; keep the two wordings, and the
+     * toggle, in sync by hand.
      */
     public String build(TrackQuery query) {
         String artistPrefix = artistPrefix(query.artists());

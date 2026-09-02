@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.util;
 
 import com.catacomb5099.naviseerr.schema.request.TrackQuery;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
@@ -132,5 +133,52 @@ class TrackMatchingServiceTest {
                 "Eurythmics - Sweet Dreams (Remastered).flac");
 
         assertTrue(result, "extractParts split finds both fragments in the filename");
+    }
+
+    /**
+     * Proves {@code buildFuzzyComposite} honors {@code useAllArtists}, mirroring
+     * {@code SlskdQueryBuilder.build}'s {@code artistPrefix}. The song title in the filename is
+     * deliberately word-reordered ("It We Own" instead of "We Own It") so that
+     * {@code containsSongAndAnyArtist}'s literal song-name substring check fails and can't rescue
+     * the match on its own -- the outcome here depends entirely on the fuzzy composite.
+     *
+     * <p>With the toggle on, the composite joins all five credited artists, which is the exact
+     * same multiset of words (order aside) as the filename, so {@code tokenSortRatio} is a
+     * perfect 100. With only the primary artist ({@code useAllArtists=false}, or the pre-fix code
+     * that ignored the toggle entirely), the composite is missing four artists' worth of words
+     * that the filename has, so both fuzzy scores drop well under threshold and the match is
+     * rejected. This is the interaction the review flagged as having zero coverage: a query
+     * configured (via the toggle) to search on every artist must also be *scored* on every
+     * artist, or a real hit gets thrown away.
+     */
+    @Test
+    void useAllArtists_true_joinsEveryArtistInTheFuzzyComposite_soAFullCollabCreditStillMatches() {
+        TrackMatchingService allArtistsService = new TrackMatchingService();
+        ReflectionTestUtils.setField(allArtistsService, "useAllArtists", true);
+
+        boolean result = allArtistsService.isMatch(
+                new TrackQuery("We Own It",
+                        List.of("Metro Boomin", "Travis Scott", "21 Savage", "Future", "Young Thug")),
+                "It We Own - Metro Boomin Travis Scott 21 Savage Future Young Thug.mp3");
+
+        assertTrue(result,
+                "with useAllArtists=true the fuzzy composite must join every artist, same as SlskdQueryBuilder's search query does, to score this full collab credit as a match");
+    }
+
+    /**
+     * Same filename and query as above, but with the toggle left at its default ({@code false}).
+     * The composite is primary-artist-only, so it no longer shares the filename's full word set --
+     * this is the control proving the fixture actually depends on the toggle rather than matching
+     * unconditionally.
+     */
+    @Test
+    void useAllArtists_false_primaryArtistOnlyComposite_doesNotMatchTheFullCollabCredit() {
+        boolean result = service.isMatch(
+                new TrackQuery("We Own It",
+                        List.of("Metro Boomin", "Travis Scott", "21 Savage", "Future", "Young Thug")),
+                "It We Own - Metro Boomin Travis Scott 21 Savage Future Young Thug.mp3");
+
+        assertFalse(result,
+                "primary-artist-only composite should be missing too many of the filename's words to match");
     }
 }
