@@ -65,7 +65,7 @@ Order matters between tasks 2 and 3 in a way their titles do not show. Task 3's 
 
 Run `./gradlew cleanTest test` after each. A bare `./gradlew test` reports `UP-TO-DATE` and runs nothing, which reads as a pass.
 
-### 1. Migration
+### Task 1: Migration
 
 - [ ] Write `V5__song_metadata.sql`: create `songs`, index it on `download_id`, backfill one song per existing download from `downloads.song_name`, add `download_tasks.song_id`, populate it from the join, set it `NOT NULL`, then drop the `NOT NULL` on both `song_name` columns.
 - [ ] The `SET NOT NULL` is safe because every task row references a download and every download just got exactly one song.
@@ -74,7 +74,7 @@ Run `./gradlew cleanTest test` after each. A bare `./gradlew test` reports `UP-T
 
 No Java changes. Every existing test passes untouched.
 
-### 2. Write path
+### Task 2: Write path
 
 - [ ] Add `DownloadRequest` (`songName`, `artists`, `imageUrl`) and the `Song` R2DBC entity. Declare `artists` as `List<String>` and let the test below decide whether `PostgresDialect` handles it or whether it has to be `String[]`.
 - [ ] Replace the insert in `DownloadService.requestDownload` with one data-modifying CTE that creates both rows:
@@ -97,7 +97,7 @@ No Java changes. Every existing test passes untouched.
 
 A song title containing `/` is currently unrequestable because it breaks the path variable however it is encoded. A body fixes that.
 
-### 3. Loop stops carrying metadata
+### Task 3: Loop stops carrying metadata
 
 - [ ] Add `schema/request/TrackQuery.java`, a record of song name plus artists with null artists normalised to empty. It goes in `schema.request` rather than `download` because `services.slskd` has to consume it and `download` already depends on `services.slskd`, so putting it in `download` would make that dependency circular at package level.
 - [ ] Swap `DownloadTask`'s `String songName` component for `TrackQuery query`, and add a non-component `songName()` accessor delegating to it so existing call sites keep compiling. Arity does not change. Update `initial`, `withPhase`, `dueAt`, `withProgress`, `withProgressReset`, the 13-arg legacy constructor, the three explicit `new DownloadTask(...)` calls in `DownloadStateMachine` (lines 56, 78, 90), and `DownloadTaskFixtures`.
@@ -128,7 +128,7 @@ A song title containing `/` is currently unrequestable because it breaks the pat
 - [ ] Drop `song_name` from the insert CTE in task 2. Both columns are now written by nothing and read by nothing until V6.
 - [ ] Tests: admit sets `song_id`; claim returns name and artists off the join; empty artists come back as `List.of()`, not null; and the claim still skips already-leased rows. That last one is the regression the `UPDATE ... FROM` rewrite could plausibly introduce, so assert it rather than trusting existing coverage. `DownloadRecoveryIT`'s raw inserts need song rows, and one case should keep a backfilled task row to prove those still resume.
 
-### 4. Read path
+### Task 4: Read path
 
 - [ ] Join `songs` into `ActiveDownloadRepository.PROJECTION` and select `s.name AS song_name, s.artists, s.image_url`. All three read endpoints inherit it from the shared constant, plus the second arm of the `UNION ALL`.
 - [ ] Inner join to `songs`, LEFT JOIN to `download_tasks`. The asymmetry is deliberate. The existing comment warns that an inner join is what made every PENDING download invisible, but that was about `download_tasks`, which the loop creates asynchronously, so its absence is a real state. A song row is created by the same statement as its download, so a download without a song cannot exist. That is what task 2's atomicity test protects. Note the dependency in the comment.
@@ -139,7 +139,7 @@ A song title containing `/` is currently unrequestable because it breaks the pat
 
 On payload size: `/downloads/active` is polled every few seconds and AGENTS.md asks for compact payloads. The live set is bounded by `max-concurrent-downloads` plus whatever finished inside `terminal-retention-ms`, so single digits in practice. A couple of hundred extra bytes per row is not worth designing around. One sentence in the ADR so nobody re-opens it.
 
-### 5. Stop splitting strings
+### Task 5: Stop splitting strings
 
 The only behaviour change. Last and self-contained, so it can be reverted alone if hit rate moves the wrong way.
 
@@ -151,7 +151,7 @@ The only behaviour change. Last and self-contained, so it can be reverted alone 
 - [ ] Write `TrackMatchingServiceTest` before touching the class. It has no test today and is about to change behaviour, so characterise what currently passes first. Cases: a hyphen inside the song title (today's bug), no hyphen at all, artist after the title in the filename, a collab where the filename names one of three artists, a near miss that must still be rejected, and empty artists falling back to the split.
 - [ ] Write `SlskdQueryBuilderTest`: punctuation stripped, primary artist only by default, empty artists degrading to the song name alone.
 
-### 6. Documentation
+### Task 6: Documentation
 
 - [ ] ADR `docs/decisions/song-metadata-table-31-08-2026.md`, covering every decision above plus the read-path cardinality change.
 - [ ] `AGENTS.md`: the endpoint list, the table descriptions under Current Implementation State (which describe two tables and a `downloads` that owns `song_name`), the `ActiveDownloadView` shape, and Domain Model Direction, where `Song` moves from expected to existing.
