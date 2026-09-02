@@ -10,11 +10,12 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - Status: fixed. Both now read from `./.env` via `spring.config.import` (see [.env.example](../../.env.example)). `slskd-service.api_key` has no default and fails fast; `last-fm-service.api_key` carries a placeholder default because Last.fm is dormant (see #7) and must not block startup.
 - Still outstanding: the keys that were previously committed are in the git history, so they remain exposed and should be rotated. Do not add new secrets to tracked files.
 
-## 2. Track matching assumes "artist - title" separator
+## 2. Track matching's hyphen split is now a documented degraded fallback, not the primary strategy (updated 31-08-2026)
 
-- Where: [TrackMatchingService.extractParts](../../src/main/java/com/catacomb5099/naviseerr/util/TrackMatchingService.java) (noted TODO).
-- Impact: artist/title extraction relies on a single `"-"`; titles containing `-`, or other separators, are split incorrectly (the fuzzy ratio checks still apply, so matching degrades rather than breaks).
-- Suggested action: drive matching from structured LastFM fields (artist/title) rather than parsing a combined string.
+- Where: [TrackMatchingService.extractParts](../../src/main/java/com/catacomb5099/naviseerr/util/TrackMatchingService.java), reached via `isMatchByLegacySplit`.
+- What changed: this used to be the only matching strategy, guessing an artist by splitting the song string on `"-"` (noted as a TODO). The song-metadata-table plan gave `TrackMatchingService.isMatch` real artist metadata (`TrackQuery.artists()`) to work with instead, so the hyphen split now runs only when `artists` is empty - the deprecated `POST /download/{songName}` route, and any row backfilled by `V5__song_metadata.sql` with no artist to carry over. See [slskd-integration.md](slskd-integration.md#track-matching) and [docs/decisions/song-metadata-table-31-08-2026.md](../decisions/song-metadata-table-31-08-2026.md).
+- Remaining impact, unchanged for that fallback path only: splitting on a single `"-"` still misparses a title that contains its own hyphen (e.g. `"Twenty-One"`); the fuzzy ratio checks still apply on top, so matching degrades rather than breaks outright.
+- Suggested action: none required as a bug fix - this is now intentional, accepted behaviour for callers with no artist metadata to hand in. It goes away entirely in a future release, alongside `V7`, once the deprecated route is removed (see #9 below).
 
 ## 3. `SlskdSearchState`'s values are unverified guesses
 
@@ -55,7 +56,20 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - This is a deliberate, documented accepted risk, not a latent bug - see [docs/decisions/durable-download-state-machine-13-08-2026.md](../decisions/durable-download-state-machine-13-08-2026.md) ("Accept an occasional duplicate download after a crash"). The crash window is single-digit milliseconds; the cost is one extra duplicate file, once, per crash.
 - Suggested action: none required. The recorded follow-up, if this judgement ever changes, is to adopt the orphaned slskd transfer instead of re-enqueueing (needs `GET /transfers/downloads/{username}` confirmed against a live instance first) - not currently planned.
 
+## 9. `POST /download/{songName}` is deprecated - delete once `naviseerr-client` no longer needs it (31-08-2026)
+
+- Where: [DownloadController.download](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java), `@Deprecated`.
+- What/impact: kept working exactly as before (empty artists, no image) only so a self-hoster who pulls a new server image can still be running an old client image for a while. It is not equivalent to `POST /download` - a song title containing `/` cannot be represented as a path variable under any encoding, so such songs are simply unrequestable through this route.
+- Suggested action: delete this mapping, and the `extractParts` fallback it is the only real caller of, in the `V7` release alongside dropping `downloads.song_name`/`download_tasks.song_name` (#10 below) - once `naviseerr-client` (`src/api/endpoints.ts`, `src/components/SongCard.tsx`) no longer posts to it. See `docs/decisions/song-metadata-table-31-08-2026.md` and the plan's "Next release (V7)" section.
+
+## 10. `downloads.song_name` and `download_tasks.song_name` are dead columns awaiting `V7` removal (31-08-2026)
+
+- Where: `downloads.song_name`, `download_tasks.song_name` - both nullable since `V5__song_metadata.sql`.
+- What/impact: nothing in this codebase writes or reads either column any more. The write path inserts into `songs` instead (`DownloadService.requestDownload`); the admit/claim SQL and the download feed both join `songs` for the name. The columns exist purely so a rollback to a pre-`songs`-table server image still has a column to read - see `docs/decisions/song-metadata-table-31-08-2026.md`'s "expand now, contract next release" decision.
+- Suggested action: **do not reintroduce a write or a read of either column.** A future `V7` migration drops both, alongside removing the deprecated route (#9) and the `extractParts` fallback. If you find yourself about to write to `downloads.song_name` or `download_tasks.song_name`, that is very likely a sign the code should be writing to `songs` instead.
+
 ## Related docs
 
 - [download-manager.md](download-manager.md) - the durable state machine these entries reference.
 - [slskd-integration.md](slskd-integration.md) - search/candidate/transfer details.
+- [docs/decisions/song-metadata-table-31-08-2026.md](../decisions/song-metadata-table-31-08-2026.md) - the `songs` table, the deprecation window, and the V5/V6/V7 migration sequence entries #9 and #10 reference.

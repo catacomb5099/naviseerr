@@ -37,7 +37,9 @@ Notably, option 1 **removes** machinery rather than adding it: the in-heap queue
 
 **Final Choice:** Option 2, with candidates stored as JSON in a `TEXT` column (not option 3, and not `JSONB`).
 
-**Rationale:** It isolates the churn (one write per poll per download) away from the table users query, and leaves the `Download` entity and `DownloadServiceClaimIT` untouched. `TEXT` over `JSONB` because the list is never queried by content, so `JSONB`'s operators and indexing would buy nothing — and storing it as JSON has the additional benefit that adding a field to `DownloadCandidate` later requires no migration at all. `song_name` is denormalised into the table so the hot due-work query needs no join.
+**Rationale:** It isolates the churn (one write per poll per download) away from the table users query, and leaves the `Download` entity and `DownloadServiceClaimIT` untouched. `TEXT` over `JSONB` because the list is never queried by content, so `JSONB`'s operators and indexing would buy nothing — and storing it as JSON has the additional benefit that adding a field to `DownloadCandidate` later requires no migration at all. `song_name` was denormalised into the table so the hot due-work query needed no join.
+
+> **Superseded 31-08-2026:** this was V2's reasoning at the time and held until the song-metadata-table plan. `song_name` moved to its own `songs` table because `download_tasks` carrying song metadata directly was itself the wrong shape once a download could need more than one song's worth of it — see `docs/decisions/song-metadata-table-31-08-2026.md` ("A new `songs` table, not more columns on `downloads` or `download_tasks`" and "Reverse V2's `song_name` denormalisation"). The due-work query (`CLAIM_DUE_SQL`) now does join `songs` for the name and artists it needs; that ADR records what the join costs and why it was accepted. This paragraph is left as-is otherwise, as the record of what V2 actually decided and why, at the time it was decided.
 
 ---
 
