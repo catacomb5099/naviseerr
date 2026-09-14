@@ -21,5 +21,15 @@ public enum DownloadFailureCode {
     /** A phase ran past its budget - search, transfer, or a transfer slskd never showed us. */
     TIMED_OUT,
     /** slskd stopped listing a transfer we had enqueued, past the grace window. */
-    TRANSFER_NOT_FOUND
+    TRANSFER_NOT_FOUND,
+    /**
+     * ytmusic-adapter could not tell us what to download. Set at admission, before any task row
+     * exists, so it is the one code that is written to {@code downloads} without a corresponding
+     * {@code download_tasks} row -- there is nothing to search for yet.
+     *
+     * <p>Only for a NON-retryable failure: an id YouTube has no record of. A transient adapter
+     * outage leaves the download PENDING for the next pass instead, so a restart of the sidecar
+     * does not fail every download requested while it was down.
+     */
+    METADATA_UNAVAILABLE
 }

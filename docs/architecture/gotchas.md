@@ -1,6 +1,6 @@
 # Gotchas and Known Issues
 
-> Status: current as of 2026-08-13, branch `durable-download-state-machine`. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
+> Status: current as of 2026-09-14. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
 Foot-guns, latent bugs, and hygiene issues to know before touching related code. Each entry: what, where, impact, suggested action.
 
@@ -14,7 +14,8 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 
 - Where: [TrackMatchingService.extractParts](../../src/main/java/com/catacomb5099/naviseerr/util/TrackMatchingService.java) (noted TODO).
 - Impact: artist/title extraction relies on a single `"-"`; titles containing `-`, or other separators, are split incorrectly (the fuzzy ratio checks still apply, so matching degrades rather than breaks).
-- Suggested action: drive matching from structured LastFM fields (artist/title) rather than parsing a combined string.
+- Still open as of 14-09-2026, and now *more* fixable rather than less: collection downloads made the server fetch a track's real title and artist list from ytmusic-adapter (`YoutubeSongInfo.authorNames()`), so the structured fields this entry asks for exist. What is not yet done is threading them past `download_tasks.song_name` — the task row still carries one glued string, so `SEARCH_INIT` still hands the matcher a combined name to take apart.
+- Suggested action: carry the artist list onto the task row and drive matching from it. The shape worth reaching for: a `SlskdQueryBuilder` seam owning the one question of how a track is worded for Soulseek, matching on *any* artist rather than all of them (a four-way collab is rarely filed under all four names), and the hyphen split kept only as the degraded path for a row with no artists. Independent of, and still applicable after, the collections change.
 
 ## 3. `SlskdSearchState`'s values are unverified guesses
 
@@ -54,6 +55,19 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - What/impact: a crash between `POST /transfers/downloads/{user}` returning and the transfer id being persisted leaves slskd downloading a file naviseerr has no record of; on restart, `DOWNLOAD_INIT` re-runs and asks the same (or next) peer for the same file again, which can start a second transfer.
 - This is a deliberate, documented accepted risk, not a latent bug - see [docs/decisions/durable-download-state-machine-13-08-2026.md](../decisions/durable-download-state-machine-13-08-2026.md) ("Accept an occasional duplicate download after a crash"). The crash window is single-digit milliseconds; the cost is one extra duplicate file, once, per crash.
 - Suggested action: none required. The recorded follow-up, if this judgement ever changes, is to adopt the orphaned slskd transfer instead of re-enqueueing (needs `GET /transfers/downloads/{username}` confirmed against a live instance first) - not currently planned.
+
+## 9. A download's aggregate status is derived by the loop, and only by the loop
+
+- Where: [DownloadTaskRepository.CONCLUDE_SQL](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadTaskRepository.java) / [DownloadTaskRunner.pass](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadTaskRunner.java).
+- What: since V5 a download has one task row per song, so `downloads.status` is a function of N rows. `DownloadService.finishTask` settles one song and deliberately does **not** touch `downloads`; `concludeDownloads` runs once at the end of every pass and derives the status.
+- The foot-gun: this looks like an easy simplification — fold the aggregate back into the per-task terminal write, as it was pre-V5, and lose a statement per pass. It does not work. Two songs of one download finishing concurrently each read a snapshot in which the other is still non-terminal, so **neither** concludes, and the download sits `IN_PROGRESS` forever with every song finished. A data-modifying CTE cannot see the effect of its own write, so a bigger single statement does not close it either.
+- Suggested action: leave it alone. If you need the download's status sooner than the end of the pass, move the `concludeDownloads` call, not the logic. See [the ADR](../decisions/collection-downloads-14-09-2026.md).
+
+## 10. `POST /download/{songName}` is gone, with no deprecation window
+
+- Where: [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java), as of 14-09-2026.
+- What/impact: replaced by `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=`. A `naviseerr-client` image older than this server gets a 404 on every download request. Normally a self-hosted service would keep a shim for a release; here the old route inserts a row with no YouTube id, which admission cannot resolve, so every download through it would fail — and a route that reliably produces failures is worse for the user than a 404, because they cannot tell "my server is newer than my client" from "Soulseek had nothing".
+- Suggested action: ship the client change alongside the server. Nothing to fix here.
 
 ## Related docs
 
