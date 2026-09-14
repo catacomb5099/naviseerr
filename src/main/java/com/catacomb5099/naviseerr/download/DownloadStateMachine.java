@@ -53,9 +53,11 @@ public class DownloadStateMachine {
                     DownloadFailureCode.SEARCH_FAILED);
         }
         DownloadTask next = task.withPhase(DownloadPhase.SEARCH_POLL, now);
-        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
-                next.phase(), next.phaseEnteredAt(), now, started.getId(), next.candidates(),
-                next.candidateIndex(), next.retryIndex(), null, null, null, null));
+        return new DownloadDecision.Advance(next.toBuilder()
+                .searchId(started.getId())
+                .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
+                .progressPercent(BigDecimal.ZERO)
+                .build());
     }
 
     /** {@code state} missing or not yet complete is treated as still running, not as an error. */
@@ -75,9 +77,11 @@ public class DownloadStateMachine {
                     DownloadFailureCode.NO_CANDIDATES);
         }
         DownloadTask next = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now);
-        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
-                next.phase(), next.phaseEnteredAt(), now, next.searchId(), selected, 0, 0,
-                null, null, null, null));
+        return new DownloadDecision.Advance(next.toBuilder()
+                .candidates(selected).candidateIndex(0).retryIndex(0)
+                .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
+                .progressPercent(BigDecimal.ZERO)
+                .build());
     }
 
     public DownloadDecision afterDownloadInit(DownloadTask task, QueueDownloadResponse response,
@@ -87,10 +91,13 @@ public class DownloadStateMachine {
         }
         TransferedFile enqueued = response.getEnqueued().getFirst();
         DownloadTask next = task.withPhase(DownloadPhase.DOWNLOAD_POLL, now);
-        return new DownloadDecision.Advance(new DownloadTask(next.downloadId(), next.songName(),
-                next.phase(), next.phaseEnteredAt(), now, next.searchId(), next.candidates(),
-                next.candidateIndex(), next.retryIndex(), enqueued.getUsername(),
-                enqueued.getFilename(), enqueued.getId(), null));
+        return new DownloadDecision.Advance(next.toBuilder()
+                .slskdUsername(enqueued.getUsername())
+                .slskdFilename(enqueued.getFilename())
+                .slskdTransferId(enqueued.getId())
+                .lastError(null)
+                .progressPercent(BigDecimal.ZERO)
+                .build());
     }
 
     /** A transfer absent from slskd's list gets its own short-budget branch, not the poll timeout. */
@@ -176,8 +183,9 @@ public class DownloadStateMachine {
     }
 
     private DownloadTask rebuild(DownloadTask base, int candidateIndex, int retryIndex) {
-        return new DownloadTask(base.downloadId(), base.songName(), base.phase(),
-                base.phaseEnteredAt(), base.nextAttemptAt(), base.searchId(), base.candidates(),
-                candidateIndex, retryIndex, null, null, null, null, base.progressPercent());
+        return base.toBuilder()
+                .candidateIndex(candidateIndex).retryIndex(retryIndex)
+                .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
+                .build();
     }
 }

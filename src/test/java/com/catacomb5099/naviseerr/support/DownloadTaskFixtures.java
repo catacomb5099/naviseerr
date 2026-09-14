@@ -12,6 +12,8 @@ public final class DownloadTaskFixtures {
 
     public static final Instant T0 = Instant.parse("2026-08-13T12:00:00Z");
     public static final UUID ID = UUID.fromString("7f3a0000-0000-0000-0000-000000000001");
+    public static final UUID TASK_ID = UUID.fromString("7f3a0000-0000-0000-0000-0000000000a1");
+    public static final String YOUTUBE_ID = "dQw4w9WgXcQ";
 
     private DownloadTaskFixtures() {}
 
@@ -24,32 +26,39 @@ public final class DownloadTaskFixtures {
         return java.util.Arrays.stream(usernames).map(DownloadTaskFixtures::candidate).toList();
     }
 
+    /** Fixed ids, so a test can assert on the task the state machine returned, not a random one. */
     public static DownloadTask at(DownloadPhase phase) {
-        return DownloadTask.initial(ID, "never gonna give you up", T0).withPhase(phase, T0);
+        return DownloadTask.initial(ID, YOUTUBE_ID, "never gonna give you up", T0)
+                .toBuilder().taskId(TASK_ID).build()
+                .withPhase(phase, T0);
     }
 
     public static DownloadTask searchPolling(String searchId) {
-        DownloadTask base = at(DownloadPhase.SEARCH_POLL);
-        return new DownloadTask(base.downloadId(), base.songName(), base.phase(),
-                base.phaseEnteredAt(), base.nextAttemptAt(), searchId, List.of(), 0, 0,
-                null, null, null, null);
+        return at(DownloadPhase.SEARCH_POLL).toBuilder().searchId(searchId).build();
     }
 
     public static DownloadTask downloadPolling(List<DownloadCandidate> candidates,
                                               int candidateIndex, int retryIndex,
                                               String transferId) {
-        DownloadTask base = at(DownloadPhase.DOWNLOAD_POLL);
         DownloadCandidate current = candidates.get(candidateIndex);
-        return new DownloadTask(base.downloadId(), base.songName(), base.phase(),
-                base.phaseEnteredAt(), base.nextAttemptAt(), "s1", candidates, candidateIndex,
-                retryIndex, current.username(), current.filename(), transferId, null);
+        return at(DownloadPhase.DOWNLOAD_POLL).toBuilder()
+                .searchId("s1")
+                .candidates(candidates)
+                .candidateIndex(candidateIndex)
+                .retryIndex(retryIndex)
+                .slskdUsername(current.username())
+                .slskdFilename(current.filename())
+                .slskdTransferId(transferId)
+                .build();
     }
 
     public static DownloadTask downloadInit(List<DownloadCandidate> candidates,
                                             int candidateIndex, int retryIndex) {
-        DownloadTask base = at(DownloadPhase.DOWNLOAD_INIT);
-        return new DownloadTask(base.downloadId(), base.songName(), base.phase(),
-                base.phaseEnteredAt(), base.nextAttemptAt(), "s1", candidates, candidateIndex,
-                retryIndex, null, null, null, null);
+        return at(DownloadPhase.DOWNLOAD_INIT).toBuilder()
+                .searchId("s1")
+                .candidates(candidates)
+                .candidateIndex(candidateIndex)
+                .retryIndex(retryIndex)
+                .build();
     }
 }

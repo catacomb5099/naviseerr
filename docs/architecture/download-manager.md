@@ -23,7 +23,7 @@ flowchart TD
       admit --> claim["CLAIM: due, unleased, non-terminal task rows, FOR UPDATE SKIP LOCKED LIMIT batch-size, stamp lease. DOWNLOAD_INIT excluded when no transfer slots free."]
       claim --> fetch["Fetch GET /searches and/or GET /transfers/downloads ONCE, only if a claimed row needs one"]
       fetch --> step["STEP each claimed row concurrently (flatMap): DownloadStepExecutor -> DownloadStateMachine -> one decision"]
-      step --> apply["APPLY: Advance/Continue -> repository.save(next); Terminal -> DownloadService.finishDownload (atomic CTE)"]
+      step --> apply["APPLY: Advance/Continue -> repository.save(next); Terminal -> DownloadService.finishTask (one song); then repository.concludeDownloads() once per pass"]
     end
 ```
 
@@ -87,7 +87,16 @@ Pruning completed searches (`DELETE /searches/{id}`) was in the original design 
 
 ## The atomic terminal write
 
-Finishing a download touches two tables — `downloads.status` and the task's terminal phase — and a crash between two separate statements would reopen the stranded-row bug this design exists to close. `DownloadService.finishDownload` does both in one data-modifying CTE:
+> [!IMPORTANT]
+> Superseded by V5 (14-09-2026). A download now has N task rows, one per song, so its status is a
+> function of all of them and cannot be written by any single song's terminal statement — two songs
+> finishing concurrently would each see the other as still running and neither would conclude.
+> `DownloadService.finishTask` settles one song (keyed on `task_id`, same idempotence guard) and
+> `DownloadTaskRepository.concludeDownloads` derives the download's status at the end of every pass.
+> See [the ADR](../decisions/collection-downloads-14-09-2026.md). The CTE below is kept because its
+> idempotence reasoning carried over intact.
+
+Finishing a download touches two tables — `downloads.status` and the task's terminal phase — and a crash between two separate statements would reopen the stranded-row bug this design exists to close. `DownloadService.finishDownload` did both in one data-modifying CTE:
 
 ```sql
 WITH updated AS (
@@ -141,7 +150,7 @@ CREATE INDEX idx_download_tasks_due ON download_tasks (next_attempt_at)
     WHERE phase NOT IN ('SUCCEEDED', 'FAILED');
 ```
 
-`song_name` is denormalised so the hot due-work query needs no join. `candidates` is `TEXT` holding a JSON array of `DownloadCandidate`, not `JSONB` — the list is written once and read whole, never queried by content, so `JSONB`'s indexing/operators buy nothing, and storing it as JSON means adding a field to `DownloadCandidate` later needs no migration. The index is **partial** — it covers only non-terminal rows — which is what makes "retain terminal rows forever" free: the due-work query's cost is independent of history size. See [persistence.md](persistence.md) for the Flyway layout this migration lives in.
+*(V5: `download_id` is no longer the primary key — a `task_id UUID` is, and `download_id` became an indexed foreign key, because one download now has one task row per song. A `youtube_id` column was added alongside `song_name`.)* `song_name` is denormalised so the hot due-work query needs no join. `candidates` is `TEXT` holding a JSON array of `DownloadCandidate`, not `JSONB` — the list is written once and read whole, never queried by content, so `JSONB`'s indexing/operators buy nothing, and storing it as JSON means adding a field to `DownloadCandidate` later needs no migration. The index is **partial** — it covers only non-terminal rows — which is what makes "retain terminal rows forever" free: the due-work query's cost is independent of history size. See [persistence.md](persistence.md) for the Flyway layout this migration lives in.
 
 ## Recovery walkthrough
 
@@ -171,14 +180,14 @@ Nothing about a download's position is held in memory, so every recovery scenari
 
 ## Components
 
-- [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) - `POST /download/{songName}`; inserts a `PENDING` row via `DownloadService.requestDownload` and returns `202 Accepted`. No work beyond persisting intent.
+- [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) - `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST`; inserts a `PENDING` row via `DownloadService.requestDownload` and returns `202 Accepted`. No work beyond persisting intent — in particular, no provider call: the track list is fetched at admission.
 - [DownloadTaskRunner.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadTaskRunner.java) - the loop: admit, claim, fetch-if-needed, step, apply. Owns the `@PostConstruct`/`@PreDestroy` subscription lifecycle and the `instanceId` used as `lease_owner`.
 - [DownloadStepExecutor.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadStepExecutor.java) - the I/O shell around the state machine; one slskd call (or a batched-map read) per phase; never propagates an error signal — an slskd failure becomes `DownloadStateMachine.onCallFailed`, so the caller always has a decision to write.
 - [DownloadStateMachine.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadStateMachine.java) - the pure branch matrix. See the phase table above.
 - [DownloadTask.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadTask.java) - in-memory carrier for one `download_tasks` row; this record *is* the durable state, read and written whole on every step.
 - [DownloadDecision.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadDecision.java) - sealed `Advance` / `Continue` / `Terminal`.
 - [DownloadTaskRepository.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadTaskRepository.java) - all `download_tasks` SQL: admit CTE, lease-based claim, save, the two active-count queries.
-- [DownloadService.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadService.java) - `requestDownload` (insert `PENDING`) and `finishDownload` (the atomic terminal CTE above). See [persistence.md](persistence.md).
+- [DownloadService.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadService.java) - `requestDownload(youtubeId, type)` (insert `PENDING`) and `finishTask` (one song's terminal write). See [persistence.md](persistence.md).
 
 ## Related docs
 

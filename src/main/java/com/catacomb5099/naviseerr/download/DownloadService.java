@@ -4,7 +4,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
@@ -14,49 +13,16 @@ import java.util.UUID;
 @Service
 public class DownloadService {
 
-    private static final String CLAIM_PENDING_SQL = """
-            UPDATE downloads
-            SET status = 'IN_PROGRESS'
-            WHERE download_id IN (
-                SELECT download_id
-                FROM downloads
-                WHERE status = 'PENDING'
-                ORDER BY created_at
-                FOR UPDATE SKIP LOCKED
-                LIMIT :limit
-            )
-            RETURNING download_id, song_name, status, created_at
-            """;
-
-    private static final String MARK_STATUS_SQL = """
-            UPDATE downloads
-            SET status = :status
-            WHERE download_id = :id AND status = 'IN_PROGRESS'
-            """;
-
-    // One statement so the download's status and the task's terminal phase can't be split by a crash.
+    // Marks ONE SONG's task row terminal. It used to also write the download's status, in the same
+    // statement, so the two could not be split by a crash -- and that was right while a download had
+    // exactly one task. It is not achievable now that a download has N: the download's status is a
+    // function of all N task rows, which this statement cannot see the effect of its own write on.
+    // DownloadTaskRepository.CONCLUDE_SQL took that half over; its Javadoc has the reasoning.
     //
-    // The task UPDATE's guard has to satisfy two things that pull in opposite directions:
-    //
-    //   1. Idempotence. Writing unconditionally means a second finish for an already-terminal download
-    //      leaves `downloads` alone (the CTE guard holds) but still re-stamps finished_at -- which would
-    //      slide a long-finished row back inside the feed's retention window and resurrect a card the
-    //      user dismissed hours ago.
-    //   2. No livelock. Gating purely on the CTE means a download whose `downloads` row went terminal by
-    //      some path that did NOT mark the task (markStatusIfInProgress) can never have its task row
-    //      marked terminal either -- so the row stays in the due-work partial index and the runner
-    //      claims it forever.
-    //
-    // So: write if the CTE won the row, OR if the task is still non-terminal. A duplicate finish
-    // satisfies neither and updates nothing; an orphaned task satisfies the second and gets closed.
-    private static final String FINISH_DOWNLOAD_SQL = """
-            WITH updated AS (
-                UPDATE downloads
-                   SET status = :status
-                 WHERE download_id = :id
-                   AND status NOT IN ('SUCCEEDED', 'FAILED')
-                RETURNING download_id
-            )
+    // The idempotence guard stays, and is still load-bearing. Writing unconditionally would let a
+    // second finish for an already-terminal task re-stamp finished_at, sliding a long-finished row
+    // back inside the feed's retention window and resurrecting a card the user dismissed hours ago.
+    private static final String FINISH_TASK_SQL = """
             UPDATE download_tasks
                SET phase = :status,
                    phase_entered_at = :now,
@@ -68,9 +34,8 @@ public class DownloadService {
                    progress_percent = CASE WHEN :status = 'SUCCEEDED' THEN 100 ELSE progress_percent END,
                    lease_owner = NULL,
                    lease_expires_at = NULL
-             WHERE download_id = :id
-               AND (download_id IN (SELECT download_id FROM updated)
-                    OR phase NOT IN ('SUCCEEDED', 'FAILED'))
+             WHERE task_id = :id
+               AND phase NOT IN ('SUCCEEDED', 'FAILED')
             """;
 
     private final R2dbcEntityTemplate entityTemplate;
@@ -79,10 +44,16 @@ public class DownloadService {
         this.entityTemplate = entityTemplate;
     }
 
-    public Mono<Download> requestDownload(String songName) {
+    /**
+     * Records the request and nothing else — no name, no track list, no provider call. What the id
+     * resolves to is fetched by the loop at admission, so a request costs one INSERT however large
+     * the collection behind it turns out to be, and the 202 is never behind a YouTube round trip.
+     */
+    public Mono<Download> requestDownload(String youtubeId, DownloadType type) {
         Download download = Download.builder()
                 .downloadId(UUID.randomUUID())
-                .songName(songName)
+                .youtubeId(youtubeId)
+                .downloadType(type)
                 .status(DownloadStatus.PENDING)
                 .createdAt(Instant.now())
                 .build();
@@ -90,39 +61,17 @@ public class DownloadService {
         return entityTemplate.insert(download);
     }
 
-    // SKIP LOCKED stops two cycles claiming the same row; RETURNING yields exactly the rows won.
-    public Flux<Download> claimPendingDownloads(int batchSize) {
-        return entityTemplate.getDatabaseClient()
-                .sql(CLAIM_PENDING_SQL)
-                .bind("limit", batchSize)
-                .map((row, meta) -> entityTemplate.getConverter().read(Download.class, row, meta))
-                .all();
-    }
-
-    // Terminal status write. Applies only while the row is still IN_PROGRESS; returns 0 if it isn't.
-    public Mono<Long> markStatusIfInProgress(UUID downloadId, DownloadStatus status) {
-        return entityTemplate.getDatabaseClient()
-                .sql(MARK_STATUS_SQL)
-                .bind("status", status.name())
-                .bind("id", downloadId)
-                .fetch()
-                .rowsUpdated()
-                .doOnNext(rows -> {
-                    if (rows == 0) {
-                        log.warn("markStatusIfInProgress({}, {}) updated no rows - row was not IN_PROGRESS", downloadId, status);
-                    }
-                })
-                .doOnError(error -> log.error("Could not write status {} for download {}",
-                        status, downloadId, error));
-    }
-
-    /** Idempotent: a second call for an already-terminal download updates nothing and returns 0. */
-    public Mono<Long> finishDownload(UUID downloadId, DownloadStatus status,
-                                     DownloadFailureCode failureCode, Instant now) {
+    /**
+     * Marks one song's task row terminal. Idempotent: a second call for an already-terminal task
+     * updates nothing and returns 0. The download's own status follows from
+     * {@link DownloadTaskRepository#concludeDownloads()} at the end of the pass.
+     */
+    public Mono<Long> finishTask(UUID taskId, DownloadStatus status,
+                                 DownloadFailureCode failureCode, Instant now) {
         DatabaseClient.GenericExecuteSpec spec = entityTemplate.getDatabaseClient()
-                .sql(FINISH_DOWNLOAD_SQL)
+                .sql(FINISH_TASK_SQL)
                 .bind("status", status.name())
-                .bind("id", downloadId)
+                .bind("id", taskId)
                 .bind("now", now);
         // Stored by NAME, not prose: the client words it, so copy changes never touch this table.
         spec = failureCode == null
@@ -130,7 +79,7 @@ public class DownloadService {
                 : spec.bind("reason", failureCode.name());
         return spec.fetch()
                 .rowsUpdated()
-                .doOnError(error -> log.error("Could not finish download {} as {}",
-                        downloadId, status, error));
+                .doOnError(error -> log.error("Could not finish task {} as {}",
+                        taskId, status, error));
     }
 }
