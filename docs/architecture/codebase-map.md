@@ -40,7 +40,7 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
   - `GET /search/{query}` - combined search (YouTube Music, via `ytmusic-adapter`)
   - `GET /search/{query}/tracks` | `/albums` | `/artists` - per-type search
 - [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) (`@RestController`):
-  - `POST /download/{songName}` - inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously (see [download-manager.md](download-manager.md)).
+  - `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST` - insert a `PENDING` download row, return `202 Accepted`; processed asynchronously (see [download-manager.md](download-manager.md)).
 
 Spring beans inventory: `@RestController` x2 (`SearchService`, `DownloadController`); `@Service` (`LastFMService`, `SlskdService`, `TrackMatchingService`, `DownloadService`); `@Component` (`LastFMAPIMethodHelper`, `SlskdSearchResultProcessor`, `DownloadTaskRunner`, `DownloadStepExecutor`, `DownloadStateMachine`); `@Repository` (`DownloadTaskRepository`); `@Configuration` (`WebConfig`, `TimeConfig`, `LastFMConfig`, `SlskdConfig`).
 

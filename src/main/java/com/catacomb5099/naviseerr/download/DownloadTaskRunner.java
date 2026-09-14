@@ -3,6 +3,9 @@ package com.catacomb5099.naviseerr.download;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +34,7 @@ public class DownloadTaskRunner {
     private final DownloadStepExecutor executor;
     private final DownloadService downloadService;
     private final SlskdService slskdService;
+    private final YtMusicService ytMusicService;
     private final Clock clock;
     private final Duration loopInterval;
     private final int batchSize;
@@ -46,6 +50,7 @@ public class DownloadTaskRunner {
             DownloadStepExecutor executor,
             DownloadService downloadService,
             SlskdService slskdService,
+            YtMusicService ytMusicService,
             Clock clock,
             @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
             @Value("${download-task.batch-size:10}") int batchSize,
@@ -56,6 +61,7 @@ public class DownloadTaskRunner {
         this.executor = executor;
         this.downloadService = downloadService;
         this.slskdService = slskdService;
+        this.ytMusicService = ytMusicService;
         this.clock = clock;
         this.loopInterval = loopInterval;
         this.batchSize = batchSize;
@@ -72,10 +78,22 @@ public class DownloadTaskRunner {
                 .subscribe();
     }
 
+    /**
+     * Three steps, in order, every tick: admit new requests, step whatever is due, then conclude any
+     * download whose songs have all finished. Conclusion runs last so a download that finished
+     * during this very pass reports its outcome on the same tick rather than lingering a full
+     * interval in IN_PROGRESS -- and runs unconditionally, so one that was missed (a crash between
+     * the last task's terminal write and here) is picked up by the next pass regardless.
+     */
     Mono<Void> pass() {
         Instant now = clock.instant();
         return admit(now)
                 .then(stepDueTasks(now))
+                .then(repository.concludeDownloads()
+                        .doOnNext(concluded -> {
+                            if (concluded > 0) log.info("Concluded {} download(s)", concluded);
+                        })
+                        .then())
                 .onErrorResume(error -> {
                     log.error("Download task pass failed", error);
                     return Mono.empty();
@@ -89,16 +107,99 @@ public class DownloadTaskRunner {
      */
     private Mono<Void> admit(Instant now) {
         return repository.countActiveDownloads()
-                .flatMap(inFlight -> {
+                .flatMapMany(inFlight -> {
                     int slots = Math.min(batchSize, maxConcurrentDownloads - inFlight.intValue());
                     if (slots <= 0) {
-                        return Mono.empty();
+                        return Flux.<Download>empty();
                     }
-                    return repository.admitNewDownloads(slots, now)
-                            .doOnNext(admitted -> {
-                                if (admitted > 0) log.info("Admitted {} download(s)", admitted);
-                            });
+                    return repository.admitDownloads(slots);
                 })
+                // Bounded by batchSize for the same reason the step phase is: this is now one
+                // ytmusic-adapter request per download, so unbounded concurrency here would make
+                // admission the loudest caller of the sidecar rather than the quietest.
+                .flatMap(download -> gatherMetadata(download, now), batchSize)
+                .then();
+    }
+
+    /**
+     * Turns one accepted request into the task rows that will actually be searched for: one for a
+     * song, one per track for an album or playlist. This is the only step that calls
+     * ytmusic-adapter, and the only reason admission is no longer a single statement -- what rows a
+     * download needs is a question only the provider can answer.
+     *
+     * <p>Failure handling leans on the typed exceptions YtMusicService already draws:
+     * {@link YtMusicBadRequestException} means the id is wrong and no number of retries will make it
+     * right, so the download fails now with a code the client can word. Anything else is the sidecar
+     * being unavailable, which leaves the row PENDING and untouched -- the next pass tries again,
+     * and a sidecar restart does not fail every download requested while it was down.
+     */
+    private Mono<Void> gatherMetadata(Download download, Instant now) {
+        return metadataFor(download)
+                .flatMap(collection -> {
+                    List<DownloadTask> tasks = collection.songs().stream()
+                            .filter(song -> song.id() != null)
+                            .map(song -> DownloadTask.initial(download.getDownloadId(), song.id(),
+                                    song.name(), now))
+                            .toList();
+                    if (tasks.isEmpty()) {
+                        // A real answer that contains nothing to download: an emptied playlist, or
+                        // every track region-blocked. Terminal, not retryable -- asking again gets
+                        // the same empty list.
+                        log.warn("Download {} ({} {}) resolved to no downloadable songs; failing it",
+                                download.getDownloadId(), download.getDownloadType(),
+                                download.getYoutubeId());
+                        return fail(download, DownloadFailureCode.METADATA_UNAVAILABLE);
+                    }
+                    return repository.createTasks(download.getDownloadId(), collection.name(),
+                                    tasks, now)
+                            .doOnNext(admitted -> {
+                                if (admitted > 0) {
+                                    log.info("Admitted download {} ({} '{}') as {} task(s)",
+                                            download.getDownloadId(), download.getDownloadType(),
+                                            collection.name(), tasks.size());
+                                } else {
+                                    // The guards in CREATE_TASKS_SQL held, so something else had
+                                    // already admitted this row. Nothing to fix, worth seeing.
+                                    log.debug("Download {} was already admitted; no tasks created",
+                                            download.getDownloadId());
+                                }
+                            })
+                            .then();
+                })
+                .onErrorResume(YtMusicBadRequestException.class, error -> {
+                    log.warn("Download {} has an id ytmusic-adapter cannot resolve ({} {}); failing it: {}",
+                            download.getDownloadId(), download.getDownloadType(),
+                            download.getYoutubeId(), error.getMessage());
+                    return fail(download, DownloadFailureCode.METADATA_UNAVAILABLE);
+                })
+                .onErrorResume(error -> {
+                    log.warn("Could not gather metadata for download {} ({} {}); leaving it PENDING "
+                            + "for the next pass", download.getDownloadId(),
+                            download.getDownloadType(), download.getYoutubeId(), error);
+                    return Mono.empty();
+                });
+    }
+
+    /**
+     * One shape for all three types, so {@link #gatherMetadata} has no branch of its own. A song is
+     * a collection of one -- which is exactly what it becomes in {@code download_tasks} anyway.
+     */
+    private Mono<YoutubeCollectionInfo> metadataFor(Download download) {
+        String id = download.getYoutubeId();
+        return switch (download.getDownloadType()) {
+            case SONG -> ytMusicService.getSongInfo(id)
+                    .map(song -> new YoutubeCollectionInfo(song.id(), List.of(song), null,
+                            song.name(), song.authorNames()));
+            case ALBUM -> ytMusicService.getAlbumInfo(id);
+            case PLAYLIST -> ytMusicService.getPlaylistInfo(id);
+        };
+    }
+
+    /** Fails a download that never got a task row. Nothing else can record this failure. */
+    private Mono<Void> fail(Download download, DownloadFailureCode code) {
+        return repository.failUnadmitted(download.getDownloadId())
+                .doOnNext(rows -> log.info("Download {} failed before admission ({}); rows updated: {}",
+                        download.getDownloadId(), code, rows))
                 .then();
     }
 
@@ -211,8 +312,9 @@ public class DownloadTaskRunner {
         return executor.execute(task, searchesById, transfersById)
                 .flatMap(decision -> apply(task, decision))
                 .onErrorResume(error -> {
-                    log.error("Download {} step {} could not be applied; the lease will expire and "
-                            + "the row will be retried", task.downloadId(), task.phase(), error);
+                    log.error("Task {} of download {} (step {}) could not be applied; the lease will "
+                            + "expire and the row will be retried", task.taskId(),
+                            task.downloadId(), task.phase(), error);
                     return Mono.empty();
                 });
     }
@@ -222,9 +324,12 @@ public class DownloadTaskRunner {
             case DownloadDecision.Advance advance -> repository.save(advance.next(), instanceId).then();
             case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {
-                log.info("Download {} finished as {}{}", task.downloadId(), terminal.status(),
+                log.info("Song '{}' of download {} finished as {}{}", task.songName(),
+                        task.downloadId(), terminal.status(),
                         terminal.failureCode() == null ? "" : " (" + terminal.failureCode() + ")");
-                yield downloadService.finishDownload(task.downloadId(), terminal.status(),
+                // Only this SONG. The download's own status is settled by concludeDownloads() at the
+                // end of the pass, once every one of its songs is terminal.
+                yield downloadService.finishTask(task.taskId(), terminal.status(),
                         terminal.failureCode(), clock.instant()).then();
             }
         };

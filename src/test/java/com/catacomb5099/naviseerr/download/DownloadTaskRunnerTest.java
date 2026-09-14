@@ -4,6 +4,11 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,9 +18,12 @@ import reactor.core.publisher.Mono;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.UUID;
 
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -28,6 +36,7 @@ class DownloadTaskRunnerTest {
     private DownloadStepExecutor executor;
     private DownloadService downloadService;
     private SlskdService slskdService;
+    private YtMusicService ytMusicService;
     private DownloadTaskRunner runner;
 
     @BeforeEach
@@ -36,18 +45,22 @@ class DownloadTaskRunnerTest {
         executor = mock(DownloadStepExecutor.class);
         downloadService = mock(DownloadService.class);
         slskdService = mock(SlskdService.class);
-        when(repository.admitNewDownloads(anyInt(), any())).thenReturn(Mono.just(0L));
+        ytMusicService = mock(YtMusicService.class);
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.empty());
+        when(repository.createTasks(any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.concludeDownloads()).thenReturn(Mono.just(0L));
+        when(repository.failUnadmitted(any())).thenReturn(Mono.just(1L));
         when(repository.countActiveDownloads()).thenReturn(Mono.just(0L));
         when(repository.countActiveTransfers()).thenReturn(Mono.just(0L));
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean()))
                 .thenReturn(Flux.empty());
         when(repository.save(any(), any())).thenReturn(Mono.just(1L));
-        when(downloadService.finishDownload(any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskdService.getAllSearches()).thenReturn(Flux.empty());
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                Clock.fixed(T0, ZoneOffset.UTC),
+                ytMusicService, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20);
     }
 
@@ -77,7 +90,7 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        verify(repository).admitNewDownloads(2, T0);
+        verify(repository).admitDownloads(2);
     }
 
     @Test
@@ -86,7 +99,7 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        verify(repository, never()).admitNewDownloads(anyInt(), any());
+        verify(repository, never()).admitDownloads(anyInt());
     }
 
     @Test
@@ -95,7 +108,7 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        verify(repository).admitNewDownloads(10, T0);
+        verify(repository).admitDownloads(10);
     }
 
     @Test
@@ -165,7 +178,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository).save(eq(next), any());
-        verify(downloadService, never()).finishDownload(any(), any(), any(), any());
+        verify(downloadService, never()).finishTask(any(), any(), any(), any());
     }
 
     @Test
@@ -190,7 +203,9 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        verify(downloadService).finishDownload(eq(ID), eq(DownloadStatus.FAILED), any(), any());
+        // The TASK's id, not the download's: one song of a collection finishing is not the
+        // collection finishing.
+        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any());
         verify(repository, never()).save(any(), any());
     }
 
@@ -221,6 +236,129 @@ class DownloadTaskRunnerTest {
         runner.pass().block();   // must complete, not throw
 
         verify(repository).save(any(), any());
+    }
+
+    // ---- metadata gathering --------------------------------------------------------------------
+
+    @Test
+    void aSongRequest_becomesOneTaskFromItsSongMetadata() {
+        Download request = pendingRequest(DownloadType.SONG, "vid-1");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getSongInfo("vid-1"))
+                .thenReturn(Mono.just(new YoutubeSongInfo("vid-1", List.of("Rick Astley"),
+                        "Never Gonna Give You Up")));
+
+        runner.pass().block();
+
+        verify(ytMusicService).getSongInfo("vid-1");
+        verify(repository).createTasks(eq(request.getDownloadId()),
+                eq("Never Gonna Give You Up"), argThat(tasks -> tasks.size() == 1
+                        && tasks.getFirst().youtubeId().equals("vid-1")
+                        && tasks.getFirst().songName().equals("Never Gonna Give You Up")),
+                eq(T0));
+    }
+
+    @Test
+    void anAlbumRequest_becomesOneTaskPerTrack() {
+        Download request = pendingRequest(DownloadType.ALBUM, "MPREb_1");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getAlbumInfo("MPREb_1")).thenReturn(Mono.just(
+                new YoutubeCollectionInfo("MPREb_1", List.of(
+                        new YoutubeSongInfo("v1", List.of("A"), "one"),
+                        new YoutubeSongInfo("v2", List.of("A"), "two"),
+                        new YoutubeSongInfo("v3", List.of("A"), "three")),
+                        "1999", "The Album", List.of("A"))));
+
+        runner.pass().block();
+
+        // One download, three searchable rows -- the whole point of the 1:N task table.
+        verify(repository).createTasks(eq(request.getDownloadId()), eq("The Album"),
+                argThat(tasks -> tasks.size() == 3), eq(T0));
+    }
+
+    @Test
+    void aPlaylistRequest_usesThePlaylistEndpoint_notTheAlbumOne() {
+        Download request = pendingRequest(DownloadType.PLAYLIST, "VLPL1");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getPlaylistInfo("VLPL1")).thenReturn(Mono.just(
+                new YoutubeCollectionInfo("VLPL1",
+                        List.of(new YoutubeSongInfo("v1", List.of(), "one")), null, "Mix",
+                        List.of())));
+
+        runner.pass().block();
+
+        verify(ytMusicService).getPlaylistInfo("VLPL1");
+        verify(ytMusicService, never()).getAlbumInfo(any());
+    }
+
+    @Test
+    void anUnresolvableId_failsTheDownloadRatherThanRetryingItForever() {
+        Download request = pendingRequest(DownloadType.SONG, "nope");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getSongInfo("nope"))
+                .thenReturn(Mono.error(new YtMusicBadRequestException("no such video")));
+
+        runner.pass().block();
+
+        // A 400/404 cannot be made right by asking again, and a row left PENDING would be
+        // re-requested every loop interval for the life of the install.
+        verify(repository).failUnadmitted(request.getDownloadId());
+        verify(repository, never()).createTasks(any(), any(), any(), any());
+    }
+
+    @Test
+    void anUnavailableSidecar_leavesTheRequestPendingForTheNextPass() {
+        Download request = pendingRequest(DownloadType.SONG, "vid-1");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getSongInfo("vid-1"))
+                .thenReturn(Mono.error(new YtMusicUnavailableException("connection refused")));
+
+        assertDoesNotThrow(() -> runner.pass().block());
+
+        // The opposite of the case above: failing here would kill every download requested while
+        // the sidecar happened to be restarting.
+        verify(repository, never()).failUnadmitted(any());
+        verify(repository, never()).createTasks(any(), any(), any(), any());
+    }
+
+    @Test
+    void aCollectionWithNoDownloadableTracks_fails() {
+        Download request = pendingRequest(DownloadType.PLAYLIST, "VLempty");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getPlaylistInfo("VLempty")).thenReturn(Mono.just(
+                new YoutubeCollectionInfo("VLempty", List.of(), null, "Empty", List.of())));
+
+        runner.pass().block();
+
+        verify(repository).failUnadmitted(request.getDownloadId());
+    }
+
+    // ---- conclusion ----------------------------------------------------------------------------
+
+    @Test
+    void everyPassConcludesFinishedDownloads() {
+        // Unconditionally, and after stepping: a download whose last song finished in this very
+        // pass reports its outcome on this tick, and one missed by a crash is caught by the next.
+        runner.pass().block();
+
+        verify(repository).concludeDownloads();
+    }
+
+    @Test
+    void aFailingConcludeDoesNotStopThePass() {
+        when(repository.concludeDownloads()).thenReturn(Mono.error(new RuntimeException("db down")));
+
+        assertDoesNotThrow(() -> runner.pass().block());
+    }
+
+    private static Download pendingRequest(DownloadType type, String youtubeId) {
+        return Download.builder()
+                .downloadId(UUID.randomUUID())
+                .youtubeId(youtubeId)
+                .downloadType(type)
+                .status(DownloadStatus.PENDING)
+                .createdAt(T0)
+                .build();
     }
 
     @Test

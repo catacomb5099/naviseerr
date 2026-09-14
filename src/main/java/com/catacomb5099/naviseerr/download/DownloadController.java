@@ -44,13 +44,45 @@ public class DownloadController {
         this.terminalRetention = terminalRetention;
     }
 
-    @PostMapping("/download/{songName}")
-    Mono<ResponseEntity<Download>> download(@PathVariable String songName) {
-        if (songName == null || songName.isBlank()) {
+    /**
+     * Requests one track by its YouTube Music {@code videoId}.
+     *
+     * <p>An id, not a name, and that is the substantive change here: the server now asks
+     * ytmusic-adapter what the id is at admission time, instead of the client gluing a title and an
+     * artist together into a string the matcher then had to take apart again. It also makes a track
+     * whose title contains a {@code /} requestable, which it was not while the title was the path.
+     */
+    @PostMapping("/download/song/{songId}")
+    Mono<ResponseEntity<Download>> downloadSong(@PathVariable String songId) {
+        if (songId == null || songId.isBlank()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return downloadService.requestDownload(songName)
-                .map(saved -> ResponseEntity.status(HttpStatus.ACCEPTED).body(saved))
+        return accept(downloadService.requestDownload(songId, DownloadType.SONG));
+    }
+
+    /**
+     * Requests every track of an album or a playlist as ONE download. The response is a single
+     * {@link Download}; its songs do not exist yet, because the track list is not fetched until the
+     * loop admits it.
+     *
+     * <p>{@code type} is required rather than inferred from the id: albums and playlists are two
+     * different ytmusic-adapter endpoints, and guessing from an id prefix would be a heuristic that
+     * silently picks the wrong one the first time YouTube changes a prefix. An unparseable value is
+     * rejected by Spring before this method runs; {@code SONG} is rejected here, since a single
+     * track has its own route.
+     */
+    @PostMapping("/download/collection/{collectionId}")
+    Mono<ResponseEntity<Download>> downloadCollection(@PathVariable String collectionId,
+                                                      @RequestParam DownloadType type) {
+        if (collectionId == null || collectionId.isBlank() || !type.isCollection()) {
+            return Mono.just(ResponseEntity.badRequest().build());
+        }
+        return accept(downloadService.requestDownload(collectionId, type));
+    }
+
+    /** Fast ack: the row is inserted, nothing else happens on the request thread. */
+    private Mono<ResponseEntity<Download>> accept(Mono<Download> saved) {
+        return saved.map(download -> ResponseEntity.status(HttpStatus.ACCEPTED).body(download))
                 .onErrorResume(error -> Mono.just(
                         ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));
     }

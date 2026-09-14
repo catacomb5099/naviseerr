@@ -1,6 +1,6 @@
 # YouTube Music Integration
 
-> Status: current as of 10-08-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
+> Status: current as of 14-09-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
 YouTube Music, via a sidecar adapter service, is the metadata source for search (tracks, albums,
 artists). It replaces LastFM as the active search backend as of this doc; see
@@ -14,8 +14,11 @@ Naviseerr talks to YouTube Music through **ytmusic-adapter**, a standalone state
 service in the sibling repo `~/IdeaProjects/ytmusic-adapter`, wrapping the Python-only, synchronous
 `ytmusicapi` library (pinned `1.12.2`). It is not vendored into this repo. It runs anonymously — no
 YouTube credentials, no OAuth — and exposes a stable, versioned (`/v1/...`) JSON contract:
-`GET /v1/search`, `/v1/search/{songs|albums|artists|playlists}`, plus album/artist/playlist detail
-lookups that naviseerr does not currently consume.
+`GET /v1/search`, `/v1/search/{songs|albums|artists|playlists}`, plus detail lookups by id. As of
+14-09-2026 naviseerr consumes three of those detail routes — `GET /v1/songs/{videoId}`,
+`GET /v1/albums/{browseId}` and `GET /v1/playlists/{playlistId}` — which is how a download request
+carrying only a YouTube id learns what to search Soulseek for. The artist detail routes are still
+unconsumed.
 
 Wired into [compose.yaml](../../compose.yaml) as `ytmusic-adapter`, built from
 `build: ../ytmusic-adapter` — a path outside this repo. `./gradlew bootRun` (which auto-starts
@@ -153,6 +156,43 @@ deliberately in exchange for cutting the general endpoint from three provider ca
 
 The three typed calls this replaced already ran concurrently via `Mono.zip`, so this change reduces
 provider load and adapter semaphore occupancy — it is not a user-visible latency improvement.
+
+## Metadata lookups (the download pipeline's use of this provider)
+
+Search is not the only caller any more. `DownloadTaskRunner.gatherMetadata` resolves a download's
+YouTube id at admission time, via three methods on
+[YtMusicService](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java):
+
+| Method | Route | Returns |
+|---|---|---|
+| `getSongInfo(videoId)` | `GET /v1/songs/{videoId}` | `YoutubeSongInfo` |
+| `getAlbumInfo(browseId)` | `GET /v1/albums/{browseId}` | `YoutubeCollectionInfo` |
+| `getPlaylistInfo(playlistId)` | `GET /v1/playlists/{playlistId}` | `YoutubeCollectionInfo` |
+
+Three things about the mapping are easy to get wrong, because the adapter's three responses are not
+the same shape:
+
+- **A song's `author` is a single string; a collection track's `artists` is a list.**
+  `YoutubeSongInfo.authorNames()` is a list either way, so callers never have to know which shape a
+  song came from.
+- **An album reports `browseId` and an `artists[]`; a playlist reports `id` and a single `author`.**
+  One `YoutubeCollectionInfo` covers both — they are one title plus one track list as far as the
+  download pipeline is concerned, and splitting them would mean two types and a switch at every use
+  site for one nullable field's worth of difference (`year`, which only albums have).
+- **A track with `isAvailable: false` is dropped.** It is region-blocked or deleted, so a task row
+  for it would spend a whole search budget to fail. Only an explicit `false` counts — album
+  responses omit the field entirely, and treating null as unavailable would drop every album track.
+
+All three go through the same `execute` pipeline as search — one timeout, typed error translation,
+retry on availability failures only — rather than reimplementing it. That pipeline was extracted from
+`executeSearch` for exactly this reason.
+
+**404 maps to `YtMusicBadRequestException`, not `YtMusicUnavailableException`**, and that is
+load-bearing rather than cosmetic. A 404 here means YouTube Music has no such video, album or
+playlist; retrying cannot make an id exist. Admission leans on the distinction to tell "fail this
+download now" from "try again next pass", so classifying it as unavailable would have one mistyped id
+re-requested every loop interval for the life of the install. See
+[the ADR](../decisions/collection-downloads-14-09-2026.md).
 
 ## Endpoints (unchanged)
 

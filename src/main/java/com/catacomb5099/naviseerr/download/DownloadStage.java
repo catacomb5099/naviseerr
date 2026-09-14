@@ -22,5 +22,7 @@ public enum DownloadStage {
     /** A transfer is live. The only stage with a meaningful {@code progressPercent}. */
     DOWNLOADING,
     SUCCEEDED,
-    FAILED
+    FAILED,
+    /** Collections only: some songs succeeded, some failed. */
+    PARTIAL_SUCCESS
 }
