@@ -263,6 +263,7 @@ class DownloadTaskRepositoryIT {
                 .phase(DownloadPhase.DOWNLOAD_POLL)
                 .nextAttemptAt(NOW.plusSeconds(5))
                 .searchId("s1")
+                .searchTier(1)
                 .candidates(DownloadTaskFixtures.candidates("alice", "bob"))
                 .candidateIndex(1).retryIndex(2)
                 .slskdUsername("bob").slskdFilename("music/bob/song.flac").slskdTransferId("abc")
@@ -277,6 +278,7 @@ class DownloadTaskRepositoryIT {
         assertEquals(claimed.taskId(), reread.taskId(), "save() keys on task_id, not download_id");
         assertEquals(DownloadPhase.DOWNLOAD_POLL, reread.phase());
         assertEquals("s1", reread.searchId());
+        assertEquals(1, reread.searchTier(), "a restart mid-retry must resume on the same tier");
         assertEquals(2, reread.candidates().size());
         assertEquals("music/bob/song.flac", reread.candidates().get(1).filename());
         assertEquals(1411, reread.candidates().get(1).bitRate());

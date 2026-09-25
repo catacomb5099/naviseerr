@@ -73,6 +73,17 @@ public class DownloadStateMachine {
                     : new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
         }
         if (selected == null || selected.isEmpty()) {
+            // A qualifier YouTube put in the title ("(Remix)", a leading "Artist - " the artist
+            // suffix repeats) can still find nothing on Soulseek where the bare title would, so the
+            // next cleaner wording is tried before giving up. withPhase rather than dueAt: each tier
+            // is a new search with its own search budget.
+            // This is the ONLY branch that advances a tier -- slskd failures, errored searches and
+            // timeouts fail exactly as before.
+            List<String> tiers = SearchQueryTiers.of(task.songName());
+            if (task.searchTier() + 1 < tiers.size()) {
+                return new DownloadDecision.Advance(task.withPhase(DownloadPhase.SEARCH_INIT, now)
+                        .toBuilder().searchTier(task.searchTier() + 1).searchId(null).build());
+            }
             return new DownloadDecision.Terminal(DownloadStatus.FAILED,
                     DownloadFailureCode.NO_CANDIDATES);
         }
