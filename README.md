@@ -6,7 +6,7 @@ This is only the backend or server, for a visual experience this needs to be pai
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/diagrams/system-architecture-dark.png">
-  <img alt="Naviseerr system architecture. The React client calls two Spring entry points: SearchService for GET /search/**, and DownloadController for POST /download and the polled GET /downloads/active. Search resolves through the ytmusic-adapter FastAPI sidecar to YouTube Music. Downloads are written to Postgres, reconciled by DownloadTaskRunner, and executed through DownloadStepExecutor and slskd against the Soulseek network." src="docs/architecture/diagrams/system-architecture-light.png">
+  <img alt="Naviseerr system architecture. The React client calls three Spring entry points: SearchService for GET /search/**, CollectionController for GET /collections/{id}, and DownloadController for POST /download and the polled GET /downloads/active. Search resolves through the ytmusic-adapter FastAPI sidecar to YouTube Music. Downloads are written to Postgres, reconciled by DownloadTaskRunner, and executed through DownloadStepExecutor and slskd against the Soulseek network." src="docs/architecture/diagrams/system-architecture-light.png">
 </picture>
 
 Three repositories, one stack: this one, [`naviseerr-client`](https://github.com/catacomb5099/naviseerr-client)

@@ -6,7 +6,8 @@ YouTube Music, via a sidecar adapter service, is the metadata source for search 
 artists, playlists) and for browsing an album or playlist by id. It replaces LastFM as the active search backend as of this doc; see
 [lastfm-integration.md](lastfm-integration.md) for the retained-but-unused Last.fm path and the ADR
 below for why. It is read-only and reactive (`Mono`), exposed through
-[SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java).
+[SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) and
+[CollectionController](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java).
 
 ## The adapter is a separate service, not a library
 

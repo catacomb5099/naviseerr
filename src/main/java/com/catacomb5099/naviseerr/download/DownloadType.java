@@ -11,8 +11,8 @@ package com.catacomb5099.naviseerr.download;
  *
  * <p>{@link #ALBUM} and {@link #PLAYLIST} are kept apart rather than folded into one COLLECTION
  * value because they are two different calls to two different ytmusic-adapter endpoints, and the id
- * spaces do not overlap (an album is a {@code MPREb_} browse id, a playlist a {@code VL}-prefixed
- * one). Nothing downstream has to tell them apart once the track list is in hand.
+ * spaces do not overlap (an album is a {@code MPREb_} browse id, a playlist a bare {@code PL...} id
+ * or its {@code VL}-prefixed browse form). Nothing downstream has to tell them apart once the track list is in hand.
  */
 public enum DownloadType {
     SONG,

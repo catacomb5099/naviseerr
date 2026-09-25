@@ -54,7 +54,13 @@ public class YtMusicSearchResponseMapper {
                 case "song" -> tracks.add(mapTrack(item));
                 case "album" -> albums.add(mapAlbum(item));
                 case "artist" -> artists.add(mapArtist(item));
-                case "playlist" -> playlists.add(mapPlaylist(item));
+                case "playlist" -> {
+                    // an item with neither id cannot be browsed or downloaded; id "" would be a
+                    // duplicate React key on the client, so drop it rather than emit it
+                    if (item.getPlaylistId() != null || item.getBrowseId() != null) {
+                        playlists.add(mapPlaylist(item));
+                    }
+                }
                 // "video", "episode", "podcast", "station", "profile" and any future
                 // resultType are deliberately dropped -- SearchResponse has no field for them and
                 // the adapter cannot be asked to exclude them (its filter param is single-valued).

@@ -234,6 +234,15 @@ class YtMusicSearchResponseMapperTest {
     }
 
     @Test
+    void playlists_neitherPlaylistIdNorBrowseId_isDropped_notEmittedWithEmptyId() {
+        YtMusicSearchResponse.Item item = playlistItem().toBuilder().playlistId(null).browseId(null).build();
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item)).build());
+
+        assertTrue(result.getPlaylists().isEmpty());
+    }
+
+    @Test
     void playlists_nullTrackCount_defaultsToZero_notNullPointerOnUnboxing() {
         YtMusicSearchResponse.Item item = playlistItem().toBuilder().trackCount(null).build();
         SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
