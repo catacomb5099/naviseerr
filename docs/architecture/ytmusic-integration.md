@@ -1,9 +1,9 @@
 # YouTube Music Integration
 
-> Status: current as of 14-09-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
+> Status: current as of 25-09-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
 YouTube Music, via a sidecar adapter service, is the metadata source for search (tracks, albums,
-artists). It replaces LastFM as the active search backend as of this doc; see
+artists, playlists) and for browsing an album or playlist by id. It replaces LastFM as the active search backend as of this doc; see
 [lastfm-integration.md](lastfm-integration.md) for the retained-but-unused Last.fm path and the ADR
 below for why. It is read-only and reactive (`Mono`), exposed through
 [SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java).
@@ -194,13 +194,31 @@ download now" from "try again next pass", so classifying it as unavailable would
 re-requested every loop interval for the life of the install. See
 [the ADR](../decisions/collection-downloads-14-09-2026.md).
 
-## Endpoints (unchanged)
+## Endpoints
 
-Still exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java),
-now `@GetMapping` (was `@RequestMapping`, which accepted every HTTP verb):
+Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java),
+`@GetMapping` (was `@RequestMapping`, which accepted every HTTP verb):
 
-- `GET /search/{query}` - mixed (one unfiltered adapter call; see above)
-- `GET /search/{query}/tracks` | `/albums` | `/artists` - typed (one filtered adapter call each)
+- `GET /search/{query}` - mixed (one unfiltered adapter call; see above). Fills all four lists,
+  `playlists` included -- the mixed page always carried `playlist` items, the mapper used to drop them.
+- `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - typed (one filtered adapter
+  call each)
+
+And by [CollectionController.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java):
+
+- `GET /collections/{id}?type=ALBUM|PLAYLIST` - one album or playlist as a
+  [CollectionView](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionView.java):
+  header plus every available track with a 1-based `position`. Calls the same `getAlbumInfo` /
+  `getPlaylistInfo` as admission, so what the client sees is what a download of the same id would
+  create task rows for. `type=SONG` is 400 (a track has no collection view); the adapter's 404 --
+  which the client maps to `YtMusicBadRequestException`, see above -- becomes a 404 here, *not*
+  `SearchService`'s 400, because a lookup by id that finds nothing is "not found", not "bad query";
+  `YtMusicUnavailableException` is 502 as everywhere else.
+
+`Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`), falling back to the
+`VL`-prefixed `browseId` only when the bare id is absent. The adapter's detail route accepts either,
+but the backend keys `media_items` by whatever id the client posts, so the client must pass the id
+it was given through to both `/collections/{id}` and `/download/collection/{id}` unchanged.
 
 ## Configuration (`yt-music-service.*`)
 
@@ -215,11 +233,11 @@ now `@GetMapping` (was `@RequestMapping`, which accepted every HTTP verb):
 
 ## Known gaps
 
-- No playlist search — the adapter supports it (`/v1/search/playlists`), but `SearchResponse` has no
-  `Playlist` field yet, and the general/type-filtered search on the naviseerr side never requests it.
-  Deferred deliberately; see the ADR.
+- Playlist search (`Playlist.trackCount`) reports the adapter's `trackCount`, which is YouTube's
+  advertised `itemCount`, or `0` when YouTube gives none; `CollectionView.trackCount` is the count
+  of *available* tracks after the `isAvailable: false` filter. The two can legitimately differ.
 - No caching — every search hits the adapter (and, behind it, YouTube) fresh.
-- The adapter's album/artist/playlist *detail* endpoints (`/v1/albums/{browseId}` etc.) are
-  unconsumed; there is no `services/ytmusic` code path that calls them.
+- The adapter's *artist* detail endpoints are unconsumed; there is no `services/ytmusic` code path
+  that calls them. (Album and playlist detail are consumed by admission and `/collections/{id}`.)
 - General search returns fewer results per category than the typed routes, and blanks
   `Track.albumId` — see "Mixed (general) search" above.

@@ -38,11 +38,13 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 
 - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) (`@RestController`):
   - `GET /search/{query}` - combined search (YouTube Music, via `ytmusic-adapter`)
-  - `GET /search/{query}/tracks` | `/albums` | `/artists` - per-type search
+  - `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - per-type search
+- [CollectionController.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java) (`@RestController`):
+  - `GET /collections/{id}?type=ALBUM|PLAYLIST` - one album or playlist with its track list, resolved live from `ytmusic-adapter` (see [ytmusic-integration.md](ytmusic-integration.md)).
 - [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) (`@RestController`):
   - `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST` - insert a `PENDING` download row, return `202 Accepted`; processed asynchronously (see [download-manager.md](download-manager.md)).
 
-Spring beans inventory: `@RestController` x2 (`SearchService`, `DownloadController`); `@Service` (`LastFMService`, `SlskdService`, `TrackMatchingService`, `DownloadService`); `@Component` (`LastFMAPIMethodHelper`, `SlskdSearchResultProcessor`, `DownloadTaskRunner`, `DownloadStepExecutor`, `DownloadStateMachine`); `@Repository` (`DownloadTaskRepository`); `@Configuration` (`WebConfig`, `TimeConfig`, `LastFMConfig`, `SlskdConfig`).
+Spring beans inventory: `@RestController` x3 (`SearchService`, `CollectionController`, `DownloadController`); `@Service` (`LastFMService`, `SlskdService`, `TrackMatchingService`, `DownloadService`); `@Component` (`LastFMAPIMethodHelper`, `SlskdSearchResultProcessor`, `DownloadTaskRunner`, `DownloadStepExecutor`, `DownloadStateMachine`); `@Repository` (`DownloadTaskRepository`); `@Configuration` (`WebConfig`, `TimeConfig`, `LastFMConfig`, `SlskdConfig`).
 
 ## Branch topology
 
