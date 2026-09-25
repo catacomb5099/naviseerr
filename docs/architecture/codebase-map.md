@@ -19,10 +19,11 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - `config/`
   - [WebConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/WebConfig.java) - `@EnableWebFlux` + wide-open CORS (`*`). See the note in [gotchas.md](gotchas.md).
   - [TimeConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/TimeConfig.java) - the `Clock` bean (`Clock.systemUTC()`), injected wherever "now" matters so budget/lease branches are unit-testable without sleeping.
-- `schema/response/` - API response DTOs returned to clients: `Track`, `Album`, `Artist`, `SearchResponse`.
+- `schema/response/` - API response DTOs returned to clients: `Track`, `Album`, `Artist`, `Playlist`, `SearchResponse`.
 - `schema/slskd/` - slskd API DTOs: `SearchState`, `SearchResponseItem`, `SearchFile`, `TransferedFile`, `QueueDownloadResponse`, the `TransferState` enum, and `SlskdSearchState` (search-state classification, added with the durable-download-state-machine work). Details in [slskd-integration.md](slskd-integration.md).
 - `services/`
   - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) - `@RestController` for the search endpoints, backed by YouTube Music.
+  - [CollectionController.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java) / [CollectionView.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionView.java) - `@RestController` for `GET /collections/{id}` and its response DTO. The DTO lives here rather than in `schema/response/` on the `download/*View` precedent: it is shaped by the download pipeline (same track filter and `position` as the task rows), not by the search contract.
   - `ytmusic/` - `YtMusicService`, `YtMusicConfig`, `YtMusicSearchType`, `model/YtMusicSearchResponse`, and the typed errors `YtMusicException` / `YtMusicBadRequestException` / `YtMusicUnavailableException`. The active search provider; calls the `ytmusic-adapter` sidecar. See [ytmusic-integration.md](ytmusic-integration.md).
   - `lastfm/` - `LastFMService`, `LastFMConfig`, `model/LastFmSearchResponse`. **Unused since 10-08-2026**, retained on disk. See [lastfm-integration.md](lastfm-integration.md).
   - `slskd/` - `SlskdService`, `SlskdConfig`, `SlskdSearchResultProcessor`. See [slskd-integration.md](slskd-integration.md).

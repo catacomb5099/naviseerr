@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
+
 import static reactor.netty.http.HttpConnectionLiveness.log;
 
 /**
@@ -75,7 +77,7 @@ public class LastFMService {
                             tuple.getT1().getTracks(),
                             tuple.getT2().getAlbums(),
                             tuple.getT3().getArtists(),
-                            java.util.List.of() // Last.fm has no playlist search; retained code, unused
+                            List.of() // Last.fm has no playlist search; retained code, unused
                     ));
     }
 }

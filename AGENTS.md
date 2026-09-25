@@ -108,7 +108,7 @@ Current endpoints:
 - `GET /search/{query}/albums` — album search
 - `GET /search/{query}/artists` — artist search
 - `GET /search/{query}/playlists` — playlist search. `Playlist.id` is the bare `PL...` id; the client must use it unchanged for both `/collections/{id}` and `/download/collection/{id}`
-- `GET /collections/{id}?type=ALBUM|PLAYLIST` — one album or playlist as `{id, type, name, artists, iconURL, year, trackCount, tracks[{id, name, artists, iconURL, durationSeconds, position}]}`, resolved live from `ytmusic-adapter` via the same `getAlbumInfo`/`getPlaylistInfo` admission uses, so the track list is exactly what a download of that id would create. `type=SONG` is 400; an id the adapter does not know is 404; adapter down is 502
+- `GET /collections/{id}?type=ALBUM|PLAYLIST` — one album or playlist as `{id, type, name, artists, iconURL, year, trackCount, tracks[{id, name, artists, iconURL, durationSeconds, position}]}`, resolved live from `ytmusic-adapter` via the same `getAlbumInfo`/`getPlaylistInfo` admission uses, so the track list is exactly what a download of that id would create. `type=SONG` is 400; an id the adapter does not know is 404 (adapter 400/422/500 are folded into the same exception and also surface as 404); adapter down is 502
 - `POST /download/song/{videoId}` — inserts a `PENDING` download row of type `SONG`, returns `202 Accepted`; processed asynchronously by the download execution flow
 - `POST /download/collection/{id}?type=ALBUM|PLAYLIST` — the same, for every track of an album or playlist as ONE download. `type` is required rather than inferred from the id: albums and playlists are two different adapter endpoints, and guessing from an id prefix is a heuristic that silently breaks the first time YouTube changes one. `type=SONG` is rejected with 400 — a single track has its own route
 - `GET /downloads/active` — every non-terminal download plus every one finished within `terminal-retention-ms`, most-recently-updated first, as `{downloadId, youtubeId, downloadType, title, artists, imageUrl, stage, progressPercent, songCount, songsSucceeded, songsFailed, requestedAt, stageEnteredAt, updatedAt, finishedAt, failureCode}` plus `pollIntervalMs` and `terminalRetentionMs`; the client polls this, no SSE
@@ -143,7 +143,6 @@ Important future milestones:
 - Download history and cancellation.
 - Cache and database-backed state.
 - Artist/song/album pages.
-- Playlist search and playlist downloads.
 - Optional "peek" streaming for short playback sections.
 
 Success is mostly about UX quality and hit rate: fluid navigation, transparent loading/error states, modern behavior, and maximizing successful downloads from imperfect external sources.

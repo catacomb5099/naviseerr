@@ -40,16 +40,19 @@ public class CollectionController {
         Mono<YoutubeCollectionInfo> info = type == DownloadType.ALBUM
                 ? ytMusicService.getAlbumInfo(id)
                 : ytMusicService.getPlaylistInfo(id);
-        return info.map(collection -> ResponseEntity.ok(CollectionView.from(collection, type)))
-                .doOnSuccess(view -> log.info("Resolved {} '{}': {} tracks", type, id,
-                        view.getBody() == null ? 0 : view.getBody().trackCount()));
+        return info.map(collection -> {
+            CollectionView view = CollectionView.from(collection, type, id);
+            log.info("Resolved {} '{}': {} tracks", type, id, view.trackCount());
+            return ResponseEntity.ok(view);
+        });
     }
 
     /**
      * 404, not the 400 {@link SearchService} uses for the same exception. A search's bad request is
      * a malformed query; here the request is a lookup by id and the adapter's 404 (folded into this
      * exception, see {@code YtMusicService}) means "no such album or playlist", which is a 404 to the
-     * client too.
+     * client too. Known trade-off: {@code YtMusicService.buildException} folds the adapter's 400, 422
+     * and 500 into the same exception, so those surface as 404 here as well.
      */
     @ExceptionHandler(YtMusicBadRequestException.class)
     ResponseEntity<Void> handleNotFound(YtMusicBadRequestException ex) {

@@ -95,6 +95,39 @@ class CollectionControllerTest {
     }
 
     @Test
+    void id_isTheRequestedId_notTheOneTheAdapterEchoes() {
+        // A playlist asked for as VLPL... is answered as PL...; the client must be able to POST the
+        // id it gets here to /download/collection unchanged, and media_items are keyed the same way.
+        when(ytMusicService.getPlaylistInfo("VLPL1")).thenReturn(Mono.just(playlist()));
+
+        StepVerifier.create(controller.collection("VLPL1", DownloadType.PLAYLIST))
+                .assertNext(response -> {
+                    assertNotNull(response.getBody());
+                    assertEquals("VLPL1", response.getBody().id());
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void nullVideoId_isDropped_andPositionsMatchTheTaskRows() {
+        YoutubeCollectionInfo withGap = new YoutubeCollectionInfo("PL2", List.of(
+                new YoutubeSongInfo(null, List.of("Blur"), "Unlisted", null, null),
+                new YoutubeSongInfo("vid9", List.of("Blur"), "Parklife", null, 185)),
+                null, "Gappy", List.of(), null);
+        when(ytMusicService.getPlaylistInfo("PL2")).thenReturn(Mono.just(withGap));
+
+        StepVerifier.create(controller.collection("PL2", DownloadType.PLAYLIST))
+                .assertNext(response -> {
+                    CollectionView view = response.getBody();
+                    assertNotNull(view);
+                    assertEquals(1, view.trackCount());
+                    assertEquals("vid9", view.tracks().get(0).id());
+                    assertEquals(1, view.tracks().get(0).position(), "numbered after the filter, like DownloadTaskRunner");
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void nonNumericYear_isNull_notAnError() {
         YoutubeCollectionInfo odd = new YoutubeCollectionInfo("MPREb_2", List.of(), "n/a",
                 "Untitled", List.of(), null);
