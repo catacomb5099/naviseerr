@@ -11,6 +11,7 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -40,23 +41,50 @@ class DownloadRecoveryIT {
     private UUID insert(String status) {
         UUID id = UUID.randomUUID();
         template.getDatabaseClient()
-                .sql("INSERT INTO downloads (download_id, song_name, status, created_at) "
-                        + "VALUES (:id, 'song', :status, now())")
+                .sql("INSERT INTO downloads (download_id, youtube_id, download_type, status, created_at) "
+                        + "VALUES (:id, 'yt-1', 'SONG', :status, now())")
                 .bind("id", id).bind("status", status).fetch().rowsUpdated().block();
         return id;
+    }
+
+    /**
+     * The other half of admission: the runner's ytmusic-adapter call sits between
+     * {@code admitDownloads} and {@code createTasks}, so fixtures do what the runner does.
+     */
+    private void admit(UUID downloadId) {
+        repository.createTasks(downloadId,
+                List.of(DownloadTask.initial(downloadId, "yt-1", "song", NOW)), NOW).block();
+    }
+
+    private String statusOf(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT status FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> row.get("status", String.class)).one().block();
+    }
+
+    private UUID taskIdOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT task_id FROM download_tasks WHERE download_id = :id")
+                .bind("id", downloadId)
+                .map((row, meta) -> row.get("task_id", UUID.class)).one().block();
     }
 
     @Test
     void aDownloadKilledMidTransferResumesAtTheSameStep_notFromScratch() {
         UUID id = insert("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
         DownloadTask claimed = repository.claimDueTasks(10, "dead", NOW, LEASE, true).blockFirst();
 
         // The dead process had got as far as polling candidate 1's transfer.
-        repository.save(new DownloadTask(id, "song", DownloadPhase.DOWNLOAD_POLL, NOW,
-                NOW.plusSeconds(5), "s1",
-                com.catacomb5099.naviseerr.support.DownloadTaskFixtures.candidates("alice", "bob"),
-                1, 0, "bob", "music/bob/song.flac", "abc", null), "dead").block();
+        repository.save(claimed.toBuilder()
+                .phase(DownloadPhase.DOWNLOAD_POLL)
+                .nextAttemptAt(NOW.plusSeconds(5))
+                .searchId("s1")
+                .candidates(com.catacomb5099.naviseerr.support.DownloadTaskFixtures
+                        .candidates("alice", "bob"))
+                .candidateIndex(1).retryIndex(0)
+                .slskdUsername("bob").slskdFilename("music/bob/song.flac").slskdTransferId("abc")
+                .build(), "dead").block();
         // ...then took the lease and died without clearing it.
         repository.claimDueTasks(10, "dead", NOW.plusSeconds(5), LEASE, true).blockFirst();
 
@@ -70,41 +98,43 @@ class DownloadRecoveryIT {
     }
 
     @Test
-    void anInProgressDownloadThatLostItsTaskRowIsRecovered_notStrandedForever() {
-        UUID id = insert("IN_PROGRESS");   // exactly today's stranded-row state
+    void aRequestWhoseMetadataCallDiedIsStillPending_soTheNextPassRetriesIt() {
+        // The crash window admission gained when it stopped being one statement: the select ran,
+        // the ytmusic-adapter call was in flight, the process died. The row has to be untouched, or
+        // the next pass cannot pick it up.
+        UUID id = insert("PENDING");
+        repository.admitDownloads(10).collectList().block();
 
-        repository.admitNewDownloads(10, NOW).block();
-
-        DownloadTask recovered = repository.claimDueTasks(10, "a", NOW, LEASE, true).blockFirst();
-        assertNotNull(recovered);
-        assertEquals(id, recovered.downloadId());
-        assertEquals(DownloadPhase.SEARCH_INIT, recovered.phase());
+        assertEquals("PENDING", statusOf(id));
+        assertEquals(1, repository.admitDownloads(10).collectList().block().size(),
+                "a request that never got its metadata must remain admissible");
     }
 
     @Test
     void aTerminalDownloadIsNeverReadmitted() {
         insert("SUCCEEDED");
 
-        assertEquals(0L, repository.admitNewDownloads(10, NOW).block());
+        assertTrue(repository.admitDownloads(10).collectList().block().isEmpty());
         assertEquals(0L, repository.countActiveTransfers().block());
     }
 
     @Test
     void aDownloadReachingTerminalTwiceKeepsItsFirstOutcome() {
         UUID id = insert("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
+        UUID taskId = taskIdOf(id);
 
-        downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishDownload(id, DownloadStatus.FAILED,
+        downloadService.finishTask(taskId, DownloadStatus.SUCCEEDED, null, NOW).block();
+        downloadService.finishTask(taskId, DownloadStatus.FAILED,
                 DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
+        repository.concludeDownloads().block();
 
-        assertEquals("SUCCEEDED", template.getDatabaseClient()
-                .sql("SELECT status FROM downloads WHERE download_id = :id").bind("id", id)
-                .map((row, meta) -> row.get("status", String.class)).one().block());
-        // The task row keeps the first outcome too, rather than being overwritten by the duplicate.
-        // The livelock this guard used to prevent by writing unconditionally is now handled by the
-        // other half of it -- "or the task is still non-terminal" -- which a duplicate finish does not
-        // satisfy but an orphaned task does. See DownloadService.FINISH_DOWNLOAD_SQL.
+        assertEquals("SUCCEEDED", statusOf(id));
+        // The task row keeps the first outcome, rather than being overwritten by the duplicate.
+        // The guard is now just "still non-terminal": the livelock its second half used to prevent
+        // (a download going terminal by a path that never marked its task) cannot happen any more,
+        // because the download's status is derived FROM the task rows rather than written beside
+        // them. See DownloadService.FINISH_TASK_SQL and DownloadTaskRepository.CONCLUDE_SQL.
         assertEquals("SUCCEEDED", template.getDatabaseClient()
                 .sql("SELECT phase FROM download_tasks WHERE download_id = :id").bind("id", id)
                 .map((row, meta) -> row.get("phase", String.class)).one().block(),
@@ -114,8 +144,8 @@ class DownloadRecoveryIT {
     @Test
     void aFinishedDownloadIsNeverSteppedAgain() {
         UUID id = insert("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
-        downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
+        admit(id);
+        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
 
         // Far in the future, so next_attempt_at is long past. Only the terminal-phase filter and
         // the partial index stop this row coming back.

@@ -12,6 +12,7 @@ import org.springframework.test.context.TestPropertySource;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -41,17 +42,33 @@ class DownloadTaskProgressIT {
     private UUID insertDownload(String status) {
         UUID id = UUID.randomUUID();
         template.getDatabaseClient()
-                .sql("INSERT INTO downloads (download_id, song_name, status, created_at) "
-                        + "VALUES (:id, 'song', :status, now())")
+                .sql("INSERT INTO downloads (download_id, youtube_id, download_type, status, created_at) "
+                        + "VALUES (:id, 'yt-1', 'SONG', :status, now())")
                 .bind("id", id).bind("status", status)
                 .fetch().rowsUpdated().block();
         return id;
     }
 
+    /**
+     * The other half of admission: the runner's ytmusic-adapter call sits between
+     * {@code admitDownloads} and {@code createTasks}, so fixtures do what the runner does.
+     */
+    private void admit(UUID downloadId) {
+        repository.createTasks(downloadId,
+                List.of(DownloadTask.initial(downloadId, "yt-1", "song", NOW)), NOW).block();
+    }
+
+    private UUID taskIdOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT task_id FROM download_tasks WHERE download_id = :id")
+                .bind("id", downloadId)
+                .map((row, meta) -> row.get("task_id", UUID.class)).one().block();
+    }
+
     @Test
     void newTask_startsAtZeroProgress() {
         UUID id = insertDownload("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
 
         assertEquals(0, progressOf(id).compareTo(BigDecimal.ZERO));
     }
@@ -59,7 +76,7 @@ class DownloadTaskProgressIT {
     @Test
     void save_roundTripsProgress() {
         UUID id = insertDownload("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
                 .blockFirst();
 
@@ -73,7 +90,7 @@ class DownloadTaskProgressIT {
     @Test
     void save_onlyAppliesWhileTheCallerHoldsTheLease() {
         UUID id = insertDownload("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
                 .blockFirst();
 
@@ -87,10 +104,10 @@ class DownloadTaskProgressIT {
     @Test
     void save_neverAppliesToATerminalRow() {
         UUID id = insertDownload("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
                 .blockFirst();
-        downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
+        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
 
         Long rowsUpdated = repository.save(claimed.withProgress(new BigDecimal("50.00")), "a").block();
 
@@ -99,28 +116,28 @@ class DownloadTaskProgressIT {
     }
 
     @Test
-    void finishDownload_succeeded_normalisesProgressToOneHundred() {
+    void finishTask_succeeded_normalisesProgressToOneHundred() {
         UUID id = insertDownload("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
                 .blockFirst();
         repository.save(claimed.withProgress(new BigDecimal("87.00")), "a").block();
 
-        downloadService.finishDownload(id, DownloadStatus.SUCCEEDED, null, NOW).block();
+        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
 
         assertEquals(0, progressOf(id).compareTo(new BigDecimal("100.00")),
                 "a succeeded download reads 100%, regardless of the last observed transfer percentage");
     }
 
     @Test
-    void finishDownload_failed_keepsTheLastObservedProgress() {
+    void finishTask_failed_keepsTheLastObservedProgress() {
         UUID id = insertDownload("PENDING");
-        repository.admitNewDownloads(10, NOW).block();
+        admit(id);
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
                 .blockFirst();
         repository.save(claimed.withProgress(new BigDecimal("62.00")), "a").block();
 
-        downloadService.finishDownload(id, DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
+        downloadService.finishTask(taskIdOf(id), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
 
         assertEquals(0, progressOf(id).compareTo(new BigDecimal("62.00")),
                 "unsettled per the ADR: FAILED is deliberately not forced to 100");

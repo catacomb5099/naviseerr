@@ -1,6 +1,9 @@
 package com.catacomb5099.naviseerr.services.ytmusic;
 
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicDetailResponse;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicSearchResponse;
 import com.catacomb5099.naviseerr.util.YtMusicSearchResponseMapper;
 import com.catacomb5099.naviseerr.util.networkcalls.ReactivePoller;
@@ -29,6 +32,9 @@ public class YtMusicService {
     private static final String QUERY_PARAM = "q";
     private static final String LIMIT_PARAM = "limit";
     private static final String MIXED_SEARCH_LABEL = "mixed";
+    private static final String SONG_PATH_PREFIX = "/v1/songs/";
+    private static final String ALBUM_PATH_PREFIX = "/v1/albums/";
+    private static final String PLAYLIST_PATH_PREFIX = "/v1/playlists/";
 
     private final WebClient ytMusicWebClient;
 
@@ -81,16 +87,121 @@ public class YtMusicService {
                 query);
     }
 
+    /**
+     * Resolves one {@code videoId} to the name and artists a Soulseek query is worded from. This is
+     * what turns the opaque id a download request carries into something searchable, and it is the
+     * only reason the download pipeline talks to this provider at all.
+     */
+    public Mono<YoutubeSongInfo> getSongInfo(String id) {
+        return execute(uriBuilder -> uriBuilder.path(SONG_PATH_PREFIX + id).build(),
+                        YtMusicDetailResponse.Song.class, "song", id)
+                .map(song -> new YoutubeSongInfo(
+                        song.getVideoId() == null ? id : song.getVideoId(),
+                        // getSong()'s `author` is one string, not a list -- flattened here so callers
+                        // never have to know which of the two provider shapes a song came from.
+                        song.getAuthor() == null ? List.of() : List.of(song.getAuthor()),
+                        song.getTitle(),
+                        song.getThumbnailUrl() == null ? fallbackThumbnail(id) : song.getThumbnailUrl(),
+                        song.getLengthSeconds()));
+    }
+
+    /**
+     * YouTube serves a thumbnail for every videoId at a predictable URL, whether or not the adapter
+     * handed us one. Used only when it did not: a track inside a playlist has no artwork of its own in
+     * the adapter's response, and fetching each track individually would turn one metadata call into
+     * hundreds. For a YouTube Music track this is the album art letterboxed into a 4:3 frame -- not
+     * pretty, but a picture rather than a blank. A later single-song request for the same id upserts
+     * the real artwork over it.
+     */
+    static String fallbackThumbnail(String videoId) {
+        return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
+    }
+
+    /**
+     * One generic collection type for albums and playlists — see {@link YoutubeCollectionInfo} for
+     * why they are not split. Both are one GET returning a track list.
+     */
+    public Mono<YoutubeCollectionInfo> getAlbumInfo(String id) {
+        return execute(uriBuilder -> uriBuilder.path(ALBUM_PATH_PREFIX + id).build(),
+                        YtMusicDetailResponse.Collection.class, "album", id)
+                .map(album -> toCollectionInfo(album, id));
+    }
+
+    public Mono<YoutubeCollectionInfo> getPlaylistInfo(String id) {
+        return execute(uriBuilder -> uriBuilder.path(PLAYLIST_PATH_PREFIX + id).build(),
+                        YtMusicDetailResponse.Collection.class, "playlist", id)
+                .map(playlist -> toCollectionInfo(playlist, id));
+    }
+
+    /**
+     * Folds the album and playlist shapes into one. An album reports {@code browseId} and an
+     * {@code artists[]}; a playlist reports {@code id} and a single {@code author}. Falling back to
+     * the requested id keeps the record's id non-null even when the adapter omits its own.
+     *
+     * <p>A track the provider marks {@code isAvailable: false} is dropped: it is region-blocked or
+     * deleted, so creating a task row for it would spend a full search budget to fail. Only an
+     * explicit {@code false} counts — album responses leave the field null.
+     *
+     * <p>Artwork: an album's tracks ARE that album, so they inherit its cover. A playlist's tracks
+     * come from anywhere, so giving them the playlist's cover would be wrong; they get YouTube's
+     * per-video thumbnail instead ({@link #fallbackThumbnail}). The two cases are told apart by
+     * which id field the adapter filled in.
+     */
+    private YoutubeCollectionInfo toCollectionInfo(YtMusicDetailResponse.Collection collection,
+                                                   String requestedId) {
+        String id = collection.getBrowseId() != null ? collection.getBrowseId()
+                : collection.getId() != null ? collection.getId() : requestedId;
+        List<String> authors = collection.getArtists() != null
+                ? names(collection.getArtists())
+                : collection.getAuthor() == null ? List.of() : names(List.of(collection.getAuthor()));
+        boolean isAlbum = collection.getBrowseId() != null;
+        List<YoutubeSongInfo> songs = collection.getTracks() == null ? List.of()
+                : collection.getTracks().stream()
+                        .filter(track -> !Boolean.FALSE.equals(track.getIsAvailable()))
+                        .map(track -> new YoutubeSongInfo(track.getVideoId(),
+                                names(track.getArtists()), track.getTitle(),
+                                isAlbum && collection.getThumbnailUrl() != null
+                                        ? collection.getThumbnailUrl()
+                                        : track.getVideoId() == null ? null
+                                        : fallbackThumbnail(track.getVideoId()),
+                                track.getDurationSeconds()))
+                        .toList();
+        return new YoutubeCollectionInfo(id, songs,
+                collection.getYear() == null ? null : String.valueOf(collection.getYear()),
+                collection.getTitle(), authors, collection.getThumbnailUrl());
+    }
+
+    private static List<String> names(List<YtMusicSearchResponse.ArtistRef> artists) {
+        return artists == null ? List.of() : artists.stream()
+                .map(YtMusicSearchResponse.ArtistRef::getName)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
     private Mono<SearchResponse> executeSearch(Function<UriBuilder, URI> uriFunction, String label, String query) {
-        return ytMusicWebClient.get()
-                .uri(uriFunction)
-                .retrieve()
-                .onStatus(HttpStatusCode::isError, this::translateError)
-                .bodyToMono(YtMusicSearchResponse.class)
+        return execute(uriFunction, YtMusicSearchResponse.class, label, query)
                 .doOnNext(response -> log.debug(
                         "ytmusic-adapter responded for type={} query='{}': reportedType={}, count={}, items={}",
                         label, query, response.getType(), response.getCount(),
                         summarizeItems(response.getItems())))
+                .map(YtMusicSearchResponseMapper::mapToSearchResponse);
+    }
+
+    /**
+     * The one request pipeline every adapter call goes through: timeout, typed error translation,
+     * and retry on availability failures only. Extracted from {@code executeSearch} when the
+     * metadata calls above were added — AGENTS.md names this handling the pattern new provider
+     * calls should follow, and the only way to follow it is to not write it twice.
+     *
+     * @param subject what is being asked for (a query, or an id), for the log lines only
+     */
+    private <T> Mono<T> execute(Function<UriBuilder, URI> uriFunction, Class<T> bodyType,
+                                String label, String subject) {
+        return ytMusicWebClient.get()
+                .uri(uriFunction)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::translateError)
+                .bodyToMono(bodyType)
                 .timeout(Duration.ofMillis(timeoutMs))
                 // Any failure that isn't already one of our typed exceptions (client-side
                 // timeout, connection refused, decode failure) is a provider-availability
@@ -103,13 +214,12 @@ public class YtMusicService {
                 .retryWhen(ReactivePoller.defaultBackoff(Duration.ofMillis(firstBackOffDurationMs), retryCount)
                         .filter(YtMusicUnavailableException.class::isInstance)
                         .doBeforeRetry(signal -> log.warn(
-                                "Retrying ytmusic-adapter request for type={} query='{}' (attempt {}) after: {}",
-                                label, query, signal.totalRetries() + 1, signal.failure().getMessage()))
+                                "Retrying ytmusic-adapter request for type={} subject='{}' (attempt {}) after: {}",
+                                label, subject, signal.totalRetries() + 1, signal.failure().getMessage()))
                         // Reactor's default exhaustion behavior wraps the last failure in an
                         // IllegalStateException; unwrap it so callers only ever see
                         // YtMusicException subtypes, retried or not.
-                        .onRetryExhaustedThrow((spec, signal) -> signal.failure()))
-                .map(YtMusicSearchResponseMapper::mapToSearchResponse);
+                        .onRetryExhaustedThrow((spec, signal) -> signal.failure()));
     }
 
     /**
@@ -134,7 +244,14 @@ public class YtMusicService {
         if (statusCode == 400 || statusCode == 422 || statusCode == 500) {
             return new YtMusicBadRequestException(message);
         }
-        // 429/502/504/404 and any other unlisted status: provider failed or is unreachable.
+        // 404: the adapter looked and YouTube Music has no such video/album/playlist. Non-retryable
+        // in the same sense as a 400 -- retrying cannot make the id exist, and the metadata calls
+        // above lean on that distinction to tell "fail this download now" from "try again next
+        // pass". Without it, one mistyped id is re-requested every loop interval, forever.
+        if (statusCode == 404) {
+            return new YtMusicBadRequestException(message);
+        }
+        // 429/502/504 and any other unlisted status: provider failed or is unreachable.
         return new YtMusicUnavailableException(message);
     }
 

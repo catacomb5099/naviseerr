@@ -45,7 +45,7 @@ Prefer putting genuinely new state in a new table over altering an existing one.
 
 ## Current Implementation State
 
-The durable state machine described in "Download Manager Architecture" below is now built, not just targeted. Remaining gaps (collections, cancellation, SSE) are called out explicitly below.
+The durable state machine described in "Download Manager Architecture" below is now built, not just targeted. Collection downloads landed on 14-09-2026 — see [the ADR](docs/decisions/collection-downloads-14-09-2026.md). Download metadata (a `media_items` table, artwork, lifecycle timestamps, and the per-song view `GET /downloads/{id}`) landed on 25-09-2026 — see [that ADR](docs/decisions/download-metadata-25-09-2026.md). Remaining gaps (cancellation, SSE) are called out explicitly below.
 
 The current application is a small Java REST/WebFlux service that:
 
@@ -54,33 +54,43 @@ The current application is a small Java REST/WebFlux service that:
   [compose.yaml](compose.yaml)), for track, album, and artist search. LastFM previously filled this
   role; its client code still compiles but is no longer called — see
   [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md).
-- Accepts `POST /download/{songName}`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread).
+- Accepts `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread). The request carries a **YouTube id and a type**, not a name — the server resolves what the id is, from `ytmusic-adapter`, when the loop admits it.
 - Runs a durable, Postgres-backed download state machine that turns those rows into real slskd downloads (see "Download Execution Flow" below) and survives a restart mid-download — nothing about a download's position is held in the JVM heap.
 - Calls slskd to search Soulseek, select candidates, enqueue downloads, poll to completion, and retry/fail over across candidates, driven by `DownloadStateMachine` — a pure function (no fields, no I/O, no clock of its own) that maps `(task, slskd response, now)` to one of three decisions.
 - Persists a terminal `SUCCEEDED`/`FAILED` status per download once the state machine reaches a success/fail state.
 
-Two tables live in `com.catacomb5099.naviseerr.download`:
+Three tables live in `com.catacomb5099.naviseerr.download`. As of V5 the relationship between the first two is **one download to N tasks** — one task per song; as of V6 neither of them holds a title or a picture, `media_items` does:
 
-- `downloads` (`download_id UUID`, `song_name TEXT`, `status TEXT CHECK (...)`, `created_at TIMESTAMPTZ`) — the low-churn, user-facing record that history queries read. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale).
-- `download_tasks` (`download_id UUID PRIMARY KEY REFERENCES downloads`, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`, `progress_percent NUMERIC(5,2)`) — the working state of one download's pipeline, written every few seconds. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+- `downloads` (`download_id UUID`, `youtube_id TEXT NOT NULL`, `download_type TEXT CHECK (SONG|ALBUM|PLAYLIST)`, `status TEXT CHECK (...)`, `failure_reason TEXT`, `created_at`/`admitted_at`/`finished_at TIMESTAMPTZ`) — one user REQUEST and its lifecycle, nothing about what was requested beyond the id. The low-churn, user-facing record that history queries read, written at request, at admission, and at conclusion. Status values are enforced at the DB level via a `CHECK` constraint rather than a native Postgres enum (see decisions doc for rationale); `PARTIAL_SUCCESS` is in that set and is reachable only for a collection. `failure_reason` is written only by `failUnadmitted`, for the one failure (ytmusic-adapter cannot resolve the id) that happens before any task row exists to carry it.
+- `media_items` (`youtube_id TEXT PRIMARY KEY`, `title`, `artists TEXT[]`, `image_url`, `duration_seconds` (songs), `track_count` (collections), `fetched_at`) — what a YouTube id IS: the name and picture every read endpoint shows. One row per id, songs and collections alike, written by admission from the adapter response (the download's own id plus every track's) and upserted on every later answer, never blanked. Every feed query `LEFT JOIN`s it through `downloads.youtube_id`; a QUEUED download has no row yet and reports a null title, which is the honest state. `download_tasks.youtube_id` joins it for the per-song view.
+- `download_tasks` (`task_id UUID PRIMARY KEY`, `download_id UUID REFERENCES downloads`, `youtube_id TEXT`, `song_name TEXT`, `position INT`, `phase`, `phase_entered_at`, `next_attempt_at`, `lease_owner`/`lease_expires_at`, `search_id`, `candidates` as JSON, `candidate_index`, `retry_index`, `slskd_username`/`slskd_filename`/`slskd_transfer_id`, `finished_at`, `failure_reason`, `progress_percent NUMERIC(5,2)`) — the working state of ONE SONG's pipeline, written every few seconds. A song request has one row; a ten-track album has ten, with `position` recording track order. **`download_tasks.song_name` is the Soulseek query wording, `"Title - Primary Artist"`, not a display title** — the string the client used to send before requests became ids, and the shape `TrackMatchingService` still splits on. The per-song display title is `media_items.title`. Rows are **retained** once terminal (`SUCCEEDED`/`FAILED`), never deleted — so a self-hoster can see which peers were tried and how each failed. A partial index on `next_attempt_at` (covering only non-terminal rows) keeps the due-work query fast regardless of how much history accumulates.
+
+`download_id` was `download_tasks`'s primary key before V5; that was the 1:1 assumption collections removed. Every statement that acts on one song's state (`CLAIM_DUE_SQL`, `SAVE_SQL`, `FINISH_TASK_SQL`) now keys on `task_id`. Keying any of them on `download_id` would step every song of an album on one song's slskd response.
 
 `progress_percent` (0-100, everywhere, no exceptions) is written by `DownloadStateMachine.afterDownloadPoll` from slskd's `percentComplete` on the same `Continue`/`Advance` write every other field rides on — no separate statement, no new write volume. It is reset to zero on retry or candidate failover (a resumed transfer is a new transfer, not a continuation), left untouched when a transfer is briefly absent from the batched response (an absent source value must never overwrite a real one), and normalised to exactly `100` on `SUCCEEDED` by `DownloadService.finishDownload`'s CTE. `FAILED` deliberately keeps its last observed value rather than being forced to either end — see `docs/decisions/download-progress-reporting-17-08-2026.md`. `DownloadTaskRepository.save` now takes `(task, owner)` and only writes when the row is still non-terminal **and** still held by that owner's lease — the guard that was missing before this landed.
 
-The client-facing feed is `GET /downloads/active` plus `GET /downloads?ids=` (`DownloadController` + `ActiveDownloadRepository`). Three things about it are load-bearing and easy to undo by accident:
+The client-facing feed is `GET /downloads/active` plus `GET /downloads?ids=` and the paged `GET /downloads/all` (`DownloadController` + `ActiveDownloadRepository`). It reports **one row per download, never one per song** — its three queries aggregate over the task rows (`ActiveDownloadRepository.TASK_AGGREGATE`), because a plain join emits a ten-track album as ten cards sharing one `downloadId`. For a single-song download every aggregate is over one row and returns that row's own value. A collection reports the **least advanced** song's stage (it is still "searching" while any track is), the **mean** progress across its songs, and `songCount`/`songsSucceeded`/`songsFailed` so a card can say "7 of 12". The per-song breakdown is `GET /downloads/{id}` (`ActiveDownloadRepository.findSongs`), which shows the task rows as themselves, in `position` order, with the pipeline's bookkeeping (candidate count/index, retry index, peer, filename, last slskd error) on the wire for the self-hoster. Four things about the feed are load-bearing and easy to undo by accident:
 
 - It reports a computed **`DownloadStage`**, never `downloads.status` or `download_tasks.phase`. `ActiveDownloadRepository.toStage` is the single place they are combined. Do not add `phase` to the wire — the `phase` CHECK constraint admits `'SUCCEEDED'`/`'FAILED'`, which the four-value `DownloadPhase` enum cannot parse, and `toStage` is what keeps that off the read path.
 - The live branch **LEFT JOINs** `download_tasks`, so a download the runner has not admitted yet is reported as `QUEUED` rather than being invisible. Both of its timestamps `COALESCE` to `downloads.created_at` for the same reason.
+- The terminal branch's status filter must include `PARTIAL_SUCCESS`, or a collection that half-succeeded finishes and is then never reported at all.
 - Finished downloads keep appearing for `download-task.terminal-retention-ms`. **Without that window the client never learns any outcome at all** — the row vanishes the instant it finishes. `GET /downloads?ids=` is the escape hatch past the window and ignores every filter; an id absent from *that* response is the only signal that a download does not exist.
 
-`failure_reason` stores a `DownloadFailureCode` **name**, not prose — the client owns the wording. `DownloadService.finishDownload` is idempotent: its task write applies when the CTE won the row **or** the task is still non-terminal, so a duplicate finish cannot re-stamp `finished_at` (which would drag a long-finished row back into the retention window) while an orphaned task is still closed out. `updated_at` is written with SQL `now()` on purpose; see the ADR addendum.
+`failure_reason` stores a `DownloadFailureCode` **name**, not prose — the client owns the wording. `DownloadService.finishTask` is idempotent: it applies only while the task is still non-terminal, so a duplicate finish cannot re-stamp `finished_at` (which would drag a long-finished row back into the retention window). `updated_at` is written with SQL `now()` on purpose; see the ADR addendum.
+
+**A download's status is derived from its task rows, not written beside them.** `finishTask` settles one song; `DownloadTaskRepository.concludeDownloads` is a separate idempotent statement, run at the end of every pass, that gives a download its terminal status once every one of its tasks is terminal (`PARTIAL_SUCCESS` when there is at least one success and at least one failure). Do not try to fold it back into the per-task write. Two songs of one download finishing concurrently would each read a snapshot in which the other is still running, so neither would conclude, and the download would sit `IN_PROGRESS` forever with every song finished — and a data-modifying CTE cannot see the effect of its own write, so a bigger statement does not fix it. Deriving it in the loop is the level-triggered rule this design already rests on: a missed conclusion costs one interval, not a download.
 
 ### Download Execution Flow
 
 One level-triggered loop, `DownloadTaskRunner`, ticking every `download-task.loop-interval-ms`. Each pass runs admit, then claim, then step:
 
-1. **Admit** — `DownloadTaskRepository.admitNewDownloads` is one atomic statement: it finds non-terminal `downloads` rows with no `download_tasks` row, inserts one at `SEARCH_INIT`, and flips `downloads.status` to `IN_PROGRESS`. Bounded by `max-concurrent-downloads`, which counts `downloads` rows, not tasks — a 500-song collection is one in-flight download, so it cannot starve admission for everything else.
+1. **Admit** — two halves, with an HTTP call between them, because what task rows a download needs is a question only `ytmusic-adapter` can answer. `DownloadTaskRepository.admitDownloads` selects `PENDING` rows with no task row and **writes nothing**; `DownloadTaskRunner.gatherMetadata` then calls the adapter (`/v1/songs/{id}`, `/v1/albums/{id}` or `/v1/playlists/{id}` per `download_type`) and `createTasks` inserts one task row per song and flips `downloads.status` to `IN_PROGRESS` in one statement. A crash in between leaves the row exactly as it was and the next pass retries it — which is the only reason admission can safely stop being a single statement. Bounded by `max-concurrent-downloads`, which counts `downloads` rows, not tasks — a 500-song collection is one in-flight download, so it cannot starve admission for everything else.
+   - A metadata failure is classified, not retried blindly: a `YtMusicBadRequestException` (400/422/**404**) fails the download with `METADATA_UNAVAILABLE`, because retrying cannot make an id exist and a row left `PENDING` would be re-requested every loop interval forever. Anything else (a `YtMusicUnavailableException` — timeout, 502/503, connection refused) leaves it `PENDING` for the next pass, so a sidecar restart does not fail every download requested while it was down.
 2. **Claim** — `claimDueTasks` claims due, unleased, non-terminal task rows (`FOR UPDATE SKIP LOCKED`, stamping a lease) up to `batch-size`. `DOWNLOAD_INIT` rows are excluded from the claim entirely once `max-concurrent-transfers` has no free slot, so a large collection sitting at `DOWNLOAD_INIT` cannot spend every pass being claimed and re-deferred. Polling an already-running search or transfer is never gated.
-3. **Step** — `DownloadStepExecutor` makes the one slskd call each phase needs (`SEARCH_INIT`/`DOWNLOAD_INIT` call slskd directly; `SEARCH_POLL`/`DOWNLOAD_POLL` read from two lists — `GET /searches` and `GET /transfers/downloads` — fetched once per pass and only when a claimed row actually needs one) and hands the response to `DownloadStateMachine`, which returns `Advance` (phase transition, re-run next pass immediately), `Continue` (re-poll/retry after the phase's poll interval), or `Terminal` (finish the download and mark the task row terminal in one atomic CTE — `DownloadService.finishDownload`). Rows claimed within a pass are stepped concurrently (`flatMap`); passes themselves stay serialised (`concatMap`).
+3. **Conclude** — `concludeDownloads` runs last and unconditionally; see the note above.
+4. **Step** — `DownloadStepExecutor` makes the one slskd call each phase needs (`SEARCH_INIT`/`DOWNLOAD_INIT` call slskd directly; `SEARCH_POLL`/`DOWNLOAD_POLL` read from two lists — `GET /searches` and `GET /transfers/downloads` — fetched once per pass and only when a claimed row actually needs one) and hands the response to `DownloadStateMachine`, which returns `Advance` (phase transition, re-run next pass immediately), `Continue` (re-poll/retry after the phase's poll interval), or `Terminal` (finish the download and mark the task row terminal in one atomic CTE — `DownloadService.finishDownload`). Rows claimed within a pass are stepped concurrently (`flatMap`); passes themselves stay serialised (`concatMap`).
+
+(Read the numbering as admit, claim, step, conclude — step 3 above runs after step 4's claim/step pair within `DownloadTaskRunner.pass()`, so a download whose last song finishes in a pass reports its outcome on the same tick.)
 
 A lease (`lease_owner` + `lease_expires_at`) does two jobs: it stops a second pass double-stepping a row whose slskd call is still outstanding, and its expiry is what lets any process pick up a dead process's row — no reaper needed. Full detail (DDL, per-phase intervals/budgets, the recovery walkthrough) lives in [download-manager.md](docs/architecture/download-manager.md).
 
@@ -88,7 +98,7 @@ The current application does not have:
 
 - SSE/WebSocket progress streaming.
 - User accounts, JWT handling, or authorization.
-- Collection/playlist download orchestration.
+- Cancellation, `CANCELLED`, or `SKIPPED`.
 - Redis or RabbitMQ — **rejected**, not merely absent. Postgres is the workflow engine, indefinitely; see `docs/decisions/durable-download-state-machine-13-08-2026.md`.
 
 Current endpoints:
@@ -97,9 +107,12 @@ Current endpoints:
 - `GET /search/{query}/tracks` — track search
 - `GET /search/{query}/albums` — album search
 - `GET /search/{query}/artists` — artist search
-- `POST /download/{songName}` — inserts a `PENDING` download row, returns `202 Accepted`; processed asynchronously by the download execution flow
-- `GET /downloads/active` — every non-terminal download plus every one finished within `terminal-retention-ms`, most-recently-updated first, as `{downloadId, songName, stage, progressPercent, stageEnteredAt, updatedAt, failureCode}` plus `pollIntervalMs` and `terminalRetentionMs`; the client polls this, no SSE
+- `POST /download/song/{videoId}` — inserts a `PENDING` download row of type `SONG`, returns `202 Accepted`; processed asynchronously by the download execution flow
+- `POST /download/collection/{id}?type=ALBUM|PLAYLIST` — the same, for every track of an album or playlist as ONE download. `type` is required rather than inferred from the id: albums and playlists are two different adapter endpoints, and guessing from an id prefix is a heuristic that silently breaks the first time YouTube changes one. `type=SONG` is rejected with 400 — a single track has its own route
+- `GET /downloads/active` — every non-terminal download plus every one finished within `terminal-retention-ms`, most-recently-updated first, as `{downloadId, youtubeId, downloadType, title, artists, imageUrl, stage, progressPercent, songCount, songsSucceeded, songsFailed, requestedAt, stageEnteredAt, updatedAt, finishedAt, failureCode}` plus `pollIntervalMs` and `terminalRetentionMs`; the client polls this, no SSE
 - `GET /downloads?ids=a,b,c` — the same shape for specific ids, ignoring both the terminal filter and the retention window (max 100 ids). Lets a client reconcile cards it held across a restart; absent ids are omitted, not 404'd
+- `GET /downloads/all?pageSize=&pageNumber=` — the same shape, paginated over every download ever, newest first; the history table
+- `GET /downloads/{id}` — one download as `{download, songs[]}`: the feed card plus every song in track order as `{taskId, youtubeId, position, title, artists, imageUrl, durationSeconds, stage, progressPercent, failureCode, stageEnteredAt, updatedAt, finishedAt, candidateCount, candidateIndex, retryIndex, slskdUsername, slskdFilename, lastError}`. 404 for an unknown id; `songs` is empty, not absent, for a download not yet admitted
 
 ## Deeper Context (docs/architecture)
 
@@ -170,8 +183,9 @@ The current authoritative design lives in `docs/superpowers/specs/2026-08-13-dur
 Expected core entities:
 
 - `Song`: metadata plus discovered download links and validity windows.
-- `Download`: one song download for one user, optionally attached to a collection.
-- `CollectionDownload`: a batch/playlist-style download with per-song counts and aggregate status.
+- `Download`: **exists**. One user request — a song, an album, or a playlist — identified by a YouTube id and a `DownloadType`, plus its lifecycle timestamps.
+- `MediaItem`: **exists**, as the `media_items` row. What a YouTube id is: title, artists, artwork. Shared by songs and collections and by every download that points at the same id.
+- `DownloadTask`: **exists**. One song's pipeline position. N per `Download`; this is what `CollectionDownload` turned out to be, rather than a third table.
 
 Likely statuses:
 
@@ -181,7 +195,7 @@ Likely statuses:
 - `Failed`
 - `Cancelled`
 - `Skipped`
-- `PartialSuccess` for collections
+- `PartialSuccess` for collections — **exists**, as `PARTIAL_SUCCESS`
 
 Cancellation should be treated as a first-class action. Prefer correctness and eventual consistency over directly mutating/removing queued work in ways that can race with a completed download.
 
