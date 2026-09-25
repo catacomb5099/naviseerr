@@ -34,6 +34,7 @@ class DownloadTaskRepositoryIT {
     void clean() {
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
+        template.getDatabaseClient().sql("DELETE FROM media_items").fetch().rowsUpdated().block();
     }
 
     private UUID insertDownload(String status) {
@@ -58,7 +59,7 @@ class DownloadTaskRepositoryIT {
         List<DownloadTask> tasks = Arrays.stream(songNames)
                 .map(name -> DownloadTask.initial(downloadId, "yt-" + name, name, NOW))
                 .toList();
-        return repository.createTasks(downloadId, songNames[0], tasks, NOW).block();
+        return repository.createTasks(downloadId, tasks, NOW).block();
     }
 
     private UUID admitOneSong(String status) {
@@ -122,9 +123,64 @@ class DownloadTaskRepositoryIT {
         assertEquals(1L, admitted, "one download was admitted, whatever its song count");
         assertEquals(3L, countTaskRows());
         assertEquals("IN_PROGRESS", statusOf(id));
-        // The collection's own title, not any one song's -- this is what the client renders.
-        assertEquals("track one", songNameOf(id));
+        assertEquals(NOW, admittedAtOf(id), "admission is the first lifecycle timestamp after the request");
         assertEquals(List.of("SEARCH_INIT", "SEARCH_INIT", "SEARCH_INIT"), phasesOf(id));
+    }
+
+    @Test
+    void createTasks_recordsEachSongsPositionInTheOrderGiven() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "zeta", "alpha", "mid");
+
+        // Track order, not alphabetical: the per-song view must list an album the way the album is.
+        List<String> byPosition = template.getDatabaseClient()
+                .sql("SELECT song_name FROM download_tasks WHERE download_id = :id ORDER BY position")
+                .bind("id", id)
+                .map((row, meta) -> row.get("song_name", String.class)).all().collectList().block();
+        assertEquals(List.of("zeta", "alpha", "mid"), byPosition);
+    }
+
+    // ---- media_items ---------------------------------------------------------------------------
+
+    @Test
+    void upsertMedia_roundTripsEveryFieldIncludingTheArtistArray() {
+        repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall", List.of("Oasis", "Noel"),
+                "https://img/1.jpg", 259, null))).block();
+
+        assertEquals("Wonderwall", mediaField("v1", "title"));
+        assertEquals("https://img/1.jpg", mediaField("v1", "image_url"));
+        assertEquals(List.of("Oasis", "Noel"), mediaArtists("v1"));
+    }
+
+    @Test
+    void upsertMedia_refreshesARow_butNeverReplacesAValueWithNull() {
+        repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall", List.of("Oasis"),
+                "https://img/1.jpg", 259, null))).block();
+
+        // A playlist listing the same track knows its title but not its artwork or length.
+        repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall (Remastered)", List.of(),
+                null, null, null))).block();
+
+        assertEquals("Wonderwall (Remastered)", mediaField("v1", "title"));
+        assertEquals("https://img/1.jpg", mediaField("v1", "image_url"),
+                "a less complete answer must not blank a picture we already had");
+        assertEquals(List.of("Oasis"), mediaArtists("v1"));
+    }
+
+    @Test
+    void upsertMedia_toleratesTheSameIdTwiceInOneBatch() {
+        // A playlist can list one track twice; ON CONFLICT DO UPDATE refuses to touch a row twice
+        // in one statement, so the repository has to fold them before binding.
+        assertDoesNotThrow(() -> repository.upsertMedia(List.of(
+                new MediaItem("v1", "Once", List.of(), null, null, null),
+                new MediaItem("v1", "Twice", List.of(), null, null, null))).block());
+
+        assertEquals("Once", mediaField("v1", "title"));
+    }
+
+    @Test
+    void upsertMedia_withNothingToWrite_doesNotQuery() {
+        assertEquals(0L, repository.upsertMedia(List.of()).block());
     }
 
     @Test
@@ -296,6 +352,7 @@ class DownloadTaskRepositoryIT {
 
         assertEquals(1L, repository.concludeDownloads().block());
         assertEquals("SUCCEEDED", statusOf(id));
+        assertEquals(NOW, downloadFinishedAtOf(id), "a download finished when its last song did");
     }
 
     @Test
@@ -366,20 +423,27 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
-    void failUnadmitted_failsARequestWhoseMetadataNeverArrived() {
+    void failUnadmitted_failsARequestWhoseMetadataNeverArrived_andSaysWhy() {
         UUID id = insertDownload("PENDING");
 
-        assertEquals(1L, repository.failUnadmitted(id).block());
+        assertEquals(1L, repository.failUnadmitted(id, DownloadFailureCode.METADATA_UNAVAILABLE, NOW)
+                .block());
 
         assertEquals("FAILED", statusOf(id));
         assertEquals(0L, countTaskRows(), "there was never anything to search for");
+        // The one failure with no task row to carry a reason; before this it was FAILED with no why.
+        assertEquals("METADATA_UNAVAILABLE", template.getDatabaseClient()
+                .sql("SELECT failure_reason FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> row.get("failure_reason", String.class)).one().block());
+        assertEquals(NOW, downloadFinishedAtOf(id));
     }
 
     @Test
     void failUnadmitted_doesNotTouchADownloadThatWasAlreadyAdmitted() {
         UUID id = admitOneSong("PENDING");
 
-        assertEquals(0L, repository.failUnadmitted(id).block());
+        assertEquals(0L, repository.failUnadmitted(id, DownloadFailureCode.METADATA_UNAVAILABLE, NOW)
+                .block());
         assertEquals("IN_PROGRESS", statusOf(id));
     }
 
@@ -479,10 +543,28 @@ class DownloadTaskRepositoryIT {
                 .map((row, meta) -> row.get("status", String.class)).one().block();
     }
 
-    private String songNameOf(UUID id) {
+    private Instant admittedAtOf(UUID id) {
         return template.getDatabaseClient()
-                .sql("SELECT song_name FROM downloads WHERE download_id = :id").bind("id", id)
-                .map((row, meta) -> row.get("song_name", String.class)).one().block();
+                .sql("SELECT admitted_at FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> row.get("admitted_at", Instant.class)).one().block();
+    }
+
+    private Instant downloadFinishedAtOf(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT finished_at FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> row.get("finished_at", Instant.class)).one().block();
+    }
+
+    private String mediaField(String youtubeId, String column) {
+        return template.getDatabaseClient()
+                .sql("SELECT " + column + " FROM media_items WHERE youtube_id = :id").bind("id", youtubeId)
+                .map((row, meta) -> row.get(column, String.class)).one().block();
+    }
+
+    private List<String> mediaArtists(String youtubeId) {
+        return template.getDatabaseClient()
+                .sql("SELECT artists FROM media_items WHERE youtube_id = :id").bind("id", youtubeId)
+                .map((row, meta) -> List.of(row.get("artists", String[].class))).one().block();
     }
 
     private String phaseOf(UUID id) {

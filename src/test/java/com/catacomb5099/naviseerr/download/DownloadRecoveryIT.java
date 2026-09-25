@@ -52,7 +52,7 @@ class DownloadRecoveryIT {
      * {@code admitDownloads} and {@code createTasks}, so fixtures do what the runner does.
      */
     private void admit(UUID downloadId) {
-        repository.createTasks(downloadId, "song",
+        repository.createTasks(downloadId,
                 List.of(DownloadTask.initial(downloadId, "yt-1", "song", NOW)), NOW).block();
     }
 

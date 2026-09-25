@@ -124,6 +124,24 @@ public class DownloadController {
                 .map(downloads -> ResponseEntity.ok(new DownloadsByIdResponse(downloads)));
     }
 
+    /**
+     * One download with every song under it. This is where a collection's "9 of 12" is broken down:
+     * which three, at what stage, failing how, from which peer. Aimed at the person running the
+     * instance, so it reports the pipeline's own bookkeeping rather than a summary of it.
+     *
+     * <p>The card is the same shape the feed returns, so a client can open a detail view from a card
+     * it already holds and reconcile the two without a mapping step. Songs are empty, not absent, for
+     * a download that has not been admitted yet.
+     */
+    @GetMapping("/downloads/{id}")
+    Mono<ResponseEntity<DownloadDetailView>> downloadDetail(@PathVariable UUID id) {
+        return activeDownloadRepository.findByIds(List.of(id)).next()
+                .zipWith(activeDownloadRepository.findSongs(id).collectList(),
+                        DownloadDetailView::new)
+                .map(ResponseEntity::ok)
+                .defaultIfEmpty(ResponseEntity.notFound().build());
+    }
+
     @GetMapping("/downloads/all")
     Mono<ResponseEntity<AllDownloadsResponse>> allDownloads(
             @RequestParam(defaultValue = "20") Integer pageSize,

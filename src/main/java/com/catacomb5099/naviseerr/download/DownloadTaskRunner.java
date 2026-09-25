@@ -6,6 +6,7 @@ import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -136,12 +137,10 @@ public class DownloadTaskRunner {
     private Mono<Void> gatherMetadata(Download download, Instant now) {
         return metadataFor(download)
                 .flatMap(collection -> {
-                    List<DownloadTask> tasks = collection.songs().stream()
+                    List<YoutubeSongInfo> songs = collection.songs().stream()
                             .filter(song -> song.id() != null)
-                            .map(song -> DownloadTask.initial(download.getDownloadId(), song.id(),
-                                    song.name(), now))
                             .toList();
-                    if (tasks.isEmpty()) {
+                    if (songs.isEmpty()) {
                         // A real answer that contains nothing to download: an emptied playlist, or
                         // every track region-blocked. Terminal, not retryable -- asking again gets
                         // the same empty list.
@@ -150,8 +149,23 @@ public class DownloadTaskRunner {
                                 download.getYoutubeId());
                         return fail(download, DownloadFailureCode.METADATA_UNAVAILABLE);
                     }
-                    return repository.createTasks(download.getDownloadId(), collection.name(),
-                                    tasks, now)
+                    List<DownloadTask> tasks = songs.stream()
+                            .map(song -> DownloadTask.initial(download.getDownloadId(), song.id(),
+                                    soulseekQuery(song), now))
+                            .toList();
+                    // The download's own id first, then every track. For a song the two are the
+                    // same row and the upsert folds them. Written BEFORE the task rows, so a crash
+                    // between the two leaves harmless extra metadata rather than nameless tasks;
+                    // the next pass redoes both, and the upsert is idempotent.
+                    List<MediaItem> media = new java.util.ArrayList<>();
+                    // Keyed by the id the REQUEST carried, not the one the adapter echoed back:
+                    // the feed joins on downloads.youtube_id, and the two can differ (a playlist
+                    // requested as VL... is answered as PL...).
+                    media.add(new MediaItem(download.getYoutubeId(), collection.name(),
+                            collection.authorNames(), collection.imageUrl(), null, songs.size()));
+                    songs.stream().map(MediaItem::of).forEach(media::add);
+                    return repository.upsertMedia(media)
+                            .then(repository.createTasks(download.getDownloadId(), tasks, now))
                             .doOnNext(admitted -> {
                                 if (admitted > 0) {
                                     log.info("Admitted download {} ({} '{}') as {} task(s)",
@@ -181,6 +195,19 @@ public class DownloadTaskRunner {
     }
 
     /**
+     * What slskd is asked to search for. "Title - Primary Artist" is the exact string the client
+     * used to send before requests became ids, and the shape {@code TrackMatchingService} still
+     * splits on to check both halves appear in a filename. Keeping the wording identical keeps the
+     * hit rate identical; changing how a track is worded for Soulseek is its own job, with its own
+     * test, and not this one.
+     */
+    static String soulseekQuery(YoutubeSongInfo song) {
+        return song.authorNames().isEmpty()
+                ? song.name()
+                : song.name() + " - " + song.authorNames().getFirst();
+    }
+
+    /**
      * One shape for all three types, so {@link #gatherMetadata} has no branch of its own. A song is
      * a collection of one -- which is exactly what it becomes in {@code download_tasks} anyway.
      */
@@ -189,7 +216,7 @@ public class DownloadTaskRunner {
         return switch (download.getDownloadType()) {
             case SONG -> ytMusicService.getSongInfo(id)
                     .map(song -> new YoutubeCollectionInfo(song.id(), List.of(song), null,
-                            song.name(), song.authorNames()));
+                            song.name(), song.authorNames(), song.imageUrl()));
             case ALBUM -> ytMusicService.getAlbumInfo(id);
             case PLAYLIST -> ytMusicService.getPlaylistInfo(id);
         };
@@ -197,7 +224,7 @@ public class DownloadTaskRunner {
 
     /** Fails a download that never got a task row. Nothing else can record this failure. */
     private Mono<Void> fail(Download download, DownloadFailureCode code) {
-        return repository.failUnadmitted(download.getDownloadId())
+        return repository.failUnadmitted(download.getDownloadId(), code, clock.instant())
                 .doOnNext(rows -> log.info("Download {} failed before admission ({}); rows updated: {}",
                         download.getDownloadId(), code, rows))
                 .then();

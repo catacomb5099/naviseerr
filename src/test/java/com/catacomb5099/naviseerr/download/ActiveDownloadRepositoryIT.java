@@ -36,6 +36,7 @@ class ActiveDownloadRepositoryIT {
     void clean() {
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
+        template.getDatabaseClient().sql("DELETE FROM media_items").fetch().rowsUpdated().block();
     }
 
     private UUID insertDownload(String status) {
@@ -46,10 +47,16 @@ class ActiveDownloadRepositoryIT {
         UUID id = UUID.randomUUID();
         template.getDatabaseClient()
                 .sql("INSERT INTO downloads (download_id, youtube_id, download_type, status, created_at) "
-                        + "VALUES (:id, 'yt-1', :type, :status, now())")
-                .bind("id", id).bind("type", type).bind("status", status)
+                        + "VALUES (:id, :ytId, :type, :status, now())")
+                .bind("id", id).bind("ytId", "yt-" + id).bind("type", type).bind("status", status)
                 .fetch().rowsUpdated().block();
         return id;
+    }
+
+    /** What the runner writes before the task rows: the download's own name and picture. */
+    private void describe(UUID downloadId, String title, List<String> artists, String imageUrl) {
+        taskRepository.upsertMedia(List.of(
+                new MediaItem("yt-" + downloadId, title, artists, imageUrl, null, null))).block();
     }
 
     /**
@@ -57,7 +64,10 @@ class ActiveDownloadRepositoryIT {
      * {@code admitDownloads} and this. One task row per name, so a multi-name call is a collection.
      */
     private void admit(UUID downloadId, String... songNames) {
-        taskRepository.createTasks(downloadId, songNames[0],
+        taskRepository.upsertMedia(java.util.Arrays.stream(songNames)
+                .map(name -> new MediaItem("yt-" + name, name, List.of("The Band"), null, 180, null))
+                .toList()).block();
+        taskRepository.createTasks(downloadId,
                 java.util.Arrays.stream(songNames)
                         .map(name -> DownloadTask.initial(downloadId, "yt-" + name, name, NOW))
                         .toList(),
@@ -365,6 +375,159 @@ class ActiveDownloadRepositoryIT {
 
         assertEquals(1, page.downloads().size());
         assertEquals(DownloadStage.SUCCEEDED, page.downloads().getFirst().stage());
+    }
+
+    // ---- metadata: title, artists, artwork come from media_items ------------------------------
+
+    @Test
+    void findActive_reportsTitleArtistsAndArtworkFromTheMediaRow() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        describe(album, "Definitely Maybe", List.of("Oasis"), "https://img/dm.jpg");
+        admit(album, "a", "b");
+
+        ActiveDownloadView view = active().getFirst();
+
+        assertEquals("Definitely Maybe", view.title());
+        assertEquals(List.of("Oasis"), view.artists());
+        assertEquals("https://img/dm.jpg", view.imageUrl());
+        assertEquals(DownloadType.ALBUM, view.downloadType());
+        assertEquals("yt-" + album, view.youtubeId());
+    }
+
+    @Test
+    void findActive_aQueuedDownloadHasNoTitleYet_andThatIsNotAnError() {
+        // The request carries only an id; the name arrives with admission. Reported as null, with
+        // empty artists rather than a null list, so the client renders a placeholder, not a crash.
+        insertDownload("PENDING");
+
+        ActiveDownloadView view = active().getFirst();
+
+        assertNull(view.title());
+        assertEquals(List.of(), view.artists());
+        assertEquals(0, view.songCount(), "not yet known");
+    }
+
+    @Test
+    void findActive_countsSongsAndOutcomes_soACardCanSaySevenOfTwelve() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        admit(album, "done", "gone", "running");
+        List<UUID> tasks = taskIdsOf(album);  // ordered by song_name: done, gone, running
+        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
+        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+
+        ActiveDownloadView view = active().getFirst();
+
+        assertEquals(3, view.songCount());
+        assertEquals(1, view.songsSucceeded());
+        assertEquals(1, view.songsFailed());
+        assertNull(view.finishedAt(), "one song still running: the download has not finished");
+    }
+
+    @Test
+    void findActive_reportsTheDownloadsOwnFailureReason_whenItFailedBeforeAdmission() {
+        // The one failure with no task row to carry a reason. Before downloads.failure_reason the
+        // feed showed FAILED with no code at all.
+        UUID id = insertDownload("PENDING");
+        taskRepository.failUnadmitted(id, DownloadFailureCode.METADATA_UNAVAILABLE, NOW).block();
+
+        // Not in the live branch (FAILED) and not in the recently-finished one (no task rows), so
+        // it is reached the way a client holding the card would reach it.
+        ActiveDownloadView view = activeDownloadRepository.findByIds(List.of(id)).blockFirst();
+
+        assertEquals(DownloadStage.FAILED, view.stage());
+        assertEquals("METADATA_UNAVAILABLE", view.failureCode());
+        assertEquals(NOW, view.finishedAt());
+    }
+
+    @Test
+    void findActive_carriesRequestedAndFinishedTimestamps() {
+        UUID id = insertDownload("PENDING");
+        admit(id, "song");
+        finish(id, DownloadStatus.SUCCEEDED, null);
+
+        ActiveDownloadView view = active().getFirst();
+
+        assertNotNull(view.requestedAt());
+        assertEquals(NOW, view.finishedAt(), "set by concludeDownloads from the last song's finish");
+    }
+
+    // ---- the per-song view ---------------------------------------------------------------------
+
+    @Test
+    void findSongs_listsEverySongInTrackOrder_withItsOwnStageAndMetadata() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        admit(album, "zeta", "alpha");   // track order, deliberately not alphabetical
+        moveOneSongTo(album, "alpha", DownloadPhase.DOWNLOAD_POLL);
+        setProgress(album, "alpha", "40.00");
+
+        List<DownloadSongView> songs = activeDownloadRepository.findSongs(album).collectList().block();
+
+        assertEquals(List.of("zeta", "alpha"), songs.stream().map(DownloadSongView::title).toList(),
+                "the order the provider listed them, which is the album's");
+        assertEquals(List.of(1, 2), songs.stream().map(DownloadSongView::position).toList());
+        DownloadSongView alpha = songs.get(1);
+        assertEquals(DownloadStage.DOWNLOADING, alpha.stage());
+        assertEquals(0, alpha.progressPercent().compareTo(new BigDecimal("40.00")));
+        assertEquals(List.of("The Band"), alpha.artists());
+        assertEquals(180, alpha.durationSeconds());
+        assertEquals("yt-alpha", alpha.youtubeId());
+        assertEquals(DownloadStage.STARTING, songs.get(0).stage());
+    }
+
+    @Test
+    void findSongs_reportsEachSongsOwnOutcome_notTheCollections() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        admit(album, "found", "missing");
+        List<UUID> tasks = taskIdsOf(album);
+        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
+        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        taskRepository.concludeDownloads().block();
+
+        List<DownloadSongView> songs = activeDownloadRepository.findSongs(album).collectList().block();
+
+        // The collection is PARTIAL_SUCCESS; this is the view that says which half is which.
+        DownloadSongView found = songs.stream().filter(s -> s.title().equals("found")).findFirst().orElseThrow();
+        DownloadSongView missing = songs.stream().filter(s -> s.title().equals("missing")).findFirst().orElseThrow();
+        assertEquals(DownloadStage.SUCCEEDED, found.stage());
+        assertNull(found.failureCode());
+        assertEquals(DownloadStage.FAILED, missing.stage());
+        assertEquals("NO_CANDIDATES", missing.failureCode());
+        assertEquals(NOW, missing.finishedAt());
+    }
+
+    @Test
+    void findSongs_exposesThePipelinesOwnBookkeeping_forTheSelfHoster() {
+        UUID id = insertDownload("PENDING");
+        admit(id, "song");
+        DownloadTask claimed = taskRepository
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).blockFirst();
+        taskRepository.save(claimed.toBuilder()
+                .phase(DownloadPhase.DOWNLOAD_POLL)
+                .candidates(com.catacomb5099.naviseerr.support.DownloadTaskFixtures
+                        .candidates("alice", "bob", "carol"))
+                .candidateIndex(1).retryIndex(2)
+                .slskdUsername("bob").slskdFilename("music/bob/song.flac")
+                .lastError("peer went away")
+                .build(), "a").block();
+
+        DownloadSongView song = activeDownloadRepository.findSongs(id).blockFirst();
+
+        // "Which peers were tried, and how did each fail?" -- answered without opening psql.
+        assertEquals(3, song.candidateCount());
+        assertEquals(1, song.candidateIndex());
+        assertEquals(2, song.retryIndex());
+        assertEquals("bob", song.slskdUsername());
+        assertEquals("music/bob/song.flac", song.slskdFilename());
+        assertEquals("peer went away", song.lastError());
+    }
+
+    @Test
+    void findSongs_forAnUnadmittedDownload_isEmpty() {
+        UUID id = insertDownload("PENDING");
+
+        assertTrue(activeDownloadRepository.findSongs(id).collectList().block().isEmpty());
     }
 
     private void moveOneSongTo(UUID downloadId, String songName, DownloadPhase phase) {

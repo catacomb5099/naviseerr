@@ -47,9 +47,10 @@ class DownloadTaskRunnerTest {
         slskdService = mock(SlskdService.class);
         ytMusicService = mock(YtMusicService.class);
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.empty());
-        when(repository.createTasks(any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.createTasks(any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.upsertMedia(any())).thenReturn(Mono.just(1L));
         when(repository.concludeDownloads()).thenReturn(Mono.just(0L));
-        when(repository.failUnadmitted(any())).thenReturn(Mono.just(1L));
+        when(repository.failUnadmitted(any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.countActiveDownloads()).thenReturn(Mono.just(0L));
         when(repository.countActiveTransfers()).thenReturn(Mono.just(0L));
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean()))
@@ -246,16 +247,33 @@ class DownloadTaskRunnerTest {
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
         when(ytMusicService.getSongInfo("vid-1"))
                 .thenReturn(Mono.just(new YoutubeSongInfo("vid-1", List.of("Rick Astley"),
-                        "Never Gonna Give You Up")));
+                        "Never Gonna Give You Up", "https://img/rick.jpg", 213)));
 
         runner.pass().block();
 
         verify(ytMusicService).getSongInfo("vid-1");
         verify(repository).createTasks(eq(request.getDownloadId()),
-                eq("Never Gonna Give You Up"), argThat(tasks -> tasks.size() == 1
+                argThat(tasks -> tasks.size() == 1
                         && tasks.getFirst().youtubeId().equals("vid-1")
-                        && tasks.getFirst().songName().equals("Never Gonna Give You Up")),
+                        // The Soulseek wording: title, then primary artist, the shape the matcher
+                        // still splits on. NOT the bare title -- that is what the display uses.
+                        && tasks.getFirst().songName().equals("Never Gonna Give You Up - Rick Astley")),
                 eq(T0));
+        // The download's own media row and the song's are the same id, so one row is enough --
+        // but it must carry what the card shows.
+        verify(repository).upsertMedia(argThat(items -> items.stream()
+                .anyMatch(m -> m.youtubeId().equals("vid-1")
+                        && m.title().equals("Never Gonna Give You Up")
+                        && m.imageUrl().equals("https://img/rick.jpg")
+                        && m.artists().equals(List.of("Rick Astley")))));
+    }
+
+    @Test
+    void soulseekQuery_isTitleDashPrimaryArtist_orTitleAloneWhenNoArtistIsKnown() {
+        assertEquals("Riptide - Vance Joy", DownloadTaskRunner.soulseekQuery(
+                new YoutubeSongInfo("v", List.of("Vance Joy", "Someone Else"), "Riptide", null, null)));
+        assertEquals("Riptide", DownloadTaskRunner.soulseekQuery(
+                new YoutubeSongInfo("v", List.of(), "Riptide", null, null)));
     }
 
     @Test
@@ -264,16 +282,21 @@ class DownloadTaskRunnerTest {
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
         when(ytMusicService.getAlbumInfo("MPREb_1")).thenReturn(Mono.just(
                 new YoutubeCollectionInfo("MPREb_1", List.of(
-                        new YoutubeSongInfo("v1", List.of("A"), "one"),
-                        new YoutubeSongInfo("v2", List.of("A"), "two"),
-                        new YoutubeSongInfo("v3", List.of("A"), "three")),
-                        "1999", "The Album", List.of("A"))));
+                        new YoutubeSongInfo("v1", List.of("A"), "one", "https://img/a.jpg", 100),
+                        new YoutubeSongInfo("v2", List.of("A"), "two", "https://img/a.jpg", 100),
+                        new YoutubeSongInfo("v3", List.of("A"), "three", "https://img/a.jpg", 100)),
+                        "1999", "The Album", List.of("A"), "https://img/a.jpg")));
 
         runner.pass().block();
 
         // One download, three searchable rows -- the whole point of the 1:N task table.
-        verify(repository).createTasks(eq(request.getDownloadId()), eq("The Album"),
+        verify(repository).createTasks(eq(request.getDownloadId()),
                 argThat(tasks -> tasks.size() == 3), eq(T0));
+        // Four media rows: the album itself, keyed by the id the REQUEST carried, plus its tracks.
+        verify(repository).upsertMedia(argThat(items -> items.size() == 4
+                && items.getFirst().youtubeId().equals("MPREb_1")
+                && items.getFirst().title().equals("The Album")
+                && items.getFirst().trackCount() == 3));
     }
 
     @Test
@@ -281,14 +304,17 @@ class DownloadTaskRunnerTest {
         Download request = pendingRequest(DownloadType.PLAYLIST, "VLPL1");
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
         when(ytMusicService.getPlaylistInfo("VLPL1")).thenReturn(Mono.just(
-                new YoutubeCollectionInfo("VLPL1",
-                        List.of(new YoutubeSongInfo("v1", List.of(), "one")), null, "Mix",
-                        List.of())));
+                new YoutubeCollectionInfo("PL1",
+                        List.of(new YoutubeSongInfo("v1", List.of(), "one", null, null)), null, "Mix",
+                        List.of(), null)));
 
         runner.pass().block();
 
         verify(ytMusicService).getPlaylistInfo("VLPL1");
         verify(ytMusicService, never()).getAlbumInfo(any());
+        // The adapter answered with the bare id; the media row still has to be keyed by the one the
+        // request carried, or the feed's join finds nothing.
+        verify(repository).upsertMedia(argThat(items -> items.getFirst().youtubeId().equals("VLPL1")));
     }
 
     @Test
@@ -302,8 +328,9 @@ class DownloadTaskRunnerTest {
 
         // A 400/404 cannot be made right by asking again, and a row left PENDING would be
         // re-requested every loop interval for the life of the install.
-        verify(repository).failUnadmitted(request.getDownloadId());
-        verify(repository, never()).createTasks(any(), any(), any(), any());
+        verify(repository).failUnadmitted(request.getDownloadId(),
+                DownloadFailureCode.METADATA_UNAVAILABLE, T0);
+        verify(repository, never()).createTasks(any(), any(), any());
     }
 
     @Test
@@ -317,8 +344,8 @@ class DownloadTaskRunnerTest {
 
         // The opposite of the case above: failing here would kill every download requested while
         // the sidecar happened to be restarting.
-        verify(repository, never()).failUnadmitted(any());
-        verify(repository, never()).createTasks(any(), any(), any(), any());
+        verify(repository, never()).failUnadmitted(any(), any(), any());
+        verify(repository, never()).createTasks(any(), any(), any());
     }
 
     @Test
@@ -326,11 +353,11 @@ class DownloadTaskRunnerTest {
         Download request = pendingRequest(DownloadType.PLAYLIST, "VLempty");
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
         when(ytMusicService.getPlaylistInfo("VLempty")).thenReturn(Mono.just(
-                new YoutubeCollectionInfo("VLempty", List.of(), null, "Empty", List.of())));
+                new YoutubeCollectionInfo("VLempty", List.of(), null, "Empty", List.of(), null)));
 
         runner.pass().block();
 
-        verify(repository).failUnadmitted(request.getDownloadId());
+        verify(repository).failUnadmitted(eq(request.getDownloadId()), any(), any());
     }
 
     // ---- conclusion ----------------------------------------------------------------------------

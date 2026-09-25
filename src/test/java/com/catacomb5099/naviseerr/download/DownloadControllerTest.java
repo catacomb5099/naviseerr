@@ -42,8 +42,54 @@ class DownloadControllerTest {
     }
 
     private static ActiveDownloadView view() {
-        return new ActiveDownloadView(UUID.randomUUID(), "song", DownloadStage.DOWNLOADING,
-                new BigDecimal("43.00"), NOW, NOW, null);
+        return new ActiveDownloadView(UUID.randomUUID(), "vid-1", DownloadType.SONG, "song",
+                List.of("artist"), "https://img/1.jpg", DownloadStage.DOWNLOADING,
+                new BigDecimal("43.00"), 1, 0, 0, NOW, NOW, NOW, null, null);
+    }
+
+    private static DownloadSongView song() {
+        return new DownloadSongView(UUID.randomUUID(), "vid-1", 1, "song", List.of("artist"),
+                "https://img/1.jpg", 200, DownloadStage.DOWNLOADING, new BigDecimal("43.00"), null,
+                NOW, NOW, null, 3, 0, 0, "alice", "music/alice/song.flac", null);
+    }
+
+    // ---- one download, every song ----------------------------------------------------------------
+
+    @Test
+    void downloadDetail_returnsTheCardAndItsSongs() {
+        ActiveDownloadView card = view();
+        DownloadSongView song = song();
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+        when(activeDownloadRepository.findSongs(card.downloadId())).thenReturn(Flux.just(song));
+
+        ResponseEntity<DownloadDetailView> response = controller.downloadDetail(card.downloadId()).block();
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(card, response.getBody().download());
+        assertEquals(List.of(song), response.getBody().songs());
+    }
+
+    @Test
+    void downloadDetail_forAnUnknownId_is404() {
+        UUID unknown = UUID.randomUUID();
+        when(activeDownloadRepository.findByIds(List.of(unknown))).thenReturn(Flux.empty());
+        when(activeDownloadRepository.findSongs(unknown)).thenReturn(Flux.empty());
+
+        // Unlike GET /downloads?ids=, a single-resource GET has exactly one thing to say about an
+        // id it has no row for.
+        assertEquals(HttpStatus.NOT_FOUND, controller.downloadDetail(unknown).block().getStatusCode());
+    }
+
+    @Test
+    void downloadDetail_forAQueuedDownload_hasTheCardAndNoSongsYet() {
+        ActiveDownloadView card = view();
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+        when(activeDownloadRepository.findSongs(card.downloadId())).thenReturn(Flux.empty());
+
+        ResponseEntity<DownloadDetailView> response = controller.downloadDetail(card.downloadId()).block();
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertTrue(response.getBody().songs().isEmpty(), "not admitted yet: no task rows, not an error");
     }
 
     // ---- requesting a download -----------------------------------------------------------------

@@ -300,7 +300,8 @@ class YtMusicServiceTest {
               "thumbnailUrl": "https://example.com/album.jpg",
               "tracks": [
                 {"videoId": "v1", "title": "Rock 'n' Roll Star",
-                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 1},
+                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 1,
+                 "durationSeconds": 322},
                 {"videoId": "v2", "title": "Shakermaker",
                  "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 2}
               ]
@@ -338,10 +339,26 @@ class YtMusicServiceTest {
                     // The whole point of the flattening: callers never have to know that a song
                     // response says `author` where a collection's tracks say `artists`.
                     assertEquals(List.of("Oasis"), song.authorNames());
+                    assertEquals("https://example.com/song.jpg", song.imageUrl());
+                    assertEquals(259, song.durationSeconds(),
+                            "the adapter calls it lengthSeconds on a song; the pipeline has one name");
                 })
                 .verifyComplete();
 
         assertEquals("/v1/songs/hpSrLjc5SMs", server.takeRequest().getPath());
+    }
+
+    @Test
+    void getSongInfo_withNoThumbnail_fallsBackToYouTubesPredictableOne() {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"videoId\":\"v1\",\"title\":\"Untitled\"}"));
+
+        // A picture rather than a blank: every videoId has a thumbnail at this URL.
+        StepVerifier.create(service.getSongInfo("v1"))
+                .assertNext(song -> assertEquals("https://i.ytimg.com/vi/v1/hqdefault.jpg",
+                        song.imageUrl()))
+                .verifyComplete();
     }
 
     @Test
@@ -371,6 +388,11 @@ class YtMusicServiceTest {
                     assertEquals(List.of("v1", "v2"),
                             album.songs().stream().map(s -> s.id()).toList());
                     assertEquals("Rock 'n' Roll Star", album.songs().getFirst().name());
+                    assertEquals("https://example.com/album.jpg", album.imageUrl());
+                    // An album's tracks ARE the album: they inherit its cover rather than falling
+                    // back to a letterboxed video frame.
+                    assertEquals("https://example.com/album.jpg", album.songs().getFirst().imageUrl());
+                    assertEquals(322, album.songs().getFirst().durationSeconds());
                 })
                 .verifyComplete();
 
@@ -389,6 +411,11 @@ class YtMusicServiceTest {
                     assertEquals("Britpop Essentials", playlist.name());
                     assertEquals(List.of("YouTube Music"), playlist.authorNames());
                     assertNull(playlist.year(), "only albums have a year");
+                    assertEquals("https://example.com/playlist.jpg", playlist.imageUrl());
+                    // A playlist's tracks come from anywhere, so the playlist's cover would be the
+                    // WRONG picture for them; each gets YouTube's own thumbnail for its videoId.
+                    assertEquals("https://i.ytimg.com/vi/v1/hqdefault.jpg",
+                            playlist.songs().getFirst().imageUrl());
                 })
                 .verifyComplete();
 

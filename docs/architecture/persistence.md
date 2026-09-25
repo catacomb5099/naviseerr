@@ -2,7 +2,7 @@
 
 > Status: current as of 2026-08-13, branch `durable-download-state-machine`. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
-Naviseerr persists download state in Postgres via Spring Data R2DBC (reactive, non-blocking - no JDBC in the runtime path). Two tables now: `downloads` (the low-churn, user-facing record) and `download_tasks` (the working state of one download's pipeline, written every few seconds).
+Naviseerr persists download state in Postgres via Spring Data R2DBC (reactive, non-blocking - no JDBC in the runtime path). Three tables: `downloads` (one request and its lifecycle), `download_tasks` (the working state of one song's pipeline, written every few seconds), and as of V6 `media_items` (what a YouTube id is: title, artists, artwork — see the V6 section below).
 
 ## Configuration
 
@@ -101,6 +101,45 @@ Status/phase are `TEXT` + `CHECK` (not native Postgres enums) so R2DBC maps the 
 
 **Task rows are retained in a terminal phase (`SUCCEEDED`/`FAILED`), never deleted.** A self-hoster filing a bug report needs to answer "which peers were tried, and how did each fail?" from their own instance, and per-song history is exactly what a future collection feature needs too. The **partial index** `idx_download_tasks_due` is what makes that retention free: it covers only non-terminal rows (`WHERE phase NOT IN ('SUCCEEDED', 'FAILED')`), so the due-work query's cost stays independent of how much finished history has accumulated. Without that partial predicate, retaining rows forever would mean the due-work query degrades as the table grows — the two decisions (retain, and index only what's live) are a pair.
 
+### V6: `media_items`, lifecycle timestamps, `position`
+
+[V6__download_metadata.sql](../../src/main/resources/db/migration/V6__download_metadata.sql) — full
+reasoning in [the ADR](../decisions/download-metadata-25-09-2026.md).
+
+```sql
+CREATE TABLE media_items (
+    youtube_id       TEXT PRIMARY KEY,
+    title            TEXT,
+    artists          TEXT[]      NOT NULL DEFAULT '{}',
+    image_url        TEXT,
+    duration_seconds INT,        -- songs
+    track_count      INT,        -- collections
+    fetched_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE downloads ADD COLUMN admitted_at TIMESTAMPTZ, ADD COLUMN finished_at TIMESTAMPTZ,
+                      ADD COLUMN failure_reason TEXT;
+-- backfill: legacy rows get a synthetic youtube_id; every song_name becomes a media_items.title
+ALTER TABLE downloads ALTER COLUMN youtube_id SET NOT NULL;
+ALTER TABLE downloads DROP COLUMN song_name;
+ALTER TABLE download_tasks ADD COLUMN position INT;
+```
+
+Written by `DownloadTaskRepository.upsertMedia`, one statement for N rows: the batch is bound as one
+JSON document and `jsonb_to_recordset(:items::jsonb) AS x("youtubeId" text, ..., artists text[], ...)`
+turns it back into rows — the quoted column names are `MediaItem`'s record components verbatim, so
+Jackson's default output is the input. `ON CONFLICT (youtube_id) DO UPDATE` with `COALESCE(EXCLUDED.x,
+media_items.x)` refreshes but never blanks. The repository deduplicates ids before binding, because a
+playlist can list one track twice and `ON CONFLICT DO UPDATE` refuses to touch a row twice in one
+statement.
+
+Read by every `ActiveDownloadRepository` query via `LEFT JOIN media_items m ON m.youtube_id =
+d.youtube_id` (LEFT: a QUEUED download has no row yet), and by `SONGS_SQL` via
+`download_tasks.youtube_id`. `artists` comes off the row as `String[]`.
+
+`download_tasks.song_name` is untouched by V6 and is the Soulseek query wording, `"Title - Primary
+Artist"` — not a display field. `download_tasks.position` is written from `unnest(...) WITH
+ORDINALITY` in `CREATE_TASKS_SQL`.
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.
@@ -170,7 +209,8 @@ RETURNING download_id, song_name, phase, phase_entered_at, next_attempt_at, sear
 
 - **`save(task, owner)`** - writes every field of a `DownloadTask` back (no partial-update logic, since the record *is* the complete state) and clears the lease, which is what makes the row visible to the next pass. Keys on `task_id` as of V5; keying it on `download_id` would step every song of an album on one song's slskd response.
 - **`concludeDownloads()`** *(V5)* - gives a download its terminal status once every one of its tasks is terminal, `PARTIAL_SUCCESS` when there is one of each outcome. Run at the end of every pass and idempotent (`AND d.status = 'IN_PROGRESS'` stops it matching a second time). This exists because the aggregate **cannot** be folded into the per-task terminal write: two songs finishing concurrently would each see the other as still running and neither would conclude, leaving the download `IN_PROGRESS` forever. [The ADR](../decisions/collection-downloads-14-09-2026.md) has the full argument.
-- **`failUnadmitted(downloadId)`** *(V5)* - fails a request whose metadata call returned a 400/404, which is the one failure with no task row to record it on.
+- **`failUnadmitted(downloadId, code, now)`** *(V5; V6 added the code and timestamp)* - fails a request whose metadata call returned a 400/404, which is the one failure with no task row to record it on — so it writes `downloads.failure_reason` and `downloads.finished_at` itself.
+- **`upsertMedia(items)`** *(V6)* - writes the `media_items` rows for one adapter answer; see the V6 section above. Called by the runner BEFORE `createTasks`, so a crash between the two leaves harmless extra metadata rather than nameless task rows.
 - **`countActiveDownloads()`** / **`countActiveTransfers()`** - back the two capacity bounds in [download-manager.md](download-manager.md#three-independent-bounds): the first counts `downloads` rows (`status = 'IN_PROGRESS'`), the second counts task rows in `DOWNLOAD_POLL` only. `DOWNLOAD_INIT` is deliberately excluded: it always has a null `slskd_transfer_id` (no real transfer exists yet), so counting it against the same cap that gates claiming `DOWNLOAD_INIT` rows would let enough `DOWNLOAD_INIT` rows close the gate permanently - a durable deadlock no restart could clear.
 
 ## The terminal CTE

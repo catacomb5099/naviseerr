@@ -20,8 +20,8 @@ import java.util.List;
  * keys — an album's id is {@code browseId} and its artists a list, a playlist's id is {@code id} and
  * its single author an object. Declaring all four and letting {@code ignoreUnknown} drop whichever
  * pair is absent is cheaper than two near-identical classes and a switch at the use site. Fields the
- * download pipeline does not read (durations, thumbnails, descriptions, an album's other-versions
- * buckets) are deliberately left off rather than mirrored.
+ * download pipeline does not read (descriptions, an album's other-versions buckets) are deliberately
+ * left off rather than mirrored.
  */
 public final class YtMusicDetailResponse {
 
@@ -38,6 +38,9 @@ public final class YtMusicDetailResponse {
         private String title;
         /** A single string here, unlike the {@code artists[]} of a track inside a collection. */
         private String author;
+        /** The adapter's own name for a song's duration; collections call the same thing {@code durationSeconds}. */
+        private Integer lengthSeconds;
+        private String thumbnailUrl;
     }
 
     /** {@code GET /v1/albums/{browseId}} and {@code GET /v1/playlists/{playlistId}}. */
@@ -58,10 +61,15 @@ public final class YtMusicDetailResponse {
         private List<YtMusicSearchResponse.ArtistRef> artists;
         /** Playlists. */
         private YtMusicSearchResponse.ArtistRef author;
+        private String thumbnailUrl;
         private List<Track> tracks;
     }
 
-    /** One entry of a collection's {@code tracks[]}. */
+    /**
+     * One entry of a collection's {@code tracks[]}. Carries no thumbnail of its own — the adapter's
+     * track shape has none — which is why {@code YtMusicService} has to decide where a track's
+     * artwork comes from.
+     */
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
@@ -71,6 +79,7 @@ public final class YtMusicDetailResponse {
         private String videoId;
         private String title;
         private List<YtMusicSearchResponse.ArtistRef> artists;
+        private Integer durationSeconds;
         /**
          * Playlists can carry an unavailable track (region-blocked, deleted). Null on album
          * responses, so only an explicit {@code false} means "do not try this one".

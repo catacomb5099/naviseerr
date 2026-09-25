@@ -100,7 +100,21 @@ public class YtMusicService {
                         // getSong()'s `author` is one string, not a list -- flattened here so callers
                         // never have to know which of the two provider shapes a song came from.
                         song.getAuthor() == null ? List.of() : List.of(song.getAuthor()),
-                        song.getTitle()));
+                        song.getTitle(),
+                        song.getThumbnailUrl() == null ? fallbackThumbnail(id) : song.getThumbnailUrl(),
+                        song.getLengthSeconds()));
+    }
+
+    /**
+     * YouTube serves a thumbnail for every videoId at a predictable URL, whether or not the adapter
+     * handed us one. Used only when it did not: a track inside a playlist has no artwork of its own in
+     * the adapter's response, and fetching each track individually would turn one metadata call into
+     * hundreds. For a YouTube Music track this is the album art letterboxed into a 4:3 frame -- not
+     * pretty, but a picture rather than a blank. A later single-song request for the same id upserts
+     * the real artwork over it.
+     */
+    static String fallbackThumbnail(String videoId) {
+        return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
     }
 
     /**
@@ -127,6 +141,11 @@ public class YtMusicService {
      * <p>A track the provider marks {@code isAvailable: false} is dropped: it is region-blocked or
      * deleted, so creating a task row for it would spend a full search budget to fail. Only an
      * explicit {@code false} counts — album responses leave the field null.
+     *
+     * <p>Artwork: an album's tracks ARE that album, so they inherit its cover. A playlist's tracks
+     * come from anywhere, so giving them the playlist's cover would be wrong; they get YouTube's
+     * per-video thumbnail instead ({@link #fallbackThumbnail}). The two cases are told apart by
+     * which id field the adapter filled in.
      */
     private YoutubeCollectionInfo toCollectionInfo(YtMusicDetailResponse.Collection collection,
                                                    String requestedId) {
@@ -135,15 +154,21 @@ public class YtMusicService {
         List<String> authors = collection.getArtists() != null
                 ? names(collection.getArtists())
                 : collection.getAuthor() == null ? List.of() : names(List.of(collection.getAuthor()));
+        boolean isAlbum = collection.getBrowseId() != null;
         List<YoutubeSongInfo> songs = collection.getTracks() == null ? List.of()
                 : collection.getTracks().stream()
                         .filter(track -> !Boolean.FALSE.equals(track.getIsAvailable()))
                         .map(track -> new YoutubeSongInfo(track.getVideoId(),
-                                names(track.getArtists()), track.getTitle()))
+                                names(track.getArtists()), track.getTitle(),
+                                isAlbum && collection.getThumbnailUrl() != null
+                                        ? collection.getThumbnailUrl()
+                                        : track.getVideoId() == null ? null
+                                        : fallbackThumbnail(track.getVideoId()),
+                                track.getDurationSeconds()))
                         .toList();
         return new YoutubeCollectionInfo(id, songs,
                 collection.getYear() == null ? null : String.valueOf(collection.getYear()),
-                collection.getTitle(), authors);
+                collection.getTitle(), authors, collection.getThumbnailUrl());
     }
 
     private static List<String> names(List<YtMusicSearchResponse.ArtistRef> artists) {

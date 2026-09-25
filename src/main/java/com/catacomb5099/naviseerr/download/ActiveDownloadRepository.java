@@ -11,11 +11,13 @@ import reactor.core.publisher.Mono;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * Read model behind the download feed. Two queries over the same projection: everything the client
- * should be showing right now, and a by-id lookup for cards a client held across a restart.
+ * Read model behind the download feed. Three queries over the same projection — everything the
+ * client should be showing right now, a by-id lookup for cards a client held across a restart, and
+ * the paged history — plus the per-song breakdown of one download.
  */
 @Repository
 public class ActiveDownloadRepository {
@@ -24,7 +26,7 @@ public class ActiveDownloadRepository {
      * One row per DOWNLOAD, folded out of that download's N task rows — one per song. A ten-track
      * album must be one card, not ten identical {@code downloadId}s, so every task-side field here
      * is an aggregate. For a single-song download each aggregate is over one row and returns that
-     * row's own value, which is why this change is invisible on the wire for songs.
+     * row's own value.
      *
      * <p>The reported stage is the LEAST advanced song's: a collection is still "searching" while
      * any of its tracks is, because the honest summary of mixed progress is the part that is not
@@ -35,7 +37,8 @@ public class ActiveDownloadRepository {
      * whichever track happens to be transferring. {@code updated_at} is the most recent write, since
      * that is the feed's recency sort key and any song's write means the download moved.
      * {@code failure_reason} is the first non-null: a collection reports a reason as soon as one
-     * song has one, without waiting for the rest.
+     * song has one, without waiting for the rest. The three counts are what let a card say
+     * "7 of 12" without asking for the per-song view.
      */
     private static final String TASK_AGGREGATE = """
             SELECT t.download_id,
@@ -50,27 +53,44 @@ public class ActiveDownloadRepository {
                    MIN(t.failure_reason)                       AS failure_reason,
                    MIN(t.phase_entered_at)                     AS phase_entered_at,
                    MAX(t.updated_at)                           AS updated_at,
-                   MAX(t.finished_at)                          AS finished_at
+                   MAX(t.finished_at)                          AS finished_at,
+                   COUNT(*)                                    AS song_count,
+                   COUNT(*) FILTER (WHERE t.phase = 'SUCCEEDED') AS songs_succeeded,
+                   COUNT(*) FILTER (WHERE t.phase = 'FAILED')    AS songs_failed
               FROM download_tasks t
              %s
              GROUP BY t.download_id""";
 
     /**
-     * Shared so both queries and both endpoints derive {@link DownloadStage} from identical inputs.
+     * Shared so every query and every endpoint derives {@link DownloadStage} from identical inputs.
      * {@code status} and {@code phase} are selected only to compute it; neither reaches the client.
      *
      * <p>Both timestamps fall back to {@code d.created_at}, because a download with no task row still
      * has to sort and still has to show the user how long it has been waiting. Reading them straight
      * off the LEFT JOIN yields nulls for exactly the QUEUED rows this projection exists to expose, and
      * a null sort key is how a batch of queued cards ends up in arbitrary order. For a queued
-     * download, "when did this stage begin" genuinely is when it was requested. The COALESCE is a
-     * no-op on the terminal branch, where the task rows are always present.
+     * download, "when did this stage begin" genuinely is when it was requested.
+     *
+     * <p>{@code failure_reason} prefers the download's own: that column is written only when
+     * admission fails, in which case there are no task rows to have a reason. Otherwise the
+     * aggregate's first song reason.
+     *
+     * <p>Every query joins {@code media_items} through {@code d.youtube_id} for the title, artists
+     * and artwork. A LEFT JOIN, because the media row is written at admission and a QUEUED download
+     * has not been admitted yet; a null title is that state, faithfully reported.
      */
     private static final String PROJECTION = """
-            d.download_id, d.song_name, d.status, t.phase, t.progress_percent,
-                   t.failure_reason,
-                   COALESCE(t.phase_entered_at, d.created_at) AS stage_entered_at,
-                   COALESCE(t.updated_at, d.created_at)       AS updated_at""";
+            d.download_id, d.youtube_id, d.download_type, d.status, d.created_at, d.finished_at,
+                   m.title, m.artists, m.image_url,
+                   t.phase, t.progress_percent,
+                   COALESCE(d.failure_reason, t.failure_reason) AS failure_reason,
+                   COALESCE(t.song_count, 0)                    AS song_count,
+                   COALESCE(t.songs_succeeded, 0)               AS songs_succeeded,
+                   COALESCE(t.songs_failed, 0)                  AS songs_failed,
+                   COALESCE(t.phase_entered_at, d.created_at)   AS stage_entered_at,
+                   COALESCE(t.updated_at, d.created_at)         AS updated_at""";
+
+    private static final String JOIN_MEDIA = "LEFT JOIN media_items m ON m.youtube_id = d.youtube_id";
 
     /**
      * Restricts {@link #TASK_AGGREGATE} to the live downloads, so the grouping never touches the
@@ -100,9 +120,10 @@ public class ActiveDownloadRepository {
      * A UNION ALL of two separately-indexed branches rather than one query with an OR, because the two
      * halves are found in completely different ways and an OR would let neither use its index.
      *
-     * <p>The live branch LEFT JOINs: a download the runner has not admitted yet has no task rows at
-     * all, and it is exactly the window in which the user is staring at the card wondering if the
-     * click registered. An inner join here is what made every PENDING download invisible.
+     * <p>The live branch LEFT JOINs the aggregate: a download the runner has not admitted yet has no
+     * task rows at all, and it is exactly the window in which the user is staring at the card
+     * wondering if the click registered. An inner join here is what made every PENDING download
+     * invisible.
      *
      * <p>The finished branch is bounded by {@code finished_at}. The extra {@code d.status} test is
      * not redundant: it makes the two branches provably disjoint, so no row can be emitted twice
@@ -112,28 +133,31 @@ public class ActiveDownloadRepository {
     private static final String ACTIVE_DOWNLOADS_SQL = """
             SELECT %s
               FROM downloads d
+              %s
               LEFT JOIN (%s) t ON t.download_id = d.download_id
              WHERE d.status IN ('PENDING', 'IN_PROGRESS')
              UNION ALL
             SELECT %s
               FROM (%s) t
               JOIN downloads d ON d.download_id = t.download_id
+              %s
              WHERE t.phase = 'FINISHED'
                AND d.status IN ('SUCCEEDED', 'FAILED', 'PARTIAL_SUCCESS')
                AND t.finished_at >= :cutoff
              ORDER BY updated_at DESC
-            """.formatted(PROJECTION, TASK_AGGREGATE.formatted(WHERE_LIVE),
-                          PROJECTION, TASK_AGGREGATE.formatted(WHERE_RECENTLY_FINISHED));
+            """.formatted(PROJECTION, JOIN_MEDIA, TASK_AGGREGATE.formatted(WHERE_LIVE),
+                          PROJECTION, TASK_AGGREGATE.formatted(WHERE_RECENTLY_FINISHED), JOIN_MEDIA);
 
     private static final String ALL_DOWNLOADS_SQL = """
             SELECT %s,
                    COUNT(*) OVER () AS total_count
               FROM downloads d
+              %s
               LEFT JOIN (%s) t ON t.download_id = d.download_id
              ORDER BY updated_at DESC, d.download_id DESC
              OFFSET (:pageSize * (:pageNumber - 1)) ROWS
              FETCH NEXT :pageSize ROWS ONLY
-            """.formatted(PROJECTION, TASK_AGGREGATE.formatted(WHERE_ALL));
+            """.formatted(PROJECTION, JOIN_MEDIA, TASK_AGGREGATE.formatted(WHERE_ALL));
 
     /**
      * No status filter and no window: this answers "what happened to these?" for a client that held
@@ -143,11 +167,31 @@ public class ActiveDownloadRepository {
     private static final String BY_IDS_SQL = """
             SELECT %s
               FROM downloads d
+              %s
               LEFT JOIN (%s) t ON t.download_id = d.download_id
              WHERE d.download_id = ANY(:ids)
              ORDER BY updated_at DESC
-            """.formatted(PROJECTION,
+            """.formatted(PROJECTION, JOIN_MEDIA,
                           TASK_AGGREGATE.formatted("WHERE t.download_id = ANY(:ids)"));
+
+    /**
+     * Every song of one download, in track order, with the pipeline bookkeeping a self-hoster wants
+     * when asking "which three failed, and why". No aggregate: this is the one place the task rows
+     * are shown as themselves. {@code candidate_count} is computed in SQL rather than by parsing the
+     * JSON in Java, since it is the only thing this view wants from that column.
+     */
+    private static final String SONGS_SQL = """
+            SELECT t.task_id, t.youtube_id, t.position, m.title, m.artists, m.image_url,
+                   m.duration_seconds, t.phase, t.progress_percent, t.failure_reason,
+                   t.phase_entered_at, t.updated_at, t.finished_at,
+                   jsonb_array_length(t.candidates::jsonb) AS candidate_count,
+                   t.candidate_index, t.retry_index, t.slskd_username, t.slskd_filename,
+                   t.last_error
+              FROM download_tasks t
+              LEFT JOIN media_items m ON m.youtube_id = t.youtube_id
+             WHERE t.download_id = :id
+             ORDER BY t.position NULLS LAST, t.phase_entered_at, t.task_id
+            """;
 
     private final DatabaseClient client;
 
@@ -189,6 +233,14 @@ public class ActiveDownloadRepository {
                         rows.isEmpty() ? 0 : (int) Math.ceilDiv(rows.get(0).totalCount(), pageSize)));
     }
 
+    /** The songs of one download, in track order. Empty for a download not yet admitted. */
+    public Flux<DownloadSongView> findSongs(UUID downloadId) {
+        return client.sql(SONGS_SQL)
+                .bind("id", downloadId)
+                .map(ActiveDownloadRepository::toSongView)
+                .all();
+    }
+
     /** Every row of the paged query repeats the same total, so it is read once off the first row. */
     private record PagedRow(ActiveDownloadView view, long totalCount) {
     }
@@ -197,12 +249,50 @@ public class ActiveDownloadRepository {
         DownloadStatus status = DownloadStatus.valueOf(row.get("status", String.class));
         return new ActiveDownloadView(
                 row.get("download_id", UUID.class),
-                row.get("song_name", String.class),
+                row.get("youtube_id", String.class),
+                DownloadType.valueOf(row.get("download_type", String.class)),
+                row.get("title", String.class),
+                artists(row),
+                row.get("image_url", String.class),
                 toStage(status, row.get("phase", String.class)),
                 row.get("progress_percent", BigDecimal.class),
+                row.get("song_count", Long.class).intValue(),
+                row.get("songs_succeeded", Long.class).intValue(),
+                row.get("songs_failed", Long.class).intValue(),
+                row.get("created_at", Instant.class),
                 row.get("stage_entered_at", Instant.class),
                 row.get("updated_at", Instant.class),
+                row.get("finished_at", Instant.class),
                 row.get("failure_reason", String.class));
+    }
+
+    private static DownloadSongView toSongView(Row row, RowMetadata meta) {
+        return new DownloadSongView(
+                row.get("task_id", UUID.class),
+                row.get("youtube_id", String.class),
+                row.get("position", Integer.class),
+                row.get("title", String.class),
+                artists(row),
+                row.get("image_url", String.class),
+                row.get("duration_seconds", Integer.class),
+                toSongStage(row.get("phase", String.class)),
+                row.get("progress_percent", BigDecimal.class),
+                row.get("failure_reason", String.class),
+                row.get("phase_entered_at", Instant.class),
+                row.get("updated_at", Instant.class),
+                row.get("finished_at", Instant.class),
+                row.get("candidate_count", Integer.class),
+                row.get("candidate_index", Integer.class),
+                row.get("retry_index", Integer.class),
+                row.get("slskd_username", String.class),
+                row.get("slskd_filename", String.class),
+                row.get("last_error", String.class));
+    }
+
+    /** Null from the LEFT JOIN (no media row yet) reads as "no artists", never as null. */
+    private static List<String> artists(Row row) {
+        String[] artists = row.get("artists", String[].class);
+        return artists == null ? List.of() : List.of(artists);
     }
 
     /**
@@ -227,6 +317,19 @@ public class ActiveDownloadRepository {
                     case DOWNLOAD_POLL -> DownloadStage.DOWNLOADING;
                 };
             }
+        };
+    }
+
+    /**
+     * A single song's stage from its own {@code phase}. A task row always exists here, and its two
+     * terminal phase values are its own outcome — so this is {@link #toStage} with the terminality
+     * read off the phase instead of the download's status.
+     */
+    static DownloadStage toSongStage(String phase) {
+        return switch (phase) {
+            case "SUCCEEDED" -> DownloadStage.SUCCEEDED;
+            case "FAILED" -> DownloadStage.FAILED;
+            default -> toStage(DownloadStatus.IN_PROGRESS, phase);
         };
     }
 

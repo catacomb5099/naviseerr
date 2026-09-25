@@ -41,7 +41,8 @@ public class DownloadTaskRepository {
      * than duplicating every song.
      */
     private static final String ADMISSIBLE_SQL = """
-            SELECT d.download_id, d.youtube_id, d.download_type, d.song_name, d.status, d.created_at
+            SELECT d.download_id, d.youtube_id, d.download_type, d.status, d.failure_reason,
+                   d.created_at, d.admitted_at, d.finished_at
               FROM downloads d
              WHERE d.status = 'PENDING'
                AND NOT EXISTS (SELECT 1 FROM download_tasks t
@@ -61,27 +62,62 @@ public class DownloadTaskRepository {
      *
      * <p>The guards make it a no-op rather than a duplicator if it somehow runs twice for the same
      * download: {@code status = 'PENDING'} has already been consumed by the first run, and the
-     * {@code NOT EXISTS} stops the insert itself. {@code song_name} is written here because this is
-     * the first moment the server knows it — the request carried only an id.
+     * {@code NOT EXISTS} stops the insert itself.
+     *
+     * <p>{@code WITH ORDINALITY} numbers the songs in the order the provider listed them, which is
+     * the collection's track order — the only order a per-song view should ever show an album in.
+     * {@code song_name} here is the Soulseek query wording, not a display title; see V6.
      */
     private static final String CREATE_TASKS_SQL = """
             WITH created AS (
                 INSERT INTO download_tasks
-                    (task_id, download_id, youtube_id, song_name, phase, phase_entered_at,
-                     next_attempt_at)
-                SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, 'SEARCH_INIT',
-                       :now, :now
-                  FROM unnest(:youtubeIds::text[], :songNames::text[]) AS s(youtube_id, song_name)
+                    (task_id, download_id, youtube_id, song_name, position, phase,
+                     phase_entered_at, next_attempt_at)
+                SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, s.position,
+                       'SEARCH_INIT', :now, :now
+                  FROM unnest(:youtubeIds::text[], :songNames::text[])
+                       WITH ORDINALITY AS s(youtube_id, song_name, position)
                  WHERE NOT EXISTS (SELECT 1 FROM download_tasks t
                                     WHERE t.download_id = :downloadId)
                 RETURNING download_id
             )
             UPDATE downloads
                SET status = 'IN_PROGRESS',
-                   song_name = :collectionName
+                   admitted_at = :now
              WHERE download_id = :downloadId
                AND status = 'PENDING'
                AND EXISTS (SELECT 1 FROM created)
+            """;
+
+    /**
+     * Writes what ytmusic-adapter said an id is — the download's own id and, for a collection, every
+     * track's — so the feed and the per-song view have a title and a picture to show. One statement
+     * for N rows: the whole batch goes over as one JSON document and {@code jsonb_to_recordset}
+     * turns it back into rows, arrays included, which is what {@code unnest} of parallel arrays
+     * cannot do for a per-row {@code text[]}. The quoted column names are {@link MediaItem}'s
+     * component names verbatim, so Jackson's default output is the input.
+     *
+     * <p>Upsert, not insert: the same song can arrive as a single request and inside two albums.
+     * A later answer refreshes the row, but never with a null over a value — the adapter's answers
+     * are not uniformly complete, and a playlist listing a track knows less about it than a direct
+     * lookup does.
+     */
+    private static final String UPSERT_MEDIA_SQL = """
+            INSERT INTO media_items (youtube_id, title, artists, image_url, duration_seconds, track_count)
+            SELECT x."youtubeId", x.title, COALESCE(x.artists, '{}'), x."imageUrl",
+                   x."durationSeconds", x."trackCount"
+              FROM jsonb_to_recordset(:items::jsonb)
+                   AS x("youtubeId" text, title text, artists text[], "imageUrl" text,
+                        "durationSeconds" int, "trackCount" int)
+             WHERE x."youtubeId" IS NOT NULL
+            ON CONFLICT (youtube_id) DO UPDATE
+               SET title            = COALESCE(EXCLUDED.title, media_items.title),
+                   artists          = CASE WHEN EXCLUDED.artists = '{}' THEN media_items.artists
+                                           ELSE EXCLUDED.artists END,
+                   image_url        = COALESCE(EXCLUDED.image_url, media_items.image_url),
+                   duration_seconds = COALESCE(EXCLUDED.duration_seconds, media_items.duration_seconds),
+                   track_count      = COALESCE(EXCLUDED.track_count, media_items.track_count),
+                   fetched_at       = now()
             """;
 
     /** Claims due, unleased, non-terminal tasks; excludes DOWNLOAD_INIT rows when no transfer slot is free. */
@@ -153,12 +189,15 @@ public class DownloadTaskRepository {
      */
     private static final String CONCLUDE_SQL = """
             UPDATE downloads d
-               SET status = agg.status
+               SET status = agg.status,
+                   -- A download finished when its last song did; no clock needed here.
+                   finished_at = agg.finished_at
               FROM (SELECT t.download_id,
                            CASE WHEN bool_or(t.phase = 'SUCCEEDED') AND bool_or(t.phase = 'FAILED')
                                      THEN 'PARTIAL_SUCCESS'
                                 WHEN bool_or(t.phase = 'SUCCEEDED') THEN 'SUCCEEDED'
-                                ELSE 'FAILED' END AS status
+                                ELSE 'FAILED' END AS status,
+                           MAX(t.finished_at) AS finished_at
                       FROM download_tasks t
                      GROUP BY t.download_id
                     HAVING bool_and(t.phase IN ('SUCCEEDED', 'FAILED'))) agg
@@ -173,7 +212,9 @@ public class DownloadTaskRepository {
      */
     private static final String FAIL_UNADMITTED_SQL = """
             UPDATE downloads
-               SET status = 'FAILED'
+               SET status = 'FAILED',
+                   failure_reason = :reason,
+                   finished_at = :now
              WHERE download_id = :id
                AND status = 'PENDING'
             """;
@@ -210,20 +251,43 @@ public class DownloadTaskRepository {
     }
 
     /**
-     * @param collectionName the download's display title — a song's title, or an album/playlist's
+     * @param tasks in the collection's track order; their index becomes {@code position}
      * @return rows updated: 1 when the download was admitted, 0 when it had already been
      */
-    public Mono<Long> createTasks(UUID downloadId, String collectionName,
-                                  List<DownloadTask> tasks, Instant now) {
+    public Mono<Long> createTasks(UUID downloadId, List<DownloadTask> tasks, Instant now) {
         if (tasks.isEmpty()) {
             return Mono.just(0L);
         }
         return client.sql(CREATE_TASKS_SQL)
                 .bind("downloadId", downloadId)
-                .bind("collectionName", collectionName == null ? "" : collectionName)
                 .bind("youtubeIds", tasks.stream().map(DownloadTask::youtubeId).toArray(String[]::new))
                 .bind("songNames", tasks.stream().map(DownloadTask::songName).toArray(String[]::new))
                 .bind("now", now)
+                .fetch()
+                .rowsUpdated();
+    }
+
+    /**
+     * Deduplicated by id before binding: a playlist can list one track twice, and
+     * {@code ON CONFLICT DO UPDATE} refuses to touch the same row twice in one statement.
+     */
+    public Mono<Long> upsertMedia(List<MediaItem> items) {
+        List<MediaItem> distinct = items.stream()
+                .filter(item -> item.youtubeId() != null)
+                .collect(java.util.stream.Collectors.toMap(MediaItem::youtubeId, item -> item,
+                        (first, second) -> first, java.util.LinkedHashMap::new))
+                .values().stream().toList();
+        if (distinct.isEmpty()) {
+            return Mono.just(0L);
+        }
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(distinct);
+        } catch (Exception e) {
+            return Mono.error(new IllegalStateException("Could not serialise media items", e));
+        }
+        return client.sql(UPSERT_MEDIA_SQL)
+                .bind("items", json)
                 .fetch()
                 .rowsUpdated();
     }
@@ -235,9 +299,11 @@ public class DownloadTaskRepository {
                 .doOnError(error -> log.error("Could not conclude finished downloads", error));
     }
 
-    public Mono<Long> failUnadmitted(UUID downloadId) {
+    public Mono<Long> failUnadmitted(UUID downloadId, DownloadFailureCode code, Instant now) {
         return client.sql(FAIL_UNADMITTED_SQL)
                 .bind("id", downloadId)
+                .bind("reason", code.name())
+                .bind("now", now)
                 .fetch()
                 .rowsUpdated();
     }
@@ -295,9 +361,11 @@ public class DownloadTaskRepository {
                 .downloadId(row.get("download_id", UUID.class))
                 .youtubeId(row.get("youtube_id", String.class))
                 .downloadType(DownloadType.valueOf(row.get("download_type", String.class)))
-                .songName(row.get("song_name", String.class))
                 .status(DownloadStatus.valueOf(row.get("status", String.class)))
+                .failureReason(row.get("failure_reason", String.class))
                 .createdAt(row.get("created_at", Instant.class))
+                .admittedAt(row.get("admitted_at", Instant.class))
+                .finishedAt(row.get("finished_at", Instant.class))
                 .build();
     }
 
