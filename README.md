@@ -12,7 +12,7 @@ This is only the backend or server, for a visual experience this needs to be pai
 Three repositories, one stack: this one, [`naviseerr-client`](https://github.com/catacomb5099/naviseerr-client)
 (React 18 + Vite), and [`ytmusic-adapter`](https://github.com/catacomb5099/ytmusic-adapter)
 (a FastAPI sidecar over `ytmusicapi`). The client reaches search and downloads the same way —
-plain REST against two controllers. Nothing streams; the client polls `/downloads/active`.
+plain REST against the search, collection and download controllers. Nothing streams; the client polls `/downloads/active`.
 
 The diagram above is a static export. The **interactive** version — pan and zoom, click any
 component to trace its relationships, plus guided walkthroughs of the search path, the

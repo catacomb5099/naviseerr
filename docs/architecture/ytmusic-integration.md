@@ -40,14 +40,14 @@ this codebase.
 
 [YtMusicService.java](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java):
 
-- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists}` (the adapter's typed sugar
+- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists|playlists}` (the adapter's typed sugar
   routes; `type` is [YtMusicSearchType](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicSearchType.java),
   the LastFM-era `LastFMAPIMethod`'s replacement), passing `yt-music-service.search-result-limit`
   (`10`) as `limit`. The response is mapped through `YtMusicSearchResponseMapper`, which yields a
   `SearchResponse` with only that one list populated (the adapter already filtered server-side).
 - `getResults(query)` - **one** unfiltered `GET /v1/search` call, passing
   `yt-music-service.mixed-search-limit` (`100`) as `limit`. `YtMusicSearchResponseMapper` partitions
-  the mixed response into all three lists in a single pass. This used to fan out the three typed
+  the mixed response into all four lists in a single pass. This used to fan out the three typed
   searches concurrently and fuse them with `Mono.zip(...)`, same shape as
   `LastFMService.getResults(String)` did; that was changed to cut the provider calls a general
   search makes from three to one — see the "Mixed (general) search" section below for the accepted
@@ -113,12 +113,15 @@ are load-bearing on the UI, not stylistic):
 | `Track.streamURL` | `""` | the adapter exposes no streaming path by design; unread by the client either way |
 | `Track.albumId` | `album.browseId` | a real `MPREb_…` id — replaces the old hardcoded `"lol"` (see [gotchas.md](gotchas.md) #5) |
 | `Album.year` | `year`, else `0` | song search items carry no year; only album items do |
+| `Playlist.id` | `playlistId`, else `browseId`, else `""` | bare `PL...` preferred over the `VL`-prefixed `browseId` -- see Endpoints below |
+| `Playlist.artists` | `artists[].name` | the adapter folds ytmusicapi's `author` string into `artists[0]` |
+| `Playlist.trackCount` | `trackCount`, else `0` | the adapter's `itemCount`, already an int |
 
 `YtMusicSearchResponseMapper.mapToSearchResponse(response)` classifies every item by `resultType`
-in a single pass and routes it into `tracks`/`albums`/`artists`; anything else (`video`, `episode`,
-`podcast`, `playlist`, `station`, `profile`, `null`) is dropped. This is what makes the mapper safe
-for both callers: a typed response (already filtered server-side) yields items of one kind, so two
-of the three lists come back empty; a mixed response yields all three at once. It also replaces the
+in a single pass and routes it into `tracks`/`albums`/`artists`/`playlists`; anything else (`video`, `episode`,
+`podcast`, `station`, `profile`, `null`) is dropped. This is what makes the mapper safe
+for both callers: a typed response (already filtered server-side) yields items of one kind, so three
+of the four lists come back empty; a mixed response yields all four at once. It also replaces the
 old per-type defensive filter (three separate `"song".equals(...)` style checks) with one
 structural pass — defense against upstream shape drift leaking, e.g., a podcast into the artists
 list, is now inherent rather than duplicated three times.

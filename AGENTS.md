@@ -134,7 +134,7 @@ Deep-dive guides for agents and developers live in [docs/architecture/](docs/arc
 
 MVP:
 
-- Search songs, artists, and albums.
+- Search songs, artists, albums, and playlists.
 - Download songs.
 
 Important future milestones:

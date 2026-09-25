@@ -56,7 +56,7 @@ public class CollectionController {
      */
     @ExceptionHandler(YtMusicBadRequestException.class)
     ResponseEntity<Void> handleNotFound(YtMusicBadRequestException ex) {
-        log.warn("Collection not found: {}", ex.getMessage());
+        log.warn("Collection lookup rejected by ytmusic-adapter (answered 404): {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
     }
 
