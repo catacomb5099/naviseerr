@@ -6,13 +6,13 @@ This is only the backend or server, for a visual experience this needs to be pai
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/diagrams/system-architecture-dark.png">
-  <img alt="Naviseerr system architecture. The React client calls two Spring entry points: SearchService for GET /search/**, and DownloadController for POST /download and the polled GET /downloads/active. Search resolves through the ytmusic-adapter FastAPI sidecar to YouTube Music. Downloads are written to Postgres, reconciled by DownloadTaskRunner, and executed through DownloadStepExecutor and slskd against the Soulseek network." src="docs/architecture/diagrams/system-architecture-light.png">
+  <img alt="Naviseerr system architecture. The React client calls three Spring entry points: SearchService for GET /search/**, CollectionController for GET /collections/{id}, and DownloadController for POST /download and the polled GET /downloads/active. Search resolves through the ytmusic-adapter FastAPI sidecar to YouTube Music. Downloads are written to Postgres, reconciled by DownloadTaskRunner, and executed through DownloadStepExecutor and slskd against the Soulseek network." src="docs/architecture/diagrams/system-architecture-light.png">
 </picture>
 
 Three repositories, one stack: this one, [`naviseerr-client`](https://github.com/catacomb5099/naviseerr-client)
 (React 18 + Vite), and [`ytmusic-adapter`](https://github.com/catacomb5099/ytmusic-adapter)
 (a FastAPI sidecar over `ytmusicapi`). The client reaches search and downloads the same way —
-plain REST against two controllers. Nothing streams; the client polls `/downloads/active`.
+plain REST against the search, collection and download controllers. Nothing streams; the client polls `/downloads/active`.
 
 The diagram above is a static export. The **interactive** version — pan and zoom, click any
 component to trace its relationships, plus guided walkthroughs of the search path, the
