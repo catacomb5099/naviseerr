@@ -15,7 +15,8 @@ public class SearchResponseMapper {
             Mono.just(new SearchResponse(
                     lastFmSearchResponse.getResults().getTrackList().stream().map(SearchResponseMapper::mapFromLastFMTrack).toList(),
                     lastFmSearchResponse.getResults().getAlbumList().stream().map(SearchResponseMapper::mapFromLastFMAlbum).toList(),
-                    lastFmSearchResponse.getResults().getArtistList().stream().map(SearchResponseMapper::mapFromLastFMArtist).toList()
+                    lastFmSearchResponse.getResults().getArtistList().stream().map(SearchResponseMapper::mapFromLastFMArtist).toList(),
+                    List.of() // Last.fm has no playlist search; retained code, unused
             ))
         );
     }

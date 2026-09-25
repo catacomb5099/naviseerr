@@ -1,9 +1,9 @@
 # YouTube Music Integration
 
-> Status: current as of 14-09-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
+> Status: current as of 25-09-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
 YouTube Music, via a sidecar adapter service, is the metadata source for search (tracks, albums,
-artists). It replaces LastFM as the active search backend as of this doc; see
+artists, playlists). It replaces LastFM as the active search backend as of this doc; see
 [lastfm-integration.md](lastfm-integration.md) for the retained-but-unused Last.fm path and the ADR
 below for why. It is read-only and reactive (`Mono`), exposed through
 [SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java).
@@ -40,14 +40,14 @@ this codebase.
 
 [YtMusicService.java](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java):
 
-- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists}` (the adapter's typed sugar
+- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists|playlists}` (the adapter's typed sugar
   routes; `type` is [YtMusicSearchType](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicSearchType.java),
   the LastFM-era `LastFMAPIMethod`'s replacement), passing `yt-music-service.search-result-limit`
   (`10`) as `limit`. The response is mapped through `YtMusicSearchResponseMapper`, which yields a
   `SearchResponse` with only that one list populated (the adapter already filtered server-side).
 - `getResults(query)` - **one** unfiltered `GET /v1/search` call, passing
   `yt-music-service.mixed-search-limit` (`100`) as `limit`. `YtMusicSearchResponseMapper` partitions
-  the mixed response into all three lists in a single pass. This used to fan out the three typed
+  the mixed response into all four lists in a single pass. This used to fan out the three typed
   searches concurrently and fuse them with `Mono.zip(...)`, same shape as
   `LastFMService.getResults(String)` did; that was changed to cut the provider calls a general
   search makes from three to one — see the "Mixed (general) search" section below for the accepted
@@ -113,12 +113,15 @@ are load-bearing on the UI, not stylistic):
 | `Track.streamURL` | `""` | the adapter exposes no streaming path by design; unread by the client either way |
 | `Track.albumId` | `album.browseId` | a real `MPREb_…` id — replaces the old hardcoded `"lol"` (see [gotchas.md](gotchas.md) #5) |
 | `Album.year` | `year`, else `0` | song search items carry no year; only album items do |
+| `Playlist.id` | `playlistId`, else `browseId`, else `""` | bare `PL...` preferred over the `VL`-prefixed `browseId` -- see Endpoints below |
+| `Playlist.artists` | `artists[].name` | the adapter folds ytmusicapi's `author` string into `artists[0]` |
+| `Playlist.trackCount` | `trackCount`, else `0` | the adapter's `itemCount`, already an int |
 
 `YtMusicSearchResponseMapper.mapToSearchResponse(response)` classifies every item by `resultType`
-in a single pass and routes it into `tracks`/`albums`/`artists`; anything else (`video`, `episode`,
-`podcast`, `playlist`, `station`, `profile`, `null`) is dropped. This is what makes the mapper safe
-for both callers: a typed response (already filtered server-side) yields items of one kind, so two
-of the three lists come back empty; a mixed response yields all three at once. It also replaces the
+in a single pass and routes it into `tracks`/`albums`/`artists`/`playlists`; anything else (`video`, `episode`,
+`podcast`, `station`, `profile`, `null`) is dropped. This is what makes the mapper safe
+for both callers: a typed response (already filtered server-side) yields items of one kind, so three
+of the four lists come back empty; a mixed response yields all four at once. It also replaces the
 old per-type defensive filter (three separate `"song".equals(...)` style checks) with one
 structural pass — defense against upstream shape drift leaking, e.g., a podcast into the artists
 list, is now inherent rather than duplicated three times.
@@ -194,13 +197,20 @@ download now" from "try again next pass", so classifying it as unavailable would
 re-requested every loop interval for the life of the install. See
 [the ADR](../decisions/collection-downloads-14-09-2026.md).
 
-## Endpoints (unchanged)
+## Endpoints
 
-Still exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java),
-now `@GetMapping` (was `@RequestMapping`, which accepted every HTTP verb):
+Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java),
+`@GetMapping` (was `@RequestMapping`, which accepted every HTTP verb):
 
-- `GET /search/{query}` - mixed (one unfiltered adapter call; see above)
-- `GET /search/{query}/tracks` | `/albums` | `/artists` - typed (one filtered adapter call each)
+- `GET /search/{query}` - mixed (one unfiltered adapter call; see above). Fills all four lists,
+  `playlists` included -- the mixed page always carried `playlist` items, the mapper used to drop them.
+- `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - typed (one filtered adapter
+  call each)
+
+`Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`), falling back to the
+`VL`-prefixed `browseId` only when the bare id is absent. The adapter's detail route accepts either,
+but the backend keys `media_items` by whatever id the client posts, so the client must pass the id
+it was given through to `/download/collection/{id}` unchanged.
 
 ## Configuration (`yt-music-service.*`)
 
@@ -215,9 +225,8 @@ now `@GetMapping` (was `@RequestMapping`, which accepted every HTTP verb):
 
 ## Known gaps
 
-- No playlist search — the adapter supports it (`/v1/search/playlists`), but `SearchResponse` has no
-  `Playlist` field yet, and the general/type-filtered search on the naviseerr side never requests it.
-  Deferred deliberately; see the ADR.
+- Playlist search (`Playlist.trackCount`) reports the adapter's `trackCount`, which is YouTube's
+  advertised `itemCount`, or `0` when YouTube gives none.
 - No caching — every search hits the adapter (and, behind it, YouTube) fresh.
 - The adapter's album/artist/playlist *detail* endpoints (`/v1/albums/{browseId}` etc.) are
   unconsumed; there is no `services/ytmusic` code path that calls them.

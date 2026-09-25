@@ -15,5 +15,7 @@ public class SearchResponse {
     List<Album> albums;
     @Nullable
     List<Artist> artists;
+    @Nullable
+    List<Playlist> playlists;
 }
 

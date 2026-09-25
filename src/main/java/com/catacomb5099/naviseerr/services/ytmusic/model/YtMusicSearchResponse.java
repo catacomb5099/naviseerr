@@ -45,6 +45,8 @@ public class YtMusicSearchResponse {
         private String thumbnailUrl;
         private Boolean explicit;
         private Integer year;
+        // Playlist items only: ytmusicapi's itemCount, folded to an int by the adapter.
+        private Integer trackCount;
     }
 
     @Data

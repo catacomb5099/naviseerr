@@ -19,7 +19,7 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - `config/`
   - [WebConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/WebConfig.java) - `@EnableWebFlux` + wide-open CORS (`*`). See the note in [gotchas.md](gotchas.md).
   - [TimeConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/TimeConfig.java) - the `Clock` bean (`Clock.systemUTC()`), injected wherever "now" matters so budget/lease branches are unit-testable without sleeping.
-- `schema/response/` - API response DTOs returned to clients: `Track`, `Album`, `Artist`, `SearchResponse`.
+- `schema/response/` - API response DTOs returned to clients: `Track`, `Album`, `Artist`, `Playlist`, `SearchResponse`.
 - `schema/slskd/` - slskd API DTOs: `SearchState`, `SearchResponseItem`, `SearchFile`, `TransferedFile`, `QueueDownloadResponse`, the `TransferState` enum, and `SlskdSearchState` (search-state classification, added with the durable-download-state-machine work). Details in [slskd-integration.md](slskd-integration.md).
 - `services/`
   - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) - `@RestController` for the search endpoints, backed by YouTube Music.
@@ -38,7 +38,7 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 
 - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) (`@RestController`):
   - `GET /search/{query}` - combined search (YouTube Music, via `ytmusic-adapter`)
-  - `GET /search/{query}/tracks` | `/albums` | `/artists` - per-type search
+  - `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - per-type search
 - [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) (`@RestController`):
   - `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST` - insert a `PENDING` download row, return `202 Accepted`; processed asynchronously (see [download-manager.md](download-manager.md)).
 
