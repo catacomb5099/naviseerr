@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.util;
 
 import com.catacomb5099.naviseerr.schema.response.Album;
 import com.catacomb5099.naviseerr.schema.response.Artist;
+import com.catacomb5099.naviseerr.schema.response.Playlist;
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
 import com.catacomb5099.naviseerr.schema.response.Track;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicSearchResponse;
@@ -78,7 +79,12 @@ class YtMusicSearchResponseMapperTest {
         return YtMusicSearchResponse.Item.builder()
                 .type("playlist")
                 .browseId("VLPLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx")
+                .playlistId("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx")
                 .title("Wonderwall - Oasis")
+                // the adapter folds ytmusicapi's `author` string into artists[0] with a null channelId
+                .artists(List.of(YtMusicSearchResponse.ArtistRef.builder().name("YouTube Music").channelId(null).build()))
+                .thumbnailUrl("https://example.com/playlist.jpg")
+                .trackCount(42)
                 .build();
     }
 
@@ -202,6 +208,41 @@ class YtMusicSearchResponseMapperTest {
     }
 
     @Test
+    void playlists_mapBarePlaylistIdToId_authorToArtists_andTrackCount() {
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(playlistItem())).build());
+
+        assertEquals(1, result.getPlaylists().size());
+        Playlist playlist = result.getPlaylists().get(0);
+        assertEquals("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", playlist.getId(), "bare id, not the VL-prefixed browseId");
+        assertEquals("Wonderwall - Oasis", playlist.getName());
+        assertEquals(List.of("YouTube Music"), playlist.getArtists());
+        assertEquals("https://example.com/playlist.jpg", playlist.getIconURL());
+        assertEquals(42, playlist.getTrackCount());
+        assertTrue(result.getTracks().isEmpty());
+        assertTrue(result.getAlbums().isEmpty());
+        assertTrue(result.getArtists().isEmpty());
+    }
+
+    @Test
+    void playlists_nullPlaylistId_fallsBackToBrowseId() {
+        YtMusicSearchResponse.Item item = playlistItem().toBuilder().playlistId(null).build();
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item)).build());
+
+        assertEquals("VLPLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", result.getPlaylists().get(0).getId());
+    }
+
+    @Test
+    void playlists_nullTrackCount_defaultsToZero_notNullPointerOnUnboxing() {
+        YtMusicSearchResponse.Item item = playlistItem().toBuilder().trackCount(null).build();
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item)).build());
+
+        assertEquals(0, result.getPlaylists().get(0).getTrackCount());
+    }
+
+    @Test
     void nullItemsList_mapsToEmptyResults_notNullPointerException() {
         SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
                 YtMusicSearchResponse.builder().items(null).build());
@@ -216,10 +257,11 @@ class YtMusicSearchResponseMapperTest {
         assertTrue(result.getTracks().isEmpty());
         assertTrue(result.getAlbums().isEmpty());
         assertTrue(result.getArtists().isEmpty());
+        assertTrue(result.getPlaylists().isEmpty());
     }
 
     @Test
-    void mixedResponse_partitionsAllThreeTypes_inOneCall_andDropsNonMusicTypes() {
+    void mixedResponse_partitionsAllFourTypes_inOneCall_andDropsNonMusicTypes() {
         SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
                 YtMusicSearchResponse.builder()
                         .items(List.of(songItem(), videoItem(), artistItem(), albumItem(),
@@ -229,9 +271,11 @@ class YtMusicSearchResponseMapperTest {
         assertEquals(1, result.getTracks().size());
         assertEquals(1, result.getAlbums().size());
         assertEquals(1, result.getArtists().size());
+        assertEquals(1, result.getPlaylists().size());
         assertEquals("hpSrLjc5SMs", result.getTracks().get(0).getId());
         assertEquals("MPREb_Hl8XJR59OrY", result.getAlbums().get(0).getId());
         assertEquals("UCmMUZbaYdNH0bEd1PAlAqsA", result.getArtists().get(0).getId());
+        assertEquals("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", result.getPlaylists().get(0).getId());
     }
 
     @Test

@@ -7,7 +7,8 @@ package com.catacomb5099.naviseerr.services.ytmusic;
 public enum YtMusicSearchType {
     SONGS("songs"),
     ALBUMS("albums"),
-    ARTISTS("artists");
+    ARTISTS("artists"),
+    PLAYLISTS("playlists");
 
     private final String pathSegment;
 

@@ -74,7 +74,8 @@ public class LastFMService {
                 .map(tuple ->  new SearchResponse(
                             tuple.getT1().getTracks(),
                             tuple.getT2().getAlbums(),
-                            tuple.getT3().getArtists()
+                            tuple.getT3().getArtists(),
+                            java.util.List.of() // Last.fm has no playlist search; retained code, unused
                     ));
     }
 }
