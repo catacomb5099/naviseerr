@@ -9,15 +9,17 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * The Soulseek queries to try for one song, noisiest first. A YouTube title carries platform noise
- * -- "(Official Lyric Video)", a leading "Artist - " the artist suffix then repeats -- that never
- * appears in a music filename, so the raw name often finds nothing while the bare title does.
+ * The Soulseek queries to try for one song. A YouTube title carries platform noise -- "(Official
+ * Lyric Video)", a leading "Artist - " the artist suffix then repeats -- that never appears in a
+ * music filename, so the raw name is never searched at all: the first query is the name with that
+ * noise removed, and the one fallback is the bare "title - artist".
  *
  * <p>Pure and re-derived on every call, never stored: {@code download_tasks} keeps only the index of
  * the tier in use (see {@link DownloadTask#searchTier}), so these rules can change without a data
- * migration. Each tier is derived from the one before it, so tier three never re-admits what tier
- * two removed. Tiers that come out identical to an earlier one are dropped, so a title that is
- * already clean is searched once, not three times.
+ * migration -- and the noise list is expected to grow as more titles are seen failing. The bare
+ * tier is derived from the first, so it never re-admits what the first removed. A fallback that
+ * comes out identical to the first query is dropped, so a title with nothing to strip is searched
+ * once, not twice.
  */
 final class SearchQueryTiers {
 
@@ -56,22 +58,25 @@ final class SearchQueryTiers {
 
     private SearchQueryTiers() {}
 
-    /** Distinct queries in the order to try them. Never empty: the raw name is always tier one. */
+    /**
+     * Distinct queries in the order to try them. Never empty: a name that is nothing but noise
+     * ("(Official Video)") falls back to itself rather than to an empty search.
+     */
     static List<String> of(String songName) {
         String raw = songName == null ? "" : songName;
         String noiseless = withoutNoise(raw);
+        String first = noiseless.isBlank() ? raw : noiseless;
         LinkedHashSet<String> tiers = new LinkedHashSet<>();
-        tiers.add(raw);
-        for (String derived : List.of(noiseless, bare(noiseless))) {
-            if (!derived.isBlank()) {
-                tiers.add(derived);
-            }
+        tiers.add(first);
+        String bare = bare(first);
+        if (!bare.isBlank()) {
+            tiers.add(bare);
         }
         return List.copyOf(tiers);
     }
 
     /**
-     * Tier two: bracket groups keep what is musically meaningful, a group left empty goes, and so
+     * Tier one: bracket groups keep what is musically meaningful, a group left empty goes, and so
      * does a segment that is nothing but noise ("Wonderwall - Official Video - Oasis"). Only the
      * middle segments are candidates for that: the first and the last are title and artist by
      * construction, and "Audio - Sia" shows a title can BE a noise word.
@@ -107,7 +112,7 @@ final class SearchQueryTiers {
         return Matcher.quoteReplacement(whole.charAt(0) + kept + whole.charAt(whole.length() - 1));
     }
 
-    /** Tier three: no brackets at all, and exactly one "title - artist". */
+    /** Tier two: no brackets at all, and exactly one "title - artist". */
     private static String bare(String name) {
         String stripped = name;
         String previous;

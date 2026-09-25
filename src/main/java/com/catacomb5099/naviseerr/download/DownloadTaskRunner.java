@@ -195,11 +195,11 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * What slskd is asked to search for. "Title - Primary Artist" is the exact string the client
-     * used to send before requests became ids, and the shape {@code TrackMatchingService} still
-     * splits on to check both halves appear in a filename. Keeping the wording identical keeps the
-     * hit rate of the first search identical; when that search finds nothing, {@link SearchQueryTiers}
-     * derives the cleaner fallbacks from this exact string, so the rewording lives there, not here.
+     * The song's name in the shape slskd queries are built from. "Title - Primary Artist" is the
+     * exact string the client used to send before requests became ids, and the shape
+     * {@code TrackMatchingService} still splits on to check both halves appear in a filename. It is
+     * stored as-is; {@link SearchQueryTiers} strips the platform noise from it before the first
+     * search and derives the bare fallback, so the rewording lives there, not here.
      */
     static String soulseekQuery(YoutubeSongInfo song) {
         return song.authorNames().isEmpty()

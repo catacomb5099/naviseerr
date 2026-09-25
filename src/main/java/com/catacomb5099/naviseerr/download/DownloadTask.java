@@ -33,9 +33,10 @@ public record DownloadTask(
         Instant nextAttemptAt,
         String searchId,
         /**
-         * Which tier of {@link SearchQueryTiers#of} this song is currently searching on; 0 is the raw
-         * name. Only the index is stored, never the derived queries -- they are recomputed from
-         * {@link #songName} on every read, so the cleaning rules can change without a data migration.
+         * Which tier of {@link SearchQueryTiers#of} this song is currently searching on; 0 is the
+         * name with platform noise removed, 1 the bare "title - artist". Only the index is stored,
+         * never the derived queries -- they are recomputed from {@link #songName} on every read, so
+         * the cleaning rules can change without a data migration.
          */
         int searchTier,
         List<DownloadCandidate> candidates,

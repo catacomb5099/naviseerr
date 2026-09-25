@@ -82,9 +82,9 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_onANoisyTitle_retriesWithTheNextTier() {
+    void searchPoll_completeWithNoCandidates_withAFallbackLeft_retriesWithTheBareTitle() {
         DownloadTask task = searchPolling("s1").toBuilder()
-                .songName("Hello (Official Lyric Video) - Oasis").build();
+                .songName("Wonderwall (Remix) [Official Video] - Oasis").build();
         Instant later = T0.plusSeconds(30);
 
         DownloadDecision d = machine.afterSearchPoll(
@@ -95,27 +95,26 @@ class DownloadStateMachineTest {
         assertEquals(1, next.searchTier());
         assertNull(next.searchId(), "the old search must not be polled again");
         assertEquals(later, next.phaseEnteredAt(), "each tier gets a fresh search budget");
-        assertEquals("Hello - Oasis", next.searchQuery());
+        assertEquals("Wonderwall - Oasis", next.searchQuery());
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_onTierOne_ofAThreeTierTitle_movesToTierTwo() {
+    void searchPoll_completeWithNoCandidates_onAnArtistEchoTitle_retriesWithTheArtistDeduped() {
         DownloadTask task = searchPolling("s1").toBuilder()
-                .songName("Oasis - Don't Look Back In Anger (Official Video) - Oasis")
-                .searchTier(1).build();
+                .songName("Oasis - Don't Look Back In Anger (Official Video) - Oasis").build();
 
         DownloadDecision d = machine.afterSearchPoll(
                 task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
-        assertEquals(2, next.searchTier());
+        assertEquals(1, next.searchTier());
         assertEquals("Don't Look Back In Anger - Oasis", next.searchQuery());
     }
 
     @Test
     void searchPoll_completeWithNoCandidates_onTheLastTier_fails() {
         DownloadTask task = searchPolling("s1").toBuilder()
-                .songName("Hello (Official Lyric Video) - Oasis").searchTier(1).build();
+                .songName("Wonderwall (Remix) [Official Video] - Oasis").searchTier(1).build();
 
         DownloadDecision d = machine.afterSearchPoll(
                 task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
@@ -128,6 +127,21 @@ class DownloadStateMachineTest {
     void searchPoll_completeWithNoCandidates_onACleanTitle_failsWithoutRetrying() {
         // One tier only: a title with nothing to strip must not be searched again with itself.
         DownloadTask task = searchPolling("s1").toBuilder().songName("Wonderwall - Oasis").build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
+
+        assertEquals(DownloadFailureCode.NO_CANDIDATES,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void searchPoll_completeWithNoCandidates_onAVideoNoiseTitle_failsWithoutRetrying_theNoiseWasNeverSearched() {
+        // "(Official Lyric Video)" is gone before the FIRST search, so there is no cleaner wording
+        // left to fall back to: the bare title is what was already tried.
+        DownloadTask task = searchPolling("s1").toBuilder()
+                .songName("Hello (Official Lyric Video) - Oasis").build();
+        assertEquals("Hello - Oasis", task.searchQuery());
 
         DownloadDecision d = machine.afterSearchPoll(
                 task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
