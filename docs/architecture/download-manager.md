@@ -42,7 +42,7 @@ Source: [DownloadTaskRunner.java](../../src/main/java/com/catacomb5099/naviseerr
 | `DOWNLOAD_INIT` | `POST /transfers/downloads/{user}` | `Continue` (retry/next-candidate) | `download-poll-interval-ms` used as the retry delay | — (bounded by `slskd-service.retry-count` and candidate list length, not by duration) | candidates and retries exhausted -> `Terminal FAILED` ("All download sources exhausted") |
 | `DOWNLOAD_POLL` | reads batched `GET /transfers/downloads` | `Continue` | `download-poll-interval-ms` (5000) | `download-budget-ms` (3600000 = 1h); `missing-transfer-grace-ms` (60000) when the transfer is absent from the response | `Terminal FAILED` ("timed out", or "slskd has no record of this transfer") |
 
-A completed `SEARCH_POLL` with no usable candidates is `Terminal FAILED` ("No download candidates found"); a `DOWNLOAD_POLL` that sees any success state is `Terminal SUCCEEDED`.
+A completed `SEARCH_POLL` with no usable candidates is `Terminal FAILED` ("No download candidates found"); a `DOWNLOAD_POLL` that sees any success state is `Terminal SUCCEEDED`. Before that failure, a song whose title still has a cleaner wording left is sent back to `SEARCH_INIT` with `search_tier + 1` (`Advance`, fresh search budget) — `SearchQueryTiers` derives up to three queries from `song_name` (as-is, minus video noise in brackets or standing as its own segment, bare "title - artist"), and only the "complete with zero candidates" branch ever advances a tier. Because the wire maps `SEARCH_INIT` to `STARTING`, a client that polls in the one tick between tiers sees `STARTING` and a reset `stage_entered_at` before `SEARCHING` returns; that is the fresh budget showing through, accepted rather than special-cased on the wire.
 
 `phase_entered_at` resets on a phase change (`DownloadTask.withPhase`) and is preserved across a re-poll (`DownloadTask.dueAt`), which is what makes a real duration budget possible — inverting that makes every timeout unreachable. This replaces the old `max-poll-attempts` under a doubling backoff, which had no real cap: with the previous `defaultBackoff(30, 50ms)`, the gap between polls doubled indefinitely (~51s by attempt 11, ~14 minutes by attempt 15, ~7 hours by attempt 20), so the nominal 30-attempt budget spanned roughly two years and was not a timeout in any useful sense.
 
@@ -137,6 +137,7 @@ CREATE TABLE download_tasks (
     lease_owner       TEXT,
     lease_expires_at  TIMESTAMPTZ,
     search_id         TEXT,
+    search_tier       INT         NOT NULL DEFAULT 0 CHECK (search_tier >= 0),   -- V7
     candidates        TEXT        NOT NULL DEFAULT '[]',
     candidate_index   INT         NOT NULL DEFAULT 0,
     retry_index       INT         NOT NULL DEFAULT 0,

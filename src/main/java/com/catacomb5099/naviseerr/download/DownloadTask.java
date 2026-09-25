@@ -32,6 +32,12 @@ public record DownloadTask(
         Instant phaseEnteredAt,
         Instant nextAttemptAt,
         String searchId,
+        /**
+         * Which tier of {@link SearchQueryTiers#of} this song is currently searching on; 0 is the raw
+         * name. Only the index is stored, never the derived queries -- they are recomputed from
+         * {@link #songName} on every read, so the cleaning rules can change without a data migration.
+         */
+        int searchTier,
         List<DownloadCandidate> candidates,
         int candidateIndex,
         int retryIndex,
@@ -74,6 +80,12 @@ public record DownloadTask(
     /** Zeroes progress. Used when moving to a new candidate or retry attempt of the same one. */
     public DownloadTask withProgressReset() {
         return toBuilder().progressPercent(BigDecimal.ZERO).build();
+    }
+
+    /** Clamped to the last tier, so a corrupt or out-of-range row can never throw here. */
+    public String searchQuery() {
+        List<String> tiers = SearchQueryTiers.of(songName);
+        return tiers.get(Math.clamp(searchTier, 0, tiers.size() - 1));
     }
 
     public DownloadCandidate currentCandidate() {

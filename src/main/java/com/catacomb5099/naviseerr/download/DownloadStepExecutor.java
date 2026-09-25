@@ -54,7 +54,7 @@ public class DownloadStepExecutor {
     private Mono<DownloadDecision> step(DownloadTask task, Map<String, SearchState> searchesById,
                                         Map<String, TransferedFile> transfersById, Instant now) {
         return switch (task.phase()) {
-            case SEARCH_INIT -> slskdService.searchResults(task.songName())
+            case SEARCH_INIT -> slskdService.searchResults(task.searchQuery())
                     .map(state -> stateMachine.afterSearchInit(task, state, now));
 
             // A missing entry (task.searchId() not in the map) is passed through as null and handled
@@ -99,7 +99,11 @@ public class DownloadStepExecutor {
                                 + "returned {} response(s)",
                         task.searchId(), task.downloadId(), full.getState(), full.getResponseCount(),
                         full.getFileCount(), size(state.getResponses()), size(full.getResponses())))
-                .flatMap(full -> searchResultProcessor.selectBestFiles(full, task.songName())
+                // Judged against the query actually searched, not the raw name. The matcher splits
+                // title from artist on the query's own " - " and scores its words, so a cleaner search
+                // scored against the raw name would reject files for the very noise ("Official Video"
+                // as its own segment, a duplicated leading artist) the cleaner wording removed.
+                .flatMap(full -> searchResultProcessor.selectBestFiles(full, task.searchQuery())
                         .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
                         .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
     }

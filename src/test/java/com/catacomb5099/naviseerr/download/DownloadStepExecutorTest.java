@@ -56,6 +56,35 @@ class DownloadStepExecutorTest {
     }
 
     @Test
+    void searchInit_onALaterTier_searchesTheCleanerQuery_neverTheRawName() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder()
+                .songName("Hello (Official Lyric Video) - Oasis").searchTier(1).build();
+        when(slskdService.searchResults("Hello - Oasis"))
+                .thenReturn(Mono.just(SlskdFixtures.searchState("s2", false, "InProgress")));
+
+        DownloadDecision d = executor.execute(task, Map.of(), Map.of()).block();
+
+        assertEquals("s2", assertInstanceOf(DownloadDecision.Advance.class, d).next().searchId());
+        verify(slskdService).searchResults("Hello - Oasis");
+        verify(slskdService, never()).searchResults("Hello (Official Lyric Video) - Oasis");
+    }
+
+    @Test
+    void searchPoll_complete_selectsAgainstTheTierQuery_notTheRawName() {
+        // The relevance filter must score files against the wording that was actually searched.
+        DownloadTask task = searchPolling("s1").toBuilder()
+                .songName("Hello (Official Lyric Video) - Oasis").searchTier(1).build();
+        var summary = SlskdFixtures.searchState("s1", true, "Completed");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.selectBestFiles(eq(full), any())).thenReturn(Mono.just(List.of()));
+
+        executor.execute(task, Map.of("s1", summary), Map.of()).block();
+
+        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"));
+    }
+
+    @Test
     void searchPoll_readsFromTheBatchedMap_makesNoPerRowCall() {
         SearchState state = SlskdFixtures.searchState("s1", false, "InProgress");
 
