@@ -198,8 +198,8 @@ public class DownloadTaskRunner {
      * The song's name in the shape slskd queries are built from. "Title - Primary Artist" is the
      * exact string the client used to send before requests became ids, and the shape
      * {@code TrackMatchingService} still splits on to check both halves appear in a filename. It is
-     * stored as-is; {@link SearchQueryTiers} strips the platform noise from it before the first
-     * search and derives the bare fallback, so the rewording lives there, not here.
+     * stored as-is; {@link SearchQueryTiers} derives the bare "title - artist" and the title-only
+     * fallback from it, so the rewording lives there, not here.
      */
     static String soulseekQuery(YoutubeSongInfo song) {
         return song.authorNames().isEmpty()
@@ -351,7 +351,7 @@ public class DownloadTaskRunner {
             case DownloadDecision.Advance advance -> {
                 if (advance.next().searchTier() > task.searchTier()) {
                     log.info("Song '{}' of download {} found no candidates for '{}'; retrying Soulseek "
-                                    + "with cleaner query '{}' (tier {} of {})",
+                                    + "with looser query '{}' (tier {} of {})",
                             task.songName(), task.downloadId(), task.searchQuery(),
                             advance.next().searchQuery(), advance.next().searchTier() + 1,
                             SearchQueryTiers.of(task.songName()).size());
