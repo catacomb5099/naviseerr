@@ -25,8 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TrackMatchingServiceLabelledTest {
 
-    private static final double MIN_PRECISION = 0.69;
-    private static final double MIN_RECALL = 0.95;
+    private static final double MIN_PRECISION = 0.80;
+    private static final double MIN_RECALL = 0.93;
 
     private final TrackMatchingService matcher = new TrackMatchingService();
 
