@@ -33,7 +33,8 @@ with gzip.open(out, "wt", encoding="utf-8") as fh:
         exact = lab["relevant"] and (ver == req or (ver in LIVEISH and req in LIVEISH))
         q = (p["variants"].get("A") or next(iter(p["variants"].values())))["query"]
         fh.write(json.dumps({"song": sid, "title": s["title"], "artist": s["artists"][0] if s["artists"] else None,
-                             "duration": s["duration"], "query": q, "requested": req, "path": f["path"],
+                             "duration": s["duration"], "query": q,
+                             "request": f"{s['title']} - {s['artists'][0]}" if s["artists"] else s["title"], "requested": req, "path": f["path"],
                              "length": f.get("length"), "bitRate": f.get("bitRate"), "ext": f["ext"],
                              "relevant": lab["relevant"], "version": ver, "exact": exact}, ensure_ascii=False) + "\n")
         n += 1
