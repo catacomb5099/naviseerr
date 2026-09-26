@@ -16,7 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Measures the matcher against real Soulseek results that were labelled by hand (well, by Sonnet 5, audited)
  * in the search lab of 2026-09-26. Each fixture row is one returned file for one requested song:
- * {@code exact} means "this file is the requested song in the requested version".
+ * {@code exact} means "this file is the requested song in the requested version"; {@code request} is the
+ * "title - artist" string naviseerr builds from the YouTube entry, qualifiers included.
  * <p>
  * The floors below are a few points under what the matcher scored when the fixture was created, so a change
  * that makes the picker worse fails here instead of being argued about. Raise them when the picker improves.
@@ -25,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TrackMatchingServiceLabelledTest {
 
     private static final double MIN_PRECISION = 0.69;
-    private static final double MIN_RECALL = 0.95;
+    private static final double MIN_RECALL = 0.96;
 
     private final TrackMatchingService matcher = new TrackMatchingService();
 
@@ -35,7 +36,7 @@ class TrackMatchingServiceLabelledTest {
         int tp = 0, fp = 0, fn = 0;
         for (JsonNode r : rows) {
             boolean exact = r.get("exact").asBoolean();
-            boolean accepted = matcher.isMatch(r.get("query").asText(), r.get("path").asText());
+            boolean accepted = matcher.isMatch(r.get("request").asText(), r.get("path").asText());
             if (accepted && exact) tp++;
             else if (accepted) fp++;
             else if (exact) fn++;
