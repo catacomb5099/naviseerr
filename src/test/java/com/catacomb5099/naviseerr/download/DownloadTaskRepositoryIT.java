@@ -423,6 +423,77 @@ class DownloadTaskRepositoryIT {
         assertEquals("/music/A/s/s.flac", stored);
     }
 
+    private List<UUID> toFinalise() {
+        return repository.downloadsToFinalise(10, NOW.minusSeconds(600)).map(LibraryOrganiser.Collection::downloadId)
+                .collectList().block();
+    }
+
+    @Test
+    void downloadsToFinalise_returnsAFinishedDownloadOnceEveryFiledOrGivenUpSongIsSettled() {
+        UUID playlist = insertDownload("PARTIAL_SUCCESS", "PLAYLIST");
+        media("yt-" + playlist, "Alt Nation 1989", "Various");
+        repository.setLibraryPath(succeededSong(playlist, "a", "x\\a.flac", NOW), "/music/A/a/a.flac").block();
+        UUID pending = succeededSong(playlist, "b", "x\\b.flac", NOW);   // filed? not yet
+
+        assertEquals(List.of(), toFinalise(), "a song still being looked for holds the download back");
+
+        repository.setLibraryPath(pending, "/music/B/b/b.flac").block();
+        List<LibraryOrganiser.Collection> ready = repository.downloadsToFinalise(10, NOW.minusSeconds(600))
+                .collectList().block();
+        assertEquals(1, ready.size());
+        assertEquals(playlist, ready.getFirst().downloadId());
+        assertEquals(DownloadType.PLAYLIST, ready.getFirst().type());
+        assertEquals("Alt Nation 1989", ready.getFirst().title());
+    }
+
+    @Test
+    void downloadsToFinalise_countsAnOldUnfiledSongAsGivenUp_butNeedsAtLeastOneFiledSong() {
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        succeededSong(playlist, "old", "x\\old.flac", NOW.minusSeconds(601));   // never turned up
+        assertEquals(List.of(), toFinalise(), "history: nothing was ever filed, nothing to write");
+
+        repository.setLibraryPath(succeededSong(playlist, "a", "x\\a.flac", NOW), "/music/A/a/a.flac").block();
+        assertEquals(List.of(playlist), toFinalise());
+    }
+
+    @Test
+    void downloadsToFinalise_skipsRunningAndAlreadyOrganisedDownloads() {
+        UUID running = insertDownload("IN_PROGRESS", "ALBUM");
+        repository.setLibraryPath(succeededSong(running, "a", "x\\a.flac", NOW), "/music/A/a/a.flac").block();
+        UUID done = insertDownload("SUCCEEDED", "ALBUM");
+        repository.setLibraryPath(succeededSong(done, "b", "x\\b.flac", NOW), "/music/B/b/b.flac").block();
+
+        assertEquals(List.of(done), toFinalise());
+        assertEquals(1L, repository.setOrganisedAt(done, NOW).block());
+        assertEquals(0L, repository.setOrganisedAt(done, NOW.plusSeconds(1)).block(), "writes once");
+        assertEquals(List.of(), toFinalise());
+    }
+
+    @Test
+    void playlistEntries_listsFiledSongsInTrackOrder_withTheirNamesAndLength() {
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        media("s2", "Whip It", "Devo");
+        repository.upsertMedia(List.of(new MediaItem("s1", "Debaser", List.of("Pixies"), null, 170, null))).block();
+        UUID second = succeededSong(playlist, "s2", "x\\b.mp3", NOW);
+        UUID first = succeededSong(playlist, "s1", "x\\a.flac", NOW);
+        UUID unfiled = succeededSong(playlist, "s3", "x\\c.flac", NOW);
+        template.getDatabaseClient().sql("UPDATE download_tasks SET position = CASE task_id "
+                        + "WHEN :first THEN 1 WHEN :second THEN 2 ELSE 3 END WHERE download_id = :dl")
+                .bind("first", first).bind("second", second).bind("dl", playlist).fetch().rowsUpdated().block();
+        repository.setLibraryPath(second, "/music/Devo/Whip It/b.mp3").block();
+        repository.setLibraryPath(first, "/music/Pixies/Debaser/a.flac").block();
+
+        List<LibraryOrganiser.Entry> entries = repository.playlistEntries(playlist).collectList().block();
+
+        assertEquals(List.of("/music/Pixies/Debaser/a.flac", "/music/Devo/Whip It/b.mp3"),
+                entries.stream().map(LibraryOrganiser.Entry::libraryPath).toList());
+        assertEquals("Debaser", entries.getFirst().title());
+        assertEquals(List.of("Pixies"), entries.getFirst().artists());
+        assertEquals(170, entries.getFirst().durationSeconds());
+        assertNull(entries.get(1).durationSeconds());
+        assertNotNull(unfiled, "the unfiled third song is simply absent from the list");
+    }
+
     @Test
     void conclude_succeedsADownloadWhoseOnlySongSucceeded() {
         UUID id = admitOneSong("PENDING");

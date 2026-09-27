@@ -106,6 +106,29 @@ the file, both re-import it on every scan. A `Playlists` folder holding only `.m
 album to Jellyfin. The alternative not chosen -- one folder, `.m3u8` inside it -- works in Navidrome
 and produces a wrong album in Jellyfin.
 
+**The playlist file.** Written by the finalise step once every succeeded song of the download has a
+`library_path` or has been given up on, and at least one was filed (`DOWNLOADS_TO_FINALISE_SQL`); then
+`downloads.organised_at` is stamped. The file is naviseerr's and is regenerated whole each time, which
+is what makes rewriting it idempotent -- Jellyfin may rewrite it if a user edits the playlist in its UI,
+and the next regeneration simply wins.
+
+```
+#EXTM3U
+#PLAYLIST:Alt Nation 1989
+#EXTINF:210,Pixies - Here Comes Your Man
+../Pixies/Here Comes Your Man/05 Pixies - Here Comes Your Man.flac
+#EXTINF:-1,Devo - Whip It
+../Devo/Whip It/02-devo-whip_it.mp3
+```
+
+UTF-8 without BOM, LF, forward slashes, NFC, one path per line relative to the folder holding the
+file (both servers join against that folder; absolute container paths break when a mount moves).
+`#PLAYLIST` names it in Navidrome; Jellyfin ignores it and uses the file name, which is the same
+sanitised title. `#EXTINF` is a comment both servers ignore in favour of the tracks' own tags;
+duration is `-1` when unknown. Staged as `.partial` and renamed into place. Entries whose path is not
+under `library.root` (a reconfigured root) are skipped with a warning rather than written as dangling
+lines. A song or an album has no collection-level file and is just stamped `organised_at`.
+
 **Why no `album.nfo`.** Navidrome never reads nfo files. Jellyfin reads `album.nfo` only when its Nfo
 reader is enabled and then overwrites the album name from the first track's tag anyway, so it cannot
 fix an untagged album. Nothing to write. A `cover.jpg` would help both servers and is a follow-up

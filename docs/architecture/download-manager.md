@@ -25,6 +25,7 @@ flowchart TD
       fetch --> step["STEP each claimed row concurrently (flatMap): DownloadStepExecutor -> DownloadStateMachine -> one decision"]
       step --> apply["APPLY: Advance/Continue -> repository.save(next); Terminal -> DownloadService.finishTask (one song, and on a first FAILED: LibraryOrganiser.deletePartials); then repository.concludeDownloads() once per pass"]
       apply --> organise["ORGANISE (optional, V8): SUCCEEDED tasks with no library_path finished within 10 min -> LibraryOrganiser.file moves slskd's copy into library.root, repository.setLibraryPath"]
+      organise --> finalise["FINALISE (V9): downloads with organised_at null whose songs are all filed or given up -> PLAYLIST: LibraryOrganiser.writePlaylist(root/Playlists/title.m3u8); then repository.setOrganisedAt"]
     end
 ```
 

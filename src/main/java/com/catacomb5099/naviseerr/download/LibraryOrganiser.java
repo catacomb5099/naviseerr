@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
@@ -36,7 +37,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * <pre>
  *   song              root/&lt;primary artist&gt;/&lt;song title&gt;/&lt;file as downloaded&gt;
  *   album track       root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;
- *   playlist track    filed exactly like a song (the ADR says why)
+ *   playlist track    filed exactly like a song; the playlist itself is one .m3u8 in root/Playlists/
  * </pre>
  *
  * <p>Pure path logic (locating, sanitising, choosing a target) is in static methods so it can be
@@ -59,11 +60,19 @@ public class LibraryOrganiser {
     private static final Pattern RESERVED =
             Pattern.compile("(?i)^(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(\\..*)?$");
     private static final int MAX_COMPONENT_BYTES = 200;
+    /** Where a download's playlist file goes: a folder of nothing but .m3u8s, so Jellyfin never sees it as an album. */
+    static final String PLAYLISTS_FOLDER = "Playlists";
 
     /** One finished song to file, joined with the names its folders are built from. */
     public record Job(UUID taskId, DownloadType type, String slskdFilename, Instant finishedAt,
                       String songTitle, List<String> songArtists,
                       String collectionTitle, List<String> collectionArtists) {}
+
+    /** One finished download whose songs are all filed, ready for its playlist file. */
+    public record Collection(UUID downloadId, DownloadType type, String title) {}
+
+    /** One filed song as a playlist line shows it. */
+    public record Entry(String libraryPath, String title, List<String> artists, Integer durationSeconds) {}
 
     private final Path downloadsDir;
     private final Path incompleteDir;
@@ -141,7 +150,38 @@ public class LibraryOrganiser {
                 });
     }
 
+    /**
+     * Writes (or rewrites -- the file is naviseerr's, and regenerating it whole is the idempotent
+     * move) {@code root/Playlists/<title>.m3u8} listing the entries relative to that folder, so
+     * Navidrome and Jellyfin both show the download as a playlist. Written only once every song is in
+     * place: Jellyfin drops entries whose file does not exist at import time.
+     */
+    public Mono<Path> writePlaylist(String title, List<Entry> entries) {
+        return Mono.fromCallable(() -> writePlaylistBlocking(title, entries))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
     // ---- blocking I/O ----------------------------------------------------------------------------
+
+    Path writePlaylistBlocking(String title, List<Entry> entries) throws IOException {
+        String name = orElse(title, "Playlist");
+        Path folder = guard(root.resolve(PLAYLISTS_FOLDER), root);
+        Files.createDirectories(folder);
+        Path target = guard(folder.resolve(sanitise(name) + ".m3u8"), folder);
+        List<Entry> inside = entries.stream()
+                .filter(entry -> {
+                    boolean ok = entry.libraryPath() != null && Path.of(entry.libraryPath()).startsWith(root);
+                    if (!ok) log.warn("Playlist '{}' skips {}: not inside {}", name, entry.libraryPath(), root);
+                    return ok;
+                })
+                .toList();
+        // Staged then renamed, so a scanner never reads a half-written list.
+        Path staging = target.resolveSibling(target.getFileName() + ".partial");
+        Files.writeString(staging, m3u8(name, inside, folder), UTF_8);
+        Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
+        log.info("Wrote playlist {} with {} track(s)", target, inside.size());
+        return target;
+    }
 
     Path fileBlocking(Job job, Instant now) throws IOException {
         Path source = locate(job.slskdFilename());
@@ -297,6 +337,32 @@ public class LibraryOrganiser {
     }
 
     // ---- pure path logic -------------------------------------------------------------------------
+
+    /**
+     * Extended M3U, UTF-8 without BOM, LF, forward slashes, entries relative to the folder holding the
+     * file (both servers join against that folder; absolute container paths break when a mount moves).
+     * {@code #PLAYLIST} names it in Navidrome (Jellyfin uses the file name); {@code #EXTINF} is a
+     * human-readable comment both servers ignore in favour of the tracks' own tags.
+     */
+    static String m3u8(String title, List<Entry> entries, Path playlistFolder) {
+        StringBuilder out = new StringBuilder("#EXTM3U\n#PLAYLIST:").append(oneLine(title)).append('\n');
+        for (Entry entry : entries) {
+            Path file = Path.of(entry.libraryPath());
+            String relative = playlistFolder.relativize(file).toString().replace(File.separatorChar, '/');
+            String stem = stem(file.getFileName().toString());
+            String label = first(entry.artists(), null) == null
+                    ? orElse(entry.title(), stem)
+                    : entry.artists().getFirst() + " - " + orElse(entry.title(), stem);
+            out.append("#EXTINF:").append(entry.durationSeconds() == null ? -1 : entry.durationSeconds())
+                    .append(',').append(oneLine(label)).append('\n')
+                    .append(Normalizer.normalize(relative, Normalizer.Form.NFC)).append('\n');
+        }
+        return out.toString();
+    }
+
+    private static String oneLine(String s) {
+        return s.replaceAll("\\p{Cntrl}+", " ").strip();
+    }
 
     /**
      * The remote path as slskd would lay it out locally: split on both separators (Soulseek paths

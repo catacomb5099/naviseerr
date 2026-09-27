@@ -50,6 +50,7 @@ class DownloadTaskRunnerTest {
         organiser = mock(LibraryOrganiser.class);
         when(organiser.isEnabled()).thenReturn(false);
         when(organiser.deletePartials(any())).thenReturn(Mono.empty());
+        when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.empty());
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.empty());
         when(repository.createTasks(any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.upsertMedia(any())).thenReturn(Mono.just(1L));
@@ -132,6 +133,60 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(organiser, never()).deletePartials(any());
+    }
+
+    @Test
+    void aFinishedPlaylist_getsItsPlaylistFileWritten_thenIsStampedOrganised() {
+        UUID playlistId = UUID.randomUUID();
+        LibraryOrganiser.Collection playlist = new LibraryOrganiser.Collection(playlistId,
+                DownloadType.PLAYLIST, "Alt Nation 1989");
+        LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(playlist));
+        when(repository.playlistEntries(playlistId)).thenReturn(Flux.just(entry));
+        when(organiser.writePlaylist("Alt Nation 1989", List.of(entry)))
+                .thenReturn(Mono.just(java.nio.file.Path.of("/music/Playlists/Alt Nation 1989.m3u8")));
+        when(repository.setOrganisedAt(playlistId, T0)).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(organiser).writePlaylist("Alt Nation 1989", List.of(entry));
+        verify(repository).setOrganisedAt(playlistId, T0);
+    }
+
+    @Test
+    void aFinishedAlbum_needsNoExtraFile_andIsStampedOrganised() {
+        UUID albumId = UUID.randomUUID();
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
+                new LibraryOrganiser.Collection(albumId, DownloadType.ALBUM, "Doolittle")));
+        when(repository.setOrganisedAt(albumId, T0)).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(organiser, never()).writePlaylist(any(), any());
+        verify(repository, never()).playlistEntries(any());
+        verify(repository).setOrganisedAt(albumId, T0);
+    }
+
+    @Test
+    void aPlaylistFileThatCannotBeWritten_isNotStampedOrganised_soTheNextPassRetries() {
+        UUID playlistId = UUID.randomUUID();
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(any())).thenReturn(T0.minusSeconds(600));
+        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
+                new LibraryOrganiser.Collection(playlistId, DownloadType.PLAYLIST, "Mix")));
+        when(repository.playlistEntries(playlistId)).thenReturn(Flux.empty());
+        when(organiser.writePlaylist(any(), any())).thenReturn(Mono.error(new java.io.IOException("read-only")));
+
+        assertDoesNotThrow(() -> runner.pass().block());
+
+        verify(repository, never()).setOrganisedAt(any(), any());
     }
 
     private static LibraryOrganiser.Job job(UUID taskId) {
