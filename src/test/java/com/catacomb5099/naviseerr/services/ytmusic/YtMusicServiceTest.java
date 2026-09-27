@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.services.ytmusic;
 
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicDetailResponse;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -447,6 +448,35 @@ class YtMusicServiceTest {
         StepVerifier.create(service.getAlbumInfo("MPREb_x"))
                 .assertNext(album -> assertEquals(List.of(), album.songs()))
                 .verifyComplete();
+    }
+
+    @Test
+    void getArtistInfo_readsTheRealAdapterShape_andHitsTheArtistPath() throws Exception {
+        String body;
+        try (var in = getClass().getResourceAsStream("/ytmusic/artist-pixies.json")) {
+            body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody(body));
+
+        StepVerifier.create(service.getArtistInfo("UCRt5ckI8kNVMFr-jyj1IIVg"))
+                .assertNext(artist -> {
+                    assertEquals("UCRt5ckI8kNVMFr-jyj1IIVg", artist.getChannelId());
+                    assertEquals("Pixies", artist.getName());
+                    assertEquals("498K", artist.getSubscribers());
+                    assertTrue(artist.getThumbnailUrl().startsWith("https://lh3.googleusercontent.com/"));
+                    assertEquals(List.of("49FB9hhoO6c", "XYrOmT72xZk", "iaoBBwcXYKQ"),
+                            artist.getTopSongs().stream().map(YtMusicDetailResponse.Track::getVideoId).toList());
+                    assertEquals("Pixies", artist.getTopSongs().getFirst().getArtists().getFirst().getName());
+                    assertEquals("MPREb_sfqbxrgS5Jp", artist.getAlbums().getFirst().getBrowseId());
+                    assertEquals(2026, artist.getAlbums().getFirst().getYear());
+                    assertEquals("Planet of Sound (Live - 2026 Remaster)", artist.getSingles().getFirst().getTitle());
+                    assertEquals("The Breeders", artist.getRelated().getFirst().getTitle());
+                    assertEquals("UCauJZDRVzqj1QdLAQkUuq5w", artist.getRelated().getFirst().getBrowseId());
+                })
+                .verifyComplete();
+
+        assertEquals("/v1/artists/UCRt5ckI8kNVMFr-jyj1IIVg", server.takeRequest().getPath());
     }
 
     @Test

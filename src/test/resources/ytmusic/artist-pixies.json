@@ -1,0 +1,100 @@
+{
+  "channelId": "UCRt5ckI8kNVMFr-jyj1IIVg",
+  "name": "Pixies",
+  "description": "The Pixies are an American alternative rock band formed in Boston, Massachusetts, in 1986. The original lineup consisted of Black Francis, Joey Santiago, Kim Deal and David Lovering. The Pixies are associated with the 1990s alternative rock boom, and draw on elements including punk rock and surf rock. Their music is known for dynamic \"loud-quiet-loud\" shifts and song structures. Francis is the primary songwriter; his often surreal lyrics cover offbeat subjects such as extraterrestrials, incest, and biblical violence.",
+  "subscribers": "498K",
+  "monthlyListeners": "15.4M",
+  "views": "534,176,029 views",
+  "thumbnailUrl": "https://lh3.googleusercontent.com/cDJB1aPuX_Bxae616aJlZkBnrbqA2NSwQPwZq_HPYllcISp5CCfHy_fjWdTXDmCRZOw3IJ2qAr3KMEQ=w2880-h1200-p-l90-rj",
+  "topSongs": [
+    {
+      "videoId": "49FB9hhoO6c",
+      "title": "Where Is My Mind?",
+      "artists": [
+        {
+          "name": "Pixies",
+          "channelId": "UCRt5ckI8kNVMFr-jyj1IIVg"
+        }
+      ],
+      "albumName": "Death to the Pixies",
+      "durationSeconds": null,
+      "trackNumber": null,
+      "isAvailable": true,
+      "explicit": false,
+      "views": null
+    },
+    {
+      "videoId": "XYrOmT72xZk",
+      "title": "Here Comes Your Man",
+      "artists": [
+        {
+          "name": "Pixies",
+          "channelId": "UCRt5ckI8kNVMFr-jyj1IIVg"
+        }
+      ],
+      "albumName": "Doolittle",
+      "durationSeconds": null,
+      "trackNumber": null,
+      "isAvailable": true,
+      "explicit": false,
+      "views": null
+    },
+    {
+      "videoId": "iaoBBwcXYKQ",
+      "title": "Que Sera Sera",
+      "artists": [
+        {
+          "name": "Pixies",
+          "channelId": "UCRt5ckI8kNVMFr-jyj1IIVg"
+        }
+      ],
+      "albumName": "You're So Impatient",
+      "durationSeconds": null,
+      "trackNumber": null,
+      "isAvailable": true,
+      "explicit": false,
+      "views": null
+    }
+  ],
+  "albums": [
+    {
+      "browseId": "MPREb_sfqbxrgS5Jp",
+      "title": "Bossanova (2026 Remaster)",
+      "year": 2026,
+      "thumbnailUrl": "https://yt3.googleusercontent.com/ULsVJ7_-vnFa1BNubVDTfyzG1lCfSi0krxDSdaI4h7wMH-yBisJR6IACx4LDrybl-cBpHjG75QlZZ_Zs=w544-h544-l90-rj"
+    },
+    {
+      "browseId": "MPREb_CRcZfvCOTa6",
+      "title": "Trompe le Monde (2026 Remaster)",
+      "year": 2026,
+      "thumbnailUrl": "https://yt3.googleusercontent.com/KxWDCoGspZiOY5sWeAofaTalf074_1g2I3ZDpphyhimPqEHHhCMkO3FPUzy5NOqXXLf1StIoxZlSSnWEBw=w544-h544-l90-rj"
+    }
+  ],
+  "singles": [
+    {
+      "browseId": "MPREb_NdMCXhqvP6F",
+      "title": "Planet of Sound (Live - 2026 Remaster)",
+      "year": 2026,
+      "thumbnailUrl": "https://yt3.googleusercontent.com/k27AqmOBxWNjPwA7fL3zskqvPPXS0yZr3hwjEQ4Ab2YGGe5BC51IZIsnNw4sGRwtgx8xXpgp9sa9CcPW=w544-h544-l90-rj"
+    }
+  ],
+  "videos": [
+    {
+      "videoId": "OJ62RzJkYUo",
+      "title": "Pixies - Where Is My Mind? (Official Lyric Video)",
+      "thumbnailUrl": "https://i.ytimg.com/vi/OJ62RzJkYUo/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3kSG1tyLjgmcD1l33U9vCd8jM17yg"
+    }
+  ],
+  "related": [
+    {
+      "browseId": "UCauJZDRVzqj1QdLAQkUuq5w",
+      "title": "The Breeders",
+      "subscribers": "462K"
+    },
+    {
+      "browseId": "UCOtys5AvNde1B7Mq7rdPsyw",
+      "title": "Frank Black",
+      "subscribers": "8.38K"
+    }
+  ]
+}

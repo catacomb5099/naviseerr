@@ -9,9 +9,9 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * Lombok-friendly models for the ytmusic-adapter's three "what is this id?" endpoints:
- * {@code GET /v1/songs/{videoId}}, {@code GET /v1/albums/{browseId}} and
- * {@code GET /v1/playlists/{playlistId}}.
+ * Lombok-friendly models for the ytmusic-adapter's four "what is this id?" endpoints:
+ * {@code GET /v1/songs/{videoId}}, {@code GET /v1/albums/{browseId}},
+ * {@code GET /v1/playlists/{playlistId}} and {@code GET /v1/artists/{channelId}}.
  *
  * <p>Same conventions as {@link YtMusicSearchResponse}: no Pydantic aliases, so every field name is
  * the literal JSON key, and optional fields arrive as explicit nulls.
@@ -85,5 +85,53 @@ public final class YtMusicDetailResponse {
          * responses, so only an explicit {@code false} means "do not try this one".
          */
         private Boolean isAvailable;
+    }
+
+    /**
+     * {@code GET /v1/artists/{channelId}}. {@code topSongs} reuses {@link Track} — the adapter's
+     * shape is the same {@code TrackDto}, plus an {@code albumName} nobody here reads (it carries no
+     * browseId, so it cannot become a link). {@code videos}, {@code monthlyListeners} and
+     * {@code views} are not mirrored: the artist page has no place for them.
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Artist {
+        private String channelId;
+        private String name;
+        private String description;
+        /** Already worded by YouTube ("498K"); passed through, never parsed. */
+        private String subscribers;
+        private String thumbnailUrl;
+        private List<Track> topSongs;
+        private List<AlbumStub> albums;
+        private List<AlbumStub> singles;
+        private List<RelatedArtist> related;
+    }
+
+    /** One entry of an artist's {@code albums[]} or {@code singles[]}. Carries no artists of its own. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class AlbumStub {
+        private String browseId;
+        private String title;
+        private Integer year;
+        private String thumbnailUrl;
+    }
+
+    /** One entry of an artist's {@code related[]}. No thumbnail yet: ytmusicapi returns one, the adapter drops it. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class RelatedArtist {
+        private String browseId;
+        private String title;
     }
 }

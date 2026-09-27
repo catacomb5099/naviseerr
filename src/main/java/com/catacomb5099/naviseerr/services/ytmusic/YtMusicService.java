@@ -35,6 +35,7 @@ public class YtMusicService {
     private static final String SONG_PATH_PREFIX = "/v1/songs/";
     private static final String ALBUM_PATH_PREFIX = "/v1/albums/";
     private static final String PLAYLIST_PATH_PREFIX = "/v1/playlists/";
+    private static final String ARTIST_PATH_PREFIX = "/v1/artists/";
 
     private final WebClient ytMusicWebClient;
 
@@ -113,7 +114,7 @@ public class YtMusicService {
      * pretty, but a picture rather than a blank. A later single-song request for the same id upserts
      * the real artwork over it.
      */
-    static String fallbackThumbnail(String videoId) {
+    public static String fallbackThumbnail(String videoId) {
         return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
     }
 
@@ -131,6 +132,17 @@ public class YtMusicService {
         return execute(uriBuilder -> uriBuilder.path(PLAYLIST_PATH_PREFIX + id).build(),
                         YtMusicDetailResponse.Collection.class, "playlist", id)
                 .map(playlist -> toCollectionInfo(playlist, id));
+    }
+
+    /**
+     * One artist's page as the adapter describes it: header, top songs, albums, singles and related
+     * artists. Returned as the adapter model rather than a domain record because the only reader is
+     * {@code ArtistView}, which maps it straight onto the wire; the download pipeline never asks for
+     * an artist.
+     */
+    public Mono<YtMusicDetailResponse.Artist> getArtistInfo(String channelId) {
+        return execute(uriBuilder -> uriBuilder.path(ARTIST_PATH_PREFIX + channelId).build(),
+                YtMusicDetailResponse.Artist.class, "artist", channelId);
     }
 
     /**
