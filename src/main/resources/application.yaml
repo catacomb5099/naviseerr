@@ -115,12 +115,14 @@ download-task:
   download-budget-ms: 3600000
   # How long a transfer may sit in the peer's queue -- "Queued, Remotely", "Requested",
   # "Initializing", or in progress with zero bytes moved -- before we give up on THAT peer and try the
-  # next candidate. Not a same-peer retry: a peer that kept us waiting this long will do it again.
-  # Ten minutes because busy Soulseek peers commonly hold a queue position for several minutes and
-  # then serve the file fine, so shorter would abandon good sources; and because with the usual
-  # handful of candidates per song it keeps "try everyone" inside the hour above, where the measured
-  # case (27-09-2026) spent the entire hour at 0% on one peer with seven untried alternatives.
-  # Transfers that are moving bytes are untouched by this; only download-budget-ms bounds them.
+  # next candidate. "Queued, Locally" (slskd's own download slots full, peer not asked yet) does not
+  # count against the peer. Not a same-peer retry: a peer that kept us waiting this long will do it
+  # again. Ten minutes because busy Soulseek peers commonly hold a queue position for several minutes
+  # and then serve the file fine, so shorter would abandon good sources. Each candidate gets at most
+  # this long before we move on; the measured case (27-09-2026) spent the entire hour at 0% on one
+  # peer with seven untried alternatives. Transfers that are moving bytes are untouched by this; only
+  # download-budget-ms bounds them. The abandoned transfer is left alive in slskd (no cancel call
+  # yet), so it may still download later and is not counted by max-concurrent-transfers.
   queued-budget-ms: 600000
   # A DOWNLOAD_POLL row whose transfer is absent from GET /transfers/downloads gets this much grace
   # (not the hour above) before failing. slskd keeps completed transfers in that list, so "absent"

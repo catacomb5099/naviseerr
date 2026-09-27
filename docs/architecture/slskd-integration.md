@@ -15,9 +15,10 @@ flowchart TD
     c --> d["DOWNLOAD_INIT: POST /transfers/downloads/{user} for the current candidate"]
     d --> e["DOWNLOAD_POLL: read from batched GET /transfers/downloads until a success/failure state"]
     e -->|failure| d
+    e -->|"queued-budget-ms with no bytes"| d
 ```
 
-A completed search's candidates are computed once (in `SEARCH_POLL`) and carried forward as JSON on the task row (`DownloadCandidate`, not the raw slskd DTOs), so `DOWNLOAD_INIT`/`DOWNLOAD_POLL` never need to re-fetch or re-rank them. On a transfer failure, the loop either retries the same candidate (up to `slskd-service.retry-count`) or advances to the next one — see `DownloadStateMachine.retryOrAdvanceCandidate` and the phase table in [download-manager.md](download-manager.md#the-four-phases).
+A completed search's candidates are computed once (in `SEARCH_POLL`) and carried forward as JSON on the task row (`DownloadCandidate`, not the raw slskd DTOs), so `DOWNLOAD_INIT`/`DOWNLOAD_POLL` never need to re-fetch or re-rank them. On a transfer failure, the loop either retries the same candidate (up to `slskd-service.retry-count`) or advances to the next one — see `DownloadStateMachine.retryOrAdvanceCandidate` and the phase table in [download-manager.md](download-manager.md#the-four-phases). A candidate that has kept the transfer waiting with no bytes moved (`Queued, Remotely`/`Requested`/`Initializing`, or `InProgress` at 0 bytes) for `download-task.queued-budget-ms` is abandoned straight to the next candidate, skipping same-peer retries; `Queued, Locally` (slskd's own slot backlog) does not count. The abandoned transfer is left alive in slskd — there is no cancel call yet.
 
 ## HTTP client
 
@@ -68,7 +69,7 @@ These values are unverified guesses at the real slskd API strings, not confirmed
 
 - Success: `SUCCEEDED`.
 - Failure: `CANCELLED`, `TIMED_OUT`, `ERRORED`, `REJECTED`, `ABORTED`.
-- Everything else (`QUEUED`, `INITIALIZING`, `IN_PROGRESS`, `COMPLETED`, ...) is "in progress" -> keep polling.
+- Everything else (`QUEUED`, `INITIALIZING`, `IN_PROGRESS`, `COMPLETED`, ...) is "in progress" -> keep polling, except that after `download-task.queued-budget-ms` with no bytes moved (and not `Queued, Locally`) the candidate is abandoned for the next one.
 
 slskd reports compound states like `"Completed, Succeeded"`, so the state string is comma-split before matching. [TransferedFileUtil.getStateList](../../src/main/java/com/catacomb5099/naviseerr/util/TransferedFileUtil.java) does this parsing, matching against `TransferState.getValue()` (the slskd string, e.g. `"InProgress"`, `"TimedOut"`) — not the enum `name()`. `DownloadStateMachine.afterDownloadPoll` treats any success state as `Terminal SUCCEEDED` and any failure state as a retry/next-candidate decision.
 
@@ -84,7 +85,7 @@ slskd 0.26.0 added its own per-file retry with real exponential backoff and part
 - `max-files-per-download` (10) - candidate list cap.
 - `retry-count` (2) - per-candidate failover retries, consumed by `DownloadStateMachine`, not by an in-process poller.
 
-Per-phase poll intervals and duration budgets (`search-poll-interval-ms`, `download-poll-interval-ms`, `search-budget-ms`, `download-budget-ms`) now live under `download-task.*` — see [download-manager.md](download-manager.md#configuration-download-task-in-applicationyaml). The old `slskd-service.max-poll-attempts` and `slskd-service.first-back-off-duration-ms` knobs are gone (removed in Task 6, along with the poller they configured), not merely unused.
+Per-phase poll intervals and duration budgets (`search-poll-interval-ms`, `download-poll-interval-ms`, `search-budget-ms`, `download-budget-ms`, `queued-budget-ms`) now live under `download-task.*` — see [download-manager.md](download-manager.md#configuration-download-task-in-applicationyaml). The old `slskd-service.max-poll-attempts` and `slskd-service.first-back-off-duration-ms` knobs are gone (removed in Task 6, along with the poller they configured), not merely unused.
 
 ## Related docs
 

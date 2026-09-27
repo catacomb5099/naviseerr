@@ -275,6 +275,21 @@ class DownloadStateMachineTest {
     }
 
     @Test
+    void downloadPoll_queuedLocallyPastTheQueuedBudget_isSlskdsBacklogNotThePeers_soKeepsWaiting() {
+        // "Queued, Locally" means slskd's own download slots are full and it has not asked the peer
+        // yet. Abandoning the peer for that would cycle through every candidate while slskd is
+        // saturated; only the hour-long download budget bounds it.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Locally"),
+                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_POLL, next.phase());
+        assertEquals(0, next.candidateIndex());
+    }
+
+    @Test
     void downloadPoll_inProgressWithBytesMoving_pastTheQueuedBudget_isNotTouchedByIt() {
         // Only the hour-long download budget bounds a transfer that is actually moving.
         DownloadDecision d = machine.afterDownloadPoll(

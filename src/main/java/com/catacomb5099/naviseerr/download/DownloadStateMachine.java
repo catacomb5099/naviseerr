@@ -16,6 +16,7 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Every branching decision in the download pipeline. Pure: no I/O, no Reactor, no clock of its own —
@@ -128,14 +129,20 @@ public class DownloadStateMachine {
             return new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT);
         }
         // Still waiting on the peer -- "Queued, Remotely", "Requested", "Initializing", or nominally
-        // in progress with not one byte moved -- for the whole queued budget. phase_entered_at is when
-        // THIS transfer was enqueued (it resets on every retry and failover), so no new column is
-        // needed to know how long we have been in this peer's queue. Straight to the next candidate,
-        // not a same-peer retry: a peer that kept us waiting ten minutes will do it again, and the
-        // measured case (peer SKYLiGHT_B, 27-09-2026) sat at 0% for the entire hour while seven other
-        // candidates were never tried.
-        boolean waiting = !states.contains(TransferState.IN_PROGRESS)
-                || Long.valueOf(0).equals(file.getBytesTransferred());
+        // in progress with not one byte moved -- for the whole queued budget. "Queued, Locally" is
+        // slskd's own backlog (its download slots are full, the peer has not been asked yet), not this
+        // peer's fault, so it is excluded and stays bounded only by the hour above. phase_entered_at
+        // is when THIS transfer was enqueued (it resets on every retry and failover), so no new column
+        // is needed to know how long we have been in this peer's queue. Straight to the next
+        // candidate, not a same-peer retry: a peer that kept us waiting ten minutes will do it again,
+        // and the measured case (peer SKYLiGHT_B, 27-09-2026) sat at 0% for the entire hour while
+        // seven other candidates were never tried.
+        // ponytail: the abandoned transfer is left alive in slskd (there is no cancel call yet), so it
+        // keeps our place in that peer's queue and is no longer counted by max-concurrent-transfers.
+        // Cancelling it (DELETE /transfers/downloads/{user}/{id}) is the next PR.
+        boolean waiting = !states.contains(TransferState.LOCALLY)
+                && (!states.contains(TransferState.IN_PROGRESS)
+                        || Objects.equals(0L, file.getBytesTransferred()));
         if (waiting && task.isPastBudget(now, queuedBudget)) {
             return nextCandidate(task, now);
         }
