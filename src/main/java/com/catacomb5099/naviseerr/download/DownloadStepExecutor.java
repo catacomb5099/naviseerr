@@ -99,11 +99,11 @@ public class DownloadStepExecutor {
                                 + "returned {} response(s)",
                         task.searchId(), task.downloadId(), full.getState(), full.getResponseCount(),
                         full.getFileCount(), size(state.getResponses()), size(full.getResponses())))
-                // Judged against the query actually searched, not the raw name. The matcher splits
-                // title from artist on the query's own " - " and scores its words, so a cleaner search
-                // scored against the raw name would reject files for the very noise ("Official Video"
-                // as its own segment, a duplicated leading artist) the cleaner wording removed.
-                .flatMap(full -> searchResultProcessor.selectBestFiles(full, task.searchQuery())
+                // Judged against the full song name, whatever was searched: the search is deliberately
+                // loose (bare "title - artist", or the title alone when Soulseek drops the artist), and
+                // the name still carries the qualifier -- "(Remix)", "(Live)" -- the picker needs to
+                // choose the right version, plus the artist it must insist on for a title-only search.
+                .flatMap(full -> searchResultProcessor.selectBestFiles(full, task.songName())
                         .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
                         .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
     }

@@ -71,8 +71,8 @@ class DownloadStepExecutorTest {
     }
 
     @Test
-    void searchPoll_complete_selectsAgainstTheTierQuery_notTheRawName() {
-        // The relevance filter must score files against the wording that was actually searched.
+    void searchPoll_complete_selectsAgainstTheFullSongName_notTheLooseQuery() {
+        // The search is loose on purpose; the picker needs the qualifier and the artist from the name.
         DownloadTask task = searchPolling("s1").toBuilder()
                 .songName("Hello (Official Lyric Video) - Oasis").build();
         var summary = SlskdFixtures.searchState("s1", true, "Completed");
@@ -82,7 +82,7 @@ class DownloadStepExecutorTest {
 
         executor.execute(task, Map.of("s1", summary), Map.of()).block();
 
-        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"));
+        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello (Official Lyric Video) - Oasis"));
     }
 
     @Test

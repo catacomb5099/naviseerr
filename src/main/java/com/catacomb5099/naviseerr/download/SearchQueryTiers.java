@@ -4,55 +4,60 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.regex.MatchResult;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * The Soulseek queries to try for one song. A YouTube title carries platform noise -- "(Official
- * Lyric Video)", a leading "Artist - " the artist suffix then repeats -- that never appears in a
- * music filename, so the raw name is never searched at all: the first query is the name with that
- * noise removed, and the one fallback is the bare "title - artist".
+ * The Soulseek queries to try for one song, in order: the bare {@code "title - artist"}, then the
+ * title alone.
+ *
+ * <p>Both come from the 2026-09-26 search lab (809 songs, 44,008 labelled results, see
+ * {@code docs/decisions/soulseek-search-lab-26-09-2026.md}). The bare query returned the requested
+ * song for 708 of the 718 songs it answered, and already held the requested remix or live take for
+ * 42 of the 52 songs that asked for one -- keeping the qualifier in the search won only 32 and came
+ * back empty 48 times out of 180. So the qualifier is not searched; the picker sees the full song
+ * name and chooses the version locally. The title-only fallback exists because the Soulseek server
+ * silently drops any search containing certain artist names (Michael Jackson, Depeche Mode, Linkin
+ * Park, ...): 45 of 809 songs returned zero peers with the artist and thousands of files without.
  *
  * <p>Pure and re-derived on every call, never stored: {@code download_tasks} keeps only the index of
  * the tier in use (see {@link DownloadTask#searchTier}), so these rules can change without a data
- * migration -- and the noise list is expected to grow as more titles are seen failing. The bare
- * tier is derived from the first, so it never re-admits what the first removed. A fallback that
- * comes out identical to the first query is dropped, so a title with nothing to strip is searched
- * once, not twice.
+ * migration. A fallback identical to the first query is dropped.
  */
 final class SearchQueryTiers {
 
     /**
-     * Applied ONLY inside bracket groups and to a separator-delimited segment that is nothing but
-     * noise. A global word strip would butcher real titles -- "Video Games - Lana Del Rey", "Audio -
-     * Sia" -- whereas inside brackets, or standing alone between two separators, these words are
-     * always the platform talking, not the song. Longer phrases first, so "official video" is
-     * consumed whole rather than leaving a stray "official". Musically meaningful qualifiers (remix,
-     * live, acoustic, feat., "'95 Version") are deliberately absent: if the title asks for a remix,
-     * search the remix.
+     * Platform words that never appear in a music filename. Applied ONLY to a separator-delimited
+     * segment that is nothing but noise ("Wonderwall - Official Video - Oasis"); brackets are dropped
+     * whole, and the first and last segments are title and artist by construction ("Audio - Sia").
      */
     private static final Pattern NOISE = Pattern.compile(
-            "\\b(official hd remastered video|official music video|official lyric video|official video"
-                    + "|official audio|remastered video|music video|lyric video|visuali[sz]er|lyrics"
-                    + "|official|audio|video|hd|hq|4k)\\b",
+            "\\b(official hd remastered video|official hd music video|official music video|official lyric video"
+                    + "|official hd video|official 4k video|official video|original video|video oficial|official audio"
+                    + "|remastered video|music video|lyric video|full video song|video song|visuali[sz]er|lyrics|lyrical"
+                    + "|closed-captioned|official|audio|video|song|hd|hq|4k)\\b",
             Pattern.CASE_INSENSITIVE);
+
+    /**
+     * YouTube channel dressing on an artist name: "BlondieVEVO", "Blondie - Topic", "Oasis Official".
+     * The lab found "Maria - BlondieVEVO" returning 8,092 files for the title and none for Blondie.
+     */
+    private static final Pattern CHANNEL_SUFFIX = Pattern.compile(
+            "\\s*(?:vevo|official|records)$", Pattern.CASE_INSENSITIVE);
+
+    /** " - Topic" is its own dashed segment, so it goes before the name is split on dashes. */
+    private static final Pattern TOPIC_SUFFIX = Pattern.compile(
+            "\\s+[-\u2013\u2014|]\\s+topic$", Pattern.CASE_INSENSITIVE);
 
     private static final String INNER = "[^()\\[\\]{}]*";
 
-    /**
-     * One innermost ( ), [ ] or { } group, contents captured. Innermost means no bracket of ANY kind
-     * inside, so "(Official Video [HD])" yields the square group first rather than a paren group that
-     * swallows it. Nesting is handled by looping.
-     */
+    /** One innermost ( ), [ ] or { } group. Nesting is handled by looping. */
     private static final Pattern GROUP = Pattern.compile(
-            "\\((" + INNER + ")\\)|\\[(" + INNER + ")\\]|\\{(" + INNER + ")\\}");
+            "\\(" + INNER + "\\)|\\[" + INNER + "\\]|\\{" + INNER + "\\}");
 
     /**
      * What separates title, artist and whatever else YouTube put in the name. The hyphen is what
      * {@code DownloadTaskRunner.soulseekQuery} joins with; en dash, em dash and pipe are what
-     * official channels type between artist and title. A run of separators counts as one, so a
-     * bracket group removed from between two of them leaves no " - - " behind.
+     * official channels type. A run of separators counts as one.
      */
     private static final Pattern SEGMENT = Pattern.compile("\\s+(?:[-\u2013\u2014|]\\s+)+");
 
@@ -64,91 +69,59 @@ final class SearchQueryTiers {
      */
     static List<String> of(String songName) {
         String raw = songName == null ? "" : songName;
-        String noiseless = withoutNoise(raw);
-        String first = noiseless.isBlank() ? raw : noiseless;
+        List<String> segments = bareSegments(raw);
+        if (segments.isEmpty()) {
+            return List.of(raw);
+        }
         LinkedHashSet<String> tiers = new LinkedHashSet<>();
-        tiers.add(first);
-        String bare = bare(first);
-        if (!bare.isBlank()) {
-            tiers.add(bare);
+        tiers.add(String.join(" - ", segments));
+        if (segments.size() > 1) {
+            tiers.add(segments.getFirst());
         }
         return List.copyOf(tiers);
     }
 
     /**
-     * Tier one: bracket groups keep what is musically meaningful, a group left empty goes, and so
-     * does a segment that is nothing but noise ("Wonderwall - Official Video - Oasis"). Only the
-     * middle segments are candidates for that: the first and the last are title and artist by
-     * construction, and "Audio - Sia" shows a title can BE a noise word.
+     * {@code [title, artist]} with every bracket gone, straight quotes gone (they kill a Soulseek
+     * search outright), noise-only middle segments gone, the artist's channel suffix gone and the
+     * artist's echo removed from the title. {@code [title]} when there is no artist; empty when
+     * nothing survives.
      */
-    private static String withoutNoise(String name) {
-        String cleaned = name;
-        String previous;
-        do {
-            previous = cleaned;
-            cleaned = GROUP.matcher(cleaned).replaceAll(SearchQueryTiers::groupWithoutNoise);
-        } while (!cleaned.equals(previous));
-
-        List<String> segments = segments(cleaned);
-        List<String> kept = new ArrayList<>(segments);
-        if (kept.size() > 2) {
-            kept.subList(1, kept.size() - 1).removeIf(segment -> stripNoise(segment).isEmpty());
-        }
-        // Rebuilt with " - " only once something has gone: a title with nothing to strip must come
-        // out byte-identical, or an en dash's worth of difference would cost a whole second search.
-        return cleaned.equals(name) && kept.size() == segments.size()
-                ? name
-                : String.join(" - ", kept);
-    }
-
-    private static String groupWithoutNoise(MatchResult match) {
-        String inner = match.group(1) != null ? match.group(1)
-                : match.group(2) != null ? match.group(2) : match.group(3);
-        String kept = stripNoise(inner);
-        if (kept.isEmpty()) {
-            return "";
-        }
-        String whole = match.group();
-        return Matcher.quoteReplacement(whole.charAt(0) + kept + whole.charAt(whole.length() - 1));
-    }
-
-    /** Tier two: no brackets at all, and exactly one "title - artist". */
-    private static String bare(String name) {
-        String stripped = name;
+    private static List<String> bareSegments(String name) {
+        String stripped = TOPIC_SUFFIX.matcher(name.replace("\"", "")).replaceFirst("");
         String previous;
         do {
             previous = stripped;
             stripped = GROUP.matcher(stripped).replaceAll("");
         } while (!stripped.equals(previous));
 
-        List<String> segments = segments(stripped);
-        if (segments.size() < 2) {
-            return String.join("", segments);
+        List<String> segments = new ArrayList<>(Arrays.stream(SEGMENT.split(stripped))
+                .map(SearchQueryTiers::collapse)
+                .filter(segment -> !segment.isEmpty())
+                .toList());
+        if (segments.size() > 2) {
+            segments.subList(1, segments.size() - 1).removeIf(segment -> stripNoise(segment).isEmpty());
         }
-        String artist = segments.getLast();
+        if (segments.size() < 2) {
+            return segments;
+        }
+        String artist = collapse(CHANNEL_SUFFIX.matcher(segments.getLast()).replaceFirst(""));
+        if (artist.isEmpty()) {
+            artist = segments.getLast();
+        }
+        String finalArtist = artist;
         List<String> titles = new ArrayList<>(segments.subList(0, segments.size() - 1));
         // "Oasis - Don't Look Back In Anger - Oasis": YouTube's own "Artist - Title" plus the artist
         // soulseekQuery appended. The artist is the one segment we know; drop its echo from the title.
-        titles.removeIf(segment -> segment.equalsIgnoreCase(artist));
+        titles.removeIf(segment -> segment.equalsIgnoreCase(finalArtist) || segment.equalsIgnoreCase(segments.getLast()));
         if (titles.isEmpty()) {
             titles.add(segments.getFirst());
         }
-        // ponytail: what is left is joined, never picked from. No segment is safe to guess as the
-        // title -- picking one turned "Wonderwall - Remastered - Oasis" into "Remastered - Oasis",
-        // which downloads a different Oasis song. Ceiling: a featured artist YouTube put first stays
-        // in the query, and Soulseek wants every word present. Upgrade to smarter picking if that
-        // ever matters.
-        return String.join(" ", titles) + " - " + artist;
+        // ponytail: what is left is joined, never picked from. Picking one segment turned
+        // "Wonderwall - Remastered - Oasis" into "Remastered - Oasis", a different Oasis song.
+        return List.of(String.join(" ", titles), artist);
     }
 
-    private static List<String> segments(String name) {
-        return Arrays.stream(SEGMENT.split(name))
-                .map(SearchQueryTiers::collapse)
-                .filter(segment -> !segment.isEmpty())
-                .toList();
-    }
-
-    /** Collapsed BEFORE matching, so a doubled space cannot hide "Lyric  Video" from the phrase list. */
     private static String stripNoise(String text) {
         return collapse(NOISE.matcher(collapse(text)).replaceAll(""));
     }

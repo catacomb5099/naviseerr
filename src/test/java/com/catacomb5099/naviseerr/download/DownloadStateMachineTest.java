@@ -82,7 +82,7 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_withAFallbackLeft_retriesWithTheBareTitle() {
+    void searchPoll_completeWithNoCandidates_withAFallbackLeft_retriesWithTheTitleAlone() {
         DownloadTask task = searchPolling("s1").toBuilder()
                 .songName("Wonderwall (Remix) [Official Video] - Oasis").build();
         Instant later = T0.plusSeconds(30);
@@ -95,11 +95,11 @@ class DownloadStateMachineTest {
         assertEquals(1, next.searchTier());
         assertNull(next.searchId(), "the old search must not be polled again");
         assertEquals(later, next.phaseEnteredAt(), "each tier gets a fresh search budget");
-        assertEquals("Wonderwall - Oasis", next.searchQuery());
+        assertEquals("Wonderwall", next.searchQuery());
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_onAnArtistEchoTitle_retriesWithTheArtistDeduped() {
+    void searchPoll_completeWithNoCandidates_onAnArtistEchoTitle_retriesWithTheTitleAlone() {
         DownloadTask task = searchPolling("s1").toBuilder()
                 .songName("Oasis - Don't Look Back In Anger (Official Video) - Oasis").build();
 
@@ -108,7 +108,7 @@ class DownloadStateMachineTest {
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
         assertEquals(1, next.searchTier());
-        assertEquals("Don't Look Back In Anger - Oasis", next.searchQuery());
+        assertEquals("Don't Look Back In Anger", next.searchQuery());
     }
 
     @Test
@@ -124,24 +124,24 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_onACleanTitle_failsWithoutRetrying() {
-        // One tier only: a title with nothing to strip must not be searched again with itself.
-        DownloadTask task = searchPolling("s1").toBuilder().songName("Wonderwall - Oasis").build();
+    void searchPoll_completeWithNoCandidates_onACleanTitle_stillFallsBackToTheTitleAlone() {
+        // Zero files for a well-known "title - artist" is the signature of the Soulseek server dropping
+        // the artist name (45 of 809 songs in the lab), so even a clean name gets the title-only retry.
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Thriller - Michael Jackson").build();
 
         DownloadDecision d = machine.afterSearchPoll(
                 task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
 
-        assertEquals(DownloadFailureCode.NO_CANDIDATES,
-                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals("Thriller", next.searchQuery());
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_onAVideoNoiseTitle_failsWithoutRetrying_theNoiseWasNeverSearched() {
-        // "(Official Lyric Video)" is gone before the FIRST search, so there is no cleaner wording
-        // left to fall back to: the bare title is what was already tried.
+    void searchPoll_completeWithNoCandidates_onATitleWithoutAnArtist_failsWithoutRetrying() {
+        // No artist to drop, so there is no looser wording left: one tier, then NO_CANDIDATES.
         DownloadTask task = searchPolling("s1").toBuilder()
-                .songName("Hello (Official Lyric Video) - Oasis").build();
-        assertEquals("Hello - Oasis", task.searchQuery());
+                .songName("Hello (Official Lyric Video)").build();
+        assertEquals("Hello", task.searchQuery());
 
         DownloadDecision d = machine.afterSearchPoll(
                 task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);

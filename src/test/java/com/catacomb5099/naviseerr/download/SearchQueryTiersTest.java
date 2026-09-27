@@ -9,55 +9,67 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class SearchQueryTiersTest {
 
     @Test
-    void officialLyricVideo_isNeverSearched_andTheBareTierCollapsesOntoTheFirst() {
-        assertEquals(List.of("Hello - Oasis"),
+    void bracketsGo_thenTheTitleAloneIsTheFallback() {
+        assertEquals(List.of("Hello - Oasis", "Hello"),
                 SearchQueryTiers.of("Hello (Official Lyric Video) - Oasis"));
-    }
-
-    @Test
-    void officialHdRemasteredVideo_isConsumedAsOnePhrase() {
-        assertEquals(List.of("Morning Glory - Oasis"),
+        assertEquals(List.of("Morning Glory - Oasis", "Morning Glory"),
                 SearchQueryTiers.of("Morning Glory (Official HD Remastered Video) - Oasis"));
     }
 
     @Test
-    void officialVideo_isNoise() {
-        assertEquals(List.of("Little By Little - Oasis"),
-                SearchQueryTiers.of("Little By Little (Official Video) - Oasis"));
-    }
-
-    @Test
-    void artistRepeatedByYouTubesOwnTitle_isDedupedInTheBareTier() {
-        assertEquals(List.of(
-                        "Oasis - Don't Look Back In Anger - Oasis",
-                        "Don't Look Back In Anger - Oasis"),
-                SearchQueryTiers.of("Oasis - Don't Look Back In Anger (Official Video) - Oasis"));
-    }
-
-    @Test
-    void lyricVideo_inParentheses_isNoise() {
-        assertEquals(List.of("Cast No Shadow - Oasis"),
-                SearchQueryTiers.of("Cast No Shadow (Official Lyric Video) - Oasis"));
-    }
-
-    @Test
-    void firstTierKeepsRemix_bareTierDropsEveryBracket() {
-        // "If something specifically asks for a remix, of course get that remix" -- the remix is a
-        // different recording, so the first search must keep it; only the last-ditch tier lets it go.
-        assertEquals(List.of("Wonderwall (Remix) - Oasis", "Wonderwall - Oasis"),
+    void theQualifierIsNotSearched_thePickerSeesItInTheSongName() {
+        // The lab: the bare query already held the requested remix or live take for 42 of 52 songs;
+        // keeping the qualifier in the search won 32 and came back empty 48 times out of 180.
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"),
                 SearchQueryTiers.of("Wonderwall (Remix) [Official Video] - Oasis"));
     }
 
     @Test
-    void aCleanTitle_isExactlyOneTier_soItIsNeverSearchedTwice() {
-        assertEquals(List.of("Wonderwall - Oasis"), SearchQueryTiers.of("Wonderwall - Oasis"));
+    void artistRepeatedByYouTubesOwnTitle_isDeduped() {
+        assertEquals(List.of("Don't Look Back In Anger - Oasis", "Don't Look Back In Anger"),
+                SearchQueryTiers.of("Oasis - Don't Look Back In Anger (Official Video) - Oasis"));
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"),
+                SearchQueryTiers.of("Oasis – Wonderwall (Official Video) - Oasis"));
+    }
+
+    @Test
+    void aCleanTitle_isSearchedOnce_andFallsBackToTheTitleAlone() {
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"), SearchQueryTiers.of("Wonderwall - Oasis"));
+    }
+
+    @Test
+    void channelSuffixOnTheArtist_isRemoved() {
+        // "Maria - BlondieVEVO" found 8,092 files for the title and none for the "artist".
+        assertEquals(List.of("Maria - Blondie", "Maria"), SearchQueryTiers.of("Maria - BlondieVEVO"));
+        assertEquals(List.of("Since You're Gone - The Cars", "Since You're Gone"),
+                SearchQueryTiers.of("Since You're Gone - The Cars - Topic"));
+    }
+
+    @Test
+    void straightQuotes_areRemoved_theyKillASoulseekSearch() {
+        assertEquals(List.of("KATSEYE Animal Official MV - KATSEYE", "KATSEYE Animal Official MV"),
+                SearchQueryTiers.of("KATSEYE \"Animal\" Official MV - KATSEYE"));
     }
 
     @Test
     void noiseWordsOutsideBrackets_areTheSong_notNoise() {
-        assertEquals(List.of("Video Games - Lana Del Rey"),
+        assertEquals(List.of("Video Games - Lana Del Rey", "Video Games"),
                 SearchQueryTiers.of("Video Games - Lana Del Rey"));
-        assertEquals(List.of("Audio - Sia"), SearchQueryTiers.of("Audio - Sia"));
+        assertEquals(List.of("Audio - Sia", "Audio"), SearchQueryTiers.of("Audio - Sia"));
+    }
+
+    @Test
+    void noiseAsItsOwnSegment_isDropped_notPromotedToTheTitle() {
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"),
+                SearchQueryTiers.of("Wonderwall - Official Video - Oasis"));
+        assertEquals(List.of("Hello - Oasis", "Hello"), SearchQueryTiers.of("Hello | Official HD Video | Oasis"));
+    }
+
+    @Test
+    void extraSegments_stayInTheTitle_neverPickedFrom() {
+        // Picking one segment searched "Remastered - Oasis" and downloaded a different Oasis song.
+        assertEquals(List.of("Wonderwall Remastered - Oasis", "Wonderwall Remastered"),
+                SearchQueryTiers.of("Wonderwall - Remastered - Oasis"));
     }
 
     @Test
@@ -66,36 +78,7 @@ class SearchQueryTiersTest {
     }
 
     @Test
-    void enDashAndPipe_areSeparatorsToo_soTheArtistEchoIsStillDeduped() {
-        assertEquals(List.of("Oasis - Wonderwall - Oasis", "Wonderwall - Oasis"),
-                SearchQueryTiers.of("Oasis – Wonderwall (Official Video) - Oasis"));
-        assertEquals(List.of("Oasis - Wonderwall - Oasis", "Wonderwall - Oasis"),
-                SearchQueryTiers.of("Oasis - Wonderwall | Official Video - Oasis"));
-    }
-
-    @Test
-    void noiseAsItsOwnSegment_isDropped_notPromotedToTheTitle() {
-        assertEquals(List.of("Wonderwall - Oasis"),
-                SearchQueryTiers.of("Wonderwall - Official Video - Oasis"));
-        assertEquals(List.of("Hello - Oasis"), SearchQueryTiers.of("Hello - Lyrics - Oasis"));
-    }
-
-    @Test
-    void doubledSpaces_doNotHideAPhraseFromTheNoiseList() {
-        assertEquals(List.of("Hello - Oasis"),
-                SearchQueryTiers.of("Hello  (OFFICIAL   Lyric   VIDEO)   -  Oasis"));
-    }
-
-    @Test
-    void nestedBrackets_andABracketBetweenTwoDashes_leaveNoDebris() {
-        assertEquals(List.of("Song - A"), SearchQueryTiers.of("Song (Official Video [HD]) - A"));
-        assertEquals(List.of("Hello - Oasis"), SearchQueryTiers.of("Hello - (Official Video) - Oasis"));
-    }
-
-    @Test
-    void extraSegments_stayInTheTitle_neverPickedFrom() {
-        // Picking one segment searched "Remastered - Oasis" and downloaded a different Oasis song.
-        assertEquals(List.of("Wonderwall - Remastered - Oasis", "Wonderwall Remastered - Oasis"),
-                SearchQueryTiers.of("Wonderwall - Remastered - Oasis"));
+    void aNameWithoutAnArtist_isOneTier() {
+        assertEquals(List.of("Wonderwall"), SearchQueryTiers.of("Wonderwall (Official Video)"));
     }
 }
