@@ -1,0 +1,17 @@
+-- Which wording of a song's Soulseek query is currently being searched. A YouTube title carries
+-- platform noise -- "Hello (Official Lyric Video) - Oasis" -- that never appears in a music filename,
+-- so the first search already has that noise removed, and a search that completes with nothing
+-- usable is retried once more with the bare "title - artist" before it fails as NO_CANDIDATES.
+-- See SearchQueryTiers.
+--
+-- Why an index rather than the derived queries: every tier is a pure function of song_name, so
+-- storing the strings would be storing something the code can recompute -- and changing the
+-- cleaning rules would then need a data migration to fix rows already written. Storing the tier
+-- means a rule change is a code change and nothing else.
+--
+-- DEFAULT 0 is the first tier, so a row written before this migration simply starts at the
+-- beginning, exactly like a new one. The CHECK is for hand edits: the
+-- code only ever counts up from 0, and a negative tier would re-search tier 0 once per step back to
+-- it before it could fail.
+ALTER TABLE download_tasks
+    ADD COLUMN search_tier INT NOT NULL DEFAULT 0 CHECK (search_tier >= 0);
