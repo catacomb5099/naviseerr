@@ -33,6 +33,6 @@ public record DownloadCandidate(
     }
 
     public SearchFile toSearchFile() {
-        return new SearchFile(filename, size, code, isLocked, extension, Optional.ofNullable(bitRate));
+        return new SearchFile(filename, size, code, isLocked, extension, Optional.ofNullable(bitRate), Optional.empty());
     }
 }
