@@ -16,6 +16,7 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Every branching decision in the download pipeline. Pure: no I/O, no Reactor, no clock of its own —
@@ -29,6 +30,7 @@ public class DownloadStateMachine {
     private final Duration downloadPollInterval;
     private final Duration searchBudget;
     private final Duration downloadBudget;
+    private final Duration queuedBudget;
     private final Duration missingTransferGrace;
     private final int retryLimit;
 
@@ -37,12 +39,14 @@ public class DownloadStateMachine {
             @Value("${download-task.download-poll-interval-ms:5000}") Duration downloadPollInterval,
             @Value("${download-task.search-budget-ms:120000}") Duration searchBudget,
             @Value("${download-task.download-budget-ms:3600000}") Duration downloadBudget,
+            @Value("${download-task.queued-budget-ms:600000}") Duration queuedBudget,
             @Value("${download-task.missing-transfer-grace-ms:60000}") Duration missingTransferGrace,
             @Value("${slskd-service.retry-count}") int retryLimit) {
         this.searchPollInterval = searchPollInterval;
         this.downloadPollInterval = downloadPollInterval;
         this.searchBudget = searchBudget;
         this.downloadBudget = downloadBudget;
+        this.queuedBudget = queuedBudget;
         this.missingTransferGrace = missingTransferGrace;
         this.retryLimit = retryLimit;
     }
@@ -132,9 +136,28 @@ public class DownloadStateMachine {
         }
         // Genuinely still transferring: the only branch with a percentComplete worth reading.
         DownloadTask observed = task.withProgress(toProgress(file.getPercentComplete()));
-        return observed.isPastBudget(now, downloadBudget)
-                ? new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT)
-                : new DownloadDecision.Continue(observed.dueAt(now.plus(downloadPollInterval)));
+        if (observed.isPastBudget(now, downloadBudget)) {
+            return new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT);
+        }
+        // Still waiting on the peer -- "Queued, Remotely", "Requested", "Initializing", or nominally
+        // in progress with not one byte moved -- for the whole queued budget. "Queued, Locally" is
+        // slskd's own backlog (its download slots are full, the peer has not been asked yet), not this
+        // peer's fault, so it is excluded and stays bounded only by the hour above. phase_entered_at
+        // is when THIS transfer was enqueued (it resets on every retry and failover), so no new column
+        // is needed to know how long we have been in this peer's queue. Straight to the next
+        // candidate, not a same-peer retry: a peer that kept us waiting ten minutes will do it again,
+        // and the measured case (peer SKYLiGHT_B, 27-09-2026) sat at 0% for the entire hour while
+        // seven other candidates were never tried.
+        // ponytail: the abandoned transfer is left alive in slskd (there is no cancel call yet), so it
+        // keeps our place in that peer's queue and is no longer counted by max-concurrent-transfers.
+        // Cancelling it (DELETE /transfers/downloads/{user}/{id}) is the next PR.
+        boolean waiting = !states.contains(TransferState.LOCALLY)
+                && (!states.contains(TransferState.IN_PROGRESS)
+                        || Objects.equals(0L, file.getBytesTransferred()));
+        if (waiting && task.isPastBudget(now, queuedBudget)) {
+            return nextCandidate(task, now);
+        }
+        return new DownloadDecision.Continue(observed.dueAt(now.plus(downloadPollInterval)));
     }
 
     /**
@@ -177,24 +200,31 @@ public class DownloadStateMachine {
     }
 
     private DownloadDecision retryOrAdvanceCandidate(DownloadTask task, Instant now) {
-        // Reset, not carried forward: a retry or a failover to the next candidate starts a new
-        // transfer from zero, and the previous one's progress has nothing to do with it.
-        DownloadTask base = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now)
-                .dueAt(now.plus(downloadPollInterval))
-                .withProgressReset();
         if (task.retryIndex() < retryLimit) {
-            return new DownloadDecision.Continue(rebuild(base, task.candidateIndex(),
+            return new DownloadDecision.Continue(rebuild(task, now, task.candidateIndex(),
                     task.retryIndex() + 1));
         }
+        return nextCandidate(task, now);
+    }
+
+    private DownloadDecision nextCandidate(DownloadTask task, Instant now) {
         if (task.candidateIndex() + 1 < task.candidates().size()) {
-            return new DownloadDecision.Continue(rebuild(base, task.candidateIndex() + 1, 0));
+            return new DownloadDecision.Continue(rebuild(task, now, task.candidateIndex() + 1, 0));
         }
         return new DownloadDecision.Terminal(DownloadStatus.FAILED,
                 DownloadFailureCode.SOURCES_EXHAUSTED);
     }
 
-    private DownloadTask rebuild(DownloadTask base, int candidateIndex, int retryIndex) {
-        return base.toBuilder()
+    /**
+     * Back to DOWNLOAD_INIT for the given candidate and attempt. Progress is reset, not carried
+     * forward: a retry or a failover starts a new transfer from zero, and the previous one's
+     * progress has nothing to do with it.
+     */
+    private DownloadTask rebuild(DownloadTask task, Instant now, int candidateIndex, int retryIndex) {
+        return task.withPhase(DownloadPhase.DOWNLOAD_INIT, now)
+                .dueAt(now.plus(downloadPollInterval))
+                .withProgressReset()
+                .toBuilder()
                 .candidateIndex(candidateIndex).retryIndex(retryIndex)
                 .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
                 .build();

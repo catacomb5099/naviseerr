@@ -41,8 +41,14 @@ public final class SlskdFixtures {
 
     public static TransferedFile transfer(String id, String username, String state,
                                           Float percentComplete) {
+        return transfer(id, username, state, percentComplete, 0L);
+    }
+
+    /** {@code bytesTransferred} is what tells a transfer that is moving from one still waiting. */
+    public static TransferedFile transfer(String id, String username, String state,
+                                          Float percentComplete, Long bytesTransferred) {
         return new TransferedFile(id, username, "Download", "path/song.flac", 100L, null, state,
-                null, null, null, null, 0L, 0f, 100L, null, percentComplete, null);
+                null, null, null, null, bytesTransferred, 0f, 100L, null, percentComplete, null);
     }
 
     public static QueueDownloadResponse enqueued(String id, String username) {

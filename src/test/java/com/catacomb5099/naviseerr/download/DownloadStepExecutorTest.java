@@ -37,7 +37,8 @@ class DownloadStepExecutorTest {
         searchProcessor = mock(SlskdSearchResultProcessor.class);
         DownloadStateMachine machine = new DownloadStateMachine(
                 Duration.ofSeconds(2), Duration.ofSeconds(5),
-                Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofSeconds(60), 2);
+                Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofMinutes(10),
+                Duration.ofSeconds(60), 2);
         executor = new DownloadStepExecutor(slskdService, searchProcessor, machine,
                 Clock.fixed(T0, ZoneOffset.UTC));
     }
