@@ -28,8 +28,8 @@ public class SearchService {
         log.info("Received YtMusic general search request for query='{}'", query);
         return ytMusicService.getResults(query)
             .doOnSubscribe(subscription -> log.debug("Starting YtMusic general search for query='{}' (subscription={})", query, subscription))
-            .doOnSuccess(result -> log.info("Completed YtMusic general search for query='{}': tracks={}, albums={}, artists={}",
-                    query, size(result.getTracks()), size(result.getAlbums()), size(result.getArtists())))
+            .doOnSuccess(result -> log.info("Completed YtMusic general search for query='{}': tracks={}, albums={}, artists={}, playlists={}",
+                    query, size(result.getTracks()), size(result.getAlbums()), size(result.getArtists()), size(result.getPlaylists())))
             .doOnError(error -> log.error("YtMusic general search failed for query='{}'", query, error));
     }
 
@@ -58,6 +58,15 @@ public class SearchService {
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic artist search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic artist search for query='{}': artists={}", query, size(result.getArtists())))
                 .doOnError(error -> log.error("YtMusic artist search failed for query='{}'", query, error));
+    }
+
+    @GetMapping("/search/{query}/playlists")
+    Mono<SearchResponse> searchPlaylists(@PathVariable String query) {
+        log.info("Received YtMusic playlist search request for query='{}'", query);
+        return ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS)
+                .doOnSubscribe(subscription -> log.debug("Starting YtMusic playlist search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed YtMusic playlist search for query='{}': playlists={}", query, size(result.getPlaylists())))
+                .doOnError(error -> log.error("YtMusic playlist search failed for query='{}'", query, error));
     }
 
     private static int size(List<?> list) {

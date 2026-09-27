@@ -113,7 +113,7 @@ class DownloadStepExecutorTest {
         // every search and killed the download on NO_CANDIDATES seconds after the search completed.
         // Selection must run against the refetched state, never the batched one.
         var summary = SlskdFixtures.searchState("s1", true, "Completed, ResponseLimitReached");
-        var file = new SearchFile("music/alice/song.flac", 10L, 7L, false, "flac", Optional.of(1411));
+        var file = new SearchFile("music/alice/song.flac", 10L, 7L, false, "flac", Optional.of(1411), Optional.of(240));
         var peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 900, "alice");
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));
@@ -151,7 +151,7 @@ class DownloadStepExecutorTest {
         // "Completed, ResponseLimitReached" is slskd saying the search stopped because it found
         // PLENTY -- a healthy outcome, not an error, and nothing the app needs to recover from.
         var summary = SlskdFixtures.searchState("s1", true, "Completed, ResponseLimitReached");
-        var file = new SearchFile("music/alice/song.flac", 10L, 7L, false, "flac", Optional.of(1411));
+        var file = new SearchFile("music/alice/song.flac", 10L, 7L, false, "flac", Optional.of(1411), Optional.of(240));
         var peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 900, "alice");
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));

@@ -195,6 +195,46 @@ class SlskdSearchResultProcessorTest {
         assertEquals("fast", result.getFirst().getKey().getUsername());
     }
 
+    @Test
+    void selectBestFiles_prefersTheLengthMostCandidatesShare_overAFreeSlot() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        // the remix is the only one that can start right now, but two peers agree on 213s
+        SearchResponseItem remix = peer("remix", 9_000_000, true, 0, file("remix/song.flac", 312));
+        SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
+        SearchResponseItem b = peer("b", 2_000_000, false, 9, file("b/song.flac", 213));
+
+        var result = processor.selectBestFiles(state(remix, a, b), "song").block();
+
+        assertEquals(List.of("a", "b", "remix"), result.stream().map(e -> e.getKey().getUsername()).toList());
+    }
+
+    @Test
+    void selectBestFiles_unknownLength_ranksAfterASharedLength() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        SearchResponseItem unknown = peer("unknown", 9_000_000, true, 0, file("unknown/song.flac", null));
+        SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
+        SearchResponseItem b = peer("b", 1_000_000, false, 3, file("b/song.flac", 213));
+
+        var result = processor.selectBestFiles(state(unknown, a, b), "song").block();
+
+        assertEquals(3, result.size());
+        assertEquals("unknown", result.getLast().getKey().getUsername());
+    }
+
+    @Test
+    void selectBestFiles_lengthTie_fallsBackToAvailability() {
+        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+
+        SearchResponseItem busy = peer("busy", 9_000_000, false, 40, file("busy/song.flac", 213));
+        SearchResponseItem free = peer("free", 1_000_000, true, 0, file("free/song.flac", 213));
+
+        var result = processor.selectBestFiles(state(busy, free), "song").block();
+
+        assertEquals("free", result.getFirst().getKey().getUsername());
+    }
+
     private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadsSlot, int queueLength, SearchFile file) {
         SearchResponseItem item = mock(SearchResponseItem.class);
         when(item.getUsername()).thenReturn(username);
@@ -206,10 +246,15 @@ class SlskdSearchResultProcessorTest {
     }
 
     private SearchFile file(String filename) {
+        return file(filename, null);
+    }
+
+    private SearchFile file(String filename, Integer lengthSeconds) {
         SearchFile searchFile = mock(SearchFile.class);
         when(searchFile.getFilename()).thenReturn(filename);
         when(searchFile.getExtension()).thenReturn("flac");
         when(searchFile.getBitRate()).thenReturn(Optional.empty());
+        when(searchFile.getLength()).thenReturn(Optional.ofNullable(lengthSeconds));
         return searchFile;
     }
 

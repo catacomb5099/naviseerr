@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.util;
 
 import com.catacomb5099.naviseerr.schema.response.Album;
 import com.catacomb5099.naviseerr.schema.response.Artist;
+import com.catacomb5099.naviseerr.schema.response.Playlist;
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
 import com.catacomb5099.naviseerr.schema.response.Track;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicSearchResponse;
@@ -22,10 +23,10 @@ import java.util.Objects;
  *   display text on the client and must never be null either.
  *
  * This partitions by {@code resultType} in a single pass rather than switching per caller: a
- * typed sugar route ({@code /v1/search/songs|albums|artists}) already filtered server-side by
- * ytmusicapi yields items of one type, so two of the three lists come back empty; the general,
- * unfiltered route yields a mix of all three (plus junk types below), so all three lists can be
- * populated from one call. Either way, items are re-classified by {@code resultType} here
+ * typed sugar route ({@code /v1/search/songs|albums|artists|playlists}) already filtered
+ * server-side by ytmusicapi yields items of one type, so three of the four lists come back empty;
+ * the general, unfiltered route yields a mix of all four (plus junk types below), so all four lists
+ * can be populated from one call. Either way, items are re-classified by {@code resultType} here
  * defensively -- upstream shape drift must not leak, e.g., a podcast into the artists list (see
  * naviseerr gotchas.md #5, the precedent for defensive image/index handling on the Last.fm path
  * this replaces).
@@ -43,6 +44,7 @@ public class YtMusicSearchResponseMapper {
         List<Track> tracks = new ArrayList<>();
         List<Album> albums = new ArrayList<>();
         List<Artist> artists = new ArrayList<>();
+        List<Playlist> playlists = new ArrayList<>();
 
         for (YtMusicSearchResponse.Item item : items) {
             if (item == null || item.getType() == null) {
@@ -52,14 +54,22 @@ public class YtMusicSearchResponseMapper {
                 case "song" -> tracks.add(mapTrack(item));
                 case "album" -> albums.add(mapAlbum(item));
                 case "artist" -> artists.add(mapArtist(item));
-                // "video", "episode", "podcast", "playlist", "station", "profile" and any future
+                case "playlist" -> {
+                    // an item with neither id cannot be browsed or downloaded; id "" would be a
+                    // duplicate React key on the client, so drop it rather than emit it
+                    if (item.getPlaylistId() != null || item.getBrowseId() != null) {
+                        playlists.add(mapPlaylist(item));
+                    }
+                }
+                // "video", "episode", "podcast", "station", "profile" and any future
                 // resultType are deliberately dropped -- SearchResponse has no field for them and
                 // the adapter cannot be asked to exclude them (its filter param is single-valued).
                 default -> { }
             }
         }
 
-        return new SearchResponse(List.copyOf(tracks), List.copyOf(albums), List.copyOf(artists));
+        return new SearchResponse(List.copyOf(tracks), List.copyOf(albums), List.copyOf(artists),
+                List.copyOf(playlists));
     }
 
     private static Track mapTrack(YtMusicSearchResponse.Item item) {
@@ -89,6 +99,21 @@ public class YtMusicSearchResponseMapper {
                 orEmpty(item.getBrowseId()),
                 orEmpty(item.getThumbnailUrl()),
                 orEmpty(item.getTitle())
+        );
+    }
+
+    /**
+     * {@code id} prefers the bare {@code playlistId} ({@code PL...}) over the {@code VL}-prefixed
+     * {@code browseId}; both are accepted by the adapter's detail route, but the client must post the
+     * same id it browsed with, so one canonical choice is made here -- see {@link Playlist}.
+     */
+    private static Playlist mapPlaylist(YtMusicSearchResponse.Item item) {
+        return new Playlist(
+                item.getPlaylistId() != null ? item.getPlaylistId() : orEmpty(item.getBrowseId()),
+                orEmpty(item.getThumbnailUrl()),
+                orEmpty(item.getTitle()),
+                mapArtistNames(item.getArtists()),
+                item.getTrackCount() != null ? item.getTrackCount() : 0
         );
     }
 

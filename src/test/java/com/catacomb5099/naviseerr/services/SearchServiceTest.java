@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.services;
 
 import com.catacomb5099.naviseerr.schema.response.Album;
 import com.catacomb5099.naviseerr.schema.response.Artist;
+import com.catacomb5099.naviseerr.schema.response.Playlist;
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
 import com.catacomb5099.naviseerr.schema.response.Track;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
@@ -38,9 +39,13 @@ class SearchServiceTest {
         return new Artist("UC1", "https://example.com/ar.jpg", "Oasis");
     }
 
+    private static Playlist playlist() {
+        return new Playlist("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", "https://example.com/p.jpg", "Britpop Essentials", List.of("YouTube Music"), 42);
+    }
+
     @Test
     void search_combinesTracksAlbumsAndArtists_fromCombinedGetResults() {
-        SearchResponse combined = new SearchResponse(List.of(track()), List.of(album()), List.of(artist()));
+        SearchResponse combined = new SearchResponse(List.of(track()), List.of(album()), List.of(artist()), List.of(playlist()));
         when(ytMusicService.getResults("Oasis")).thenReturn(Mono.just(combined));
 
         StepVerifier.create(searchService.search("Oasis"))
@@ -48,6 +53,7 @@ class SearchServiceTest {
                     assertTrue(response.getTracks().size() == 1);
                     assertTrue(response.getAlbums().size() == 1);
                     assertTrue(response.getArtists().size() == 1);
+                    assertTrue(response.getPlaylists().size() == 1);
                 })
                 .verifyComplete();
 
@@ -57,7 +63,7 @@ class SearchServiceTest {
 
     @Test
     void searchTracks_delegatesToYtMusicServiceWithSongsType_andPopulatesOnlyTracks() {
-        SearchResponse tracksOnly = new SearchResponse(List.of(track()), Collections.emptyList(), Collections.emptyList());
+        SearchResponse tracksOnly = new SearchResponse(List.of(track()), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         when(ytMusicService.getResults("Oasis", YtMusicSearchType.SONGS)).thenReturn(Mono.just(tracksOnly));
 
         StepVerifier.create(searchService.searchTracks("Oasis"))
@@ -73,7 +79,7 @@ class SearchServiceTest {
 
     @Test
     void searchAlbums_delegatesToYtMusicServiceWithAlbumsType_andPopulatesOnlyAlbums() {
-        SearchResponse albumsOnly = new SearchResponse(Collections.emptyList(), List.of(album()), Collections.emptyList());
+        SearchResponse albumsOnly = new SearchResponse(Collections.emptyList(), List.of(album()), Collections.emptyList(), Collections.emptyList());
         when(ytMusicService.getResults("Definitely Maybe", YtMusicSearchType.ALBUMS)).thenReturn(Mono.just(albumsOnly));
 
         StepVerifier.create(searchService.searchAlbums("Definitely Maybe"))
@@ -89,7 +95,7 @@ class SearchServiceTest {
 
     @Test
     void searchArtists_delegatesToYtMusicServiceWithArtistsType_andPopulatesOnlyArtists() {
-        SearchResponse artistsOnly = new SearchResponse(Collections.emptyList(), Collections.emptyList(), List.of(artist()));
+        SearchResponse artistsOnly = new SearchResponse(Collections.emptyList(), Collections.emptyList(), List.of(artist()), Collections.emptyList());
         when(ytMusicService.getResults("Oasis", YtMusicSearchType.ARTISTS)).thenReturn(Mono.just(artistsOnly));
 
         StepVerifier.create(searchService.searchArtists("Oasis"))
@@ -104,8 +110,25 @@ class SearchServiceTest {
     }
 
     @Test
+    void searchPlaylists_delegatesToYtMusicServiceWithPlaylistsType_andPopulatesOnlyPlaylists() {
+        SearchResponse playlistsOnly = new SearchResponse(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), List.of(playlist()));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlistsOnly));
+
+        StepVerifier.create(searchService.searchPlaylists("Britpop"))
+                .assertNext(response -> {
+                    assertTrue(response.getPlaylists().size() == 1);
+                    assertTrue(response.getTracks().isEmpty());
+                    assertTrue(response.getAlbums().isEmpty());
+                    assertTrue(response.getArtists().isEmpty());
+                })
+                .verifyComplete();
+
+        verify(ytMusicService).getResults("Britpop", YtMusicSearchType.PLAYLISTS);
+    }
+
+    @Test
     void search_zeroResults_yieldsEmptyListsNotAnError() {
-        SearchResponse empty = new SearchResponse(Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+        SearchResponse empty = new SearchResponse(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         when(ytMusicService.getResults("zzzzzzzznotarealthing")).thenReturn(Mono.just(empty));
 
         StepVerifier.create(searchService.search("zzzzzzzznotarealthing"))
