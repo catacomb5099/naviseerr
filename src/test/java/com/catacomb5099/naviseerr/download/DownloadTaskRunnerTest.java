@@ -53,7 +53,8 @@ class DownloadTaskRunnerTest {
         when(repository.failUnadmitted(any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.countActiveDownloads()).thenReturn(Mono.just(0L));
         when(repository.countActiveTransfers()).thenReturn(Mono.just(0L));
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean()))
+        when(repository.countActiveSearches()).thenReturn(Mono.just(0L));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.empty());
         when(repository.save(any(), any())).thenReturn(Mono.just(1L));
         when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(1L));
@@ -62,7 +63,7 @@ class DownloadTaskRunnerTest {
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
                 ytMusicService, Clock.fixed(T0, ZoneOffset.UTC),
-                Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20);
+                Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
     }
 
     @Test
@@ -72,7 +73,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)),
-                eq(false));
+                eq(false), eq(2));
     }
 
     @Test
@@ -82,7 +83,53 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)),
-                eq(true));
+                eq(true), eq(2));
+    }
+
+    @Test
+    void atTheSearchCap_noSearchInitTaskIsClaimed_butEverythingElseStillIs() {
+        // slskd runs two searches at a time and queues the rest inside itself, so a third search we
+        // start only waits in that queue while our search budget runs down. Zero slots, not a
+        // yes/no: the claim takes the NUMBER of free slots so one pass can never overshoot the cap.
+        when(repository.countActiveSearches()).thenReturn(Mono.just(2L));
+
+        runner.pass().block();
+
+        verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)),
+                eq(true), eq(0));
+    }
+
+    @Test
+    void belowTheSearchCap_exactlyTheFreeSlotsWorthOfSearchesMayStart() {
+        when(repository.countActiveSearches()).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)),
+                eq(true), eq(1));
+    }
+
+    @Test
+    void searchInitTasks_areSteppedOneAfterAnother_becauseSlskdRejectsOverlappingSearchPosts() {
+        DownloadTask first = at(DownloadPhase.SEARCH_INIT).toBuilder().taskId(UUID.randomUUID()).build();
+        DownloadTask second = at(DownloadPhase.SEARCH_INIT).toBuilder().taskId(UUID.randomUUID()).build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
+                .thenReturn(Flux.just(first, second));
+        List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+        // The first POST takes a moment; with concurrent stepping the second would be fired
+        // before it returns, which is exactly what slskd answers with 429.
+        when(executor.execute(eq(first), any(), any())).thenReturn(
+                Mono.delay(Duration.ofMillis(50))
+                        .doOnNext(t -> order.add("first done"))
+                        .thenReturn(new DownloadDecision.Continue(first.dueAt(T0.plusSeconds(2)))));
+        when(executor.execute(eq(second), any(), any())).thenAnswer(inv -> {
+            order.add("second started");
+            return Mono.just(new DownloadDecision.Continue(second.dueAt(T0.plusSeconds(2))));
+        });
+
+        runner.pass().block();
+
+        assertEquals(List.of("first done", "second started"), order);
     }
 
     @Test
@@ -131,7 +178,7 @@ class DownloadTaskRunnerTest {
     @Test
     void aClaimedSearchPollTask_triggersGetAllSearches_butNotGetAllDownloads() {
         DownloadTask task = searchPolling("s1");
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any()))
                 .thenReturn(Mono.just(new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(2)))));
 
@@ -144,7 +191,7 @@ class DownloadTaskRunnerTest {
     @Test
     void aClaimedDownloadPollTask_triggersGetAllDownloads_butNotGetAllSearches() {
         DownloadTask task = downloadPolling(candidates("alice"), 0, 0, "abc");
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(5)))));
 
@@ -158,7 +205,7 @@ class DownloadTaskRunnerTest {
     void theFetchedBatchesArePassedToTheExecutorForTheMatchingRow() {
         DownloadTask task = searchPolling("s1");
         SearchState state = SlskdFixtures.searchState("s1", true, "Completed");
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(slskdService.getAllSearches()).thenReturn(Flux.just(state));
         when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(2)))));
@@ -172,7 +219,7 @@ class DownloadTaskRunnerTest {
     void advanceDecision_savesTheNextTask_andDoesNotFinishTheDownload() {
         DownloadTask task = at(DownloadPhase.SEARCH_INIT);
         DownloadTask next = task.withPhase(DownloadPhase.SEARCH_POLL, T0);
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any()))
                 .thenReturn(Mono.just(new DownloadDecision.Advance(next)));
 
@@ -186,7 +233,7 @@ class DownloadTaskRunnerTest {
     void continueDecision_savesTheNextTask() {
         DownloadTask task = searchPolling("s1");
         DownloadTask next = task.dueAt(T0.plusSeconds(2));
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any()))
                 .thenReturn(Mono.just(new DownloadDecision.Continue(next)));
 
@@ -198,7 +245,7 @@ class DownloadTaskRunnerTest {
     @Test
     void terminalDecision_finishesTheDownload_andNeverSavesTheTask() {
         DownloadTask task = searchPolling("s1");
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES)));
 
@@ -215,7 +262,7 @@ class DownloadTaskRunnerTest {
         DownloadTask bad = searchPolling("bad");
         DownloadTask good = searchPolling("good");
         DownloadTask goodNext = good.dueAt(T0.plusSeconds(2));
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean()))
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.just(bad, good));
         when(executor.execute(eq(bad), any(), any())).thenReturn(Mono.error(new RuntimeException("boom")));
         when(executor.execute(eq(good), any(), any()))
@@ -229,7 +276,7 @@ class DownloadTaskRunnerTest {
     @Test
     void aFailedWriteDoesNotStopThePass() {
         DownloadTask task = searchPolling("s1");
-        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean())).thenReturn(Flux.just(task));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(2)))));
         when(repository.save(any(), any())).thenReturn(Mono.error(new RuntimeException("db down")));
@@ -392,6 +439,7 @@ class DownloadTaskRunnerTest {
     void claimUsesTheConfiguredBatchSizeAndLease() {
         runner.pass().block();
 
-        verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)), eq(true));
+        verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)), eq(true),
+                eq(2));
     }
 }

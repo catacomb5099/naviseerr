@@ -86,7 +86,7 @@ One level-triggered loop, `DownloadTaskRunner`, ticking every `download-task.loo
 
 1. **Admit** — two halves, with an HTTP call between them, because what task rows a download needs is a question only `ytmusic-adapter` can answer. `DownloadTaskRepository.admitDownloads` selects `PENDING` rows with no task row and **writes nothing**; `DownloadTaskRunner.gatherMetadata` then calls the adapter (`/v1/songs/{id}`, `/v1/albums/{id}` or `/v1/playlists/{id}` per `download_type`) and `createTasks` inserts one task row per song and flips `downloads.status` to `IN_PROGRESS` in one statement. A crash in between leaves the row exactly as it was and the next pass retries it — which is the only reason admission can safely stop being a single statement. Bounded by `max-concurrent-downloads`, which counts `downloads` rows, not tasks — a 500-song collection is one in-flight download, so it cannot starve admission for everything else.
    - A metadata failure is classified, not retried blindly: a `YtMusicBadRequestException` (400/422/**404**) fails the download with `METADATA_UNAVAILABLE`, because retrying cannot make an id exist and a row left `PENDING` would be re-requested every loop interval forever. Anything else (a `YtMusicUnavailableException` — timeout, 502/503, connection refused) leaves it `PENDING` for the next pass, so a sidecar restart does not fail every download requested while it was down.
-2. **Claim** — `claimDueTasks` claims due, unleased, non-terminal task rows (`FOR UPDATE SKIP LOCKED`, stamping a lease) up to `batch-size`. `DOWNLOAD_INIT` rows are excluded from the claim entirely once `max-concurrent-transfers` has no free slot, so a large collection sitting at `DOWNLOAD_INIT` cannot spend every pass being claimed and re-deferred. Polling an already-running search or transfer is never gated.
+2. **Claim** — `claimDueTasks` claims due, unleased, non-terminal task rows (`FOR UPDATE SKIP LOCKED`, stamping a lease) up to `batch-size`. `DOWNLOAD_INIT` rows are excluded from the claim entirely once `max-concurrent-transfers` has no free slot, so a large collection sitting at `DOWNLOAD_INIT` cannot spend every pass being claimed and re-deferred. `SEARCH_INIT` rows are claimed only up to the number of free `max-concurrent-searches` slots (slskd runs two searches at a time and queues the rest inside itself). Polling an already-running search or transfer is never gated.
 3. **Conclude** — `concludeDownloads` runs last and unconditionally; see the note above.
 4. **Step** — `DownloadStepExecutor` makes the one slskd call each phase needs (`SEARCH_INIT`/`DOWNLOAD_INIT` call slskd directly; `SEARCH_POLL`/`DOWNLOAD_POLL` read from two lists — `GET /searches` and `GET /transfers/downloads` — fetched once per pass and only when a claimed row actually needs one) and hands the response to `DownloadStateMachine`, which returns `Advance` (phase transition, re-run next pass immediately), `Continue` (re-poll/retry after the phase's poll interval), or `Terminal` (finish the download and mark the task row terminal in one atomic CTE — `DownloadService.finishDownload`). Rows claimed within a pass are stepped concurrently (`flatMap`); passes themselves stay serialised (`concatMap`).
 
@@ -122,7 +122,7 @@ Deep-dive guides for agents and developers live in [docs/architecture/](docs/arc
 
 - [codebase-map.md](docs/architecture/codebase-map.md) — repo layout, package map, entry points, branch topology, build/run.
 - [slskd-integration.md](docs/architecture/slskd-integration.md) — the Soulseek search -> select -> download -> poll pipeline and retry/failover.
-- [download-manager.md](docs/architecture/download-manager.md) — the durable download task loop (admit, claim, step, apply; leases; the three capacity bounds).
+- [download-manager.md](docs/architecture/download-manager.md) — the durable download task loop (admit, claim, step, apply; leases; the four capacity bounds).
 - [persistence.md](docs/architecture/persistence.md) — R2DBC + Postgres, the `downloads`/`download_tasks` tables, claim/status SQL, Flyway.
 - [ytmusic-integration.md](docs/architecture/ytmusic-integration.md) — YouTube Music metadata search (via the sidecar `ytmusic-adapter`) and response mapping. The active search provider.
 - [lastfm-integration.md](docs/architecture/lastfm-integration.md) — LastFM metadata search and response mapping. Superseded, unused, retained on disk.
@@ -167,11 +167,13 @@ The execution model is a **level-triggered reconciliation loop** over durable st
 - Cancellation, when it lands, is a flag checked by the loop — not an attempt to retract queued work.
 - SSE, when it lands, reads from Postgres. If a resume cursor is needed, add an append-only `download_events` table and use its sequence number. That table is also the dataset for tuning candidate ranking and match thresholds, which is its stronger justification.
 
-Three independent bounds, and they must not be conflated — the deleted `flatMap(this::process, 3)` collapsed all of them into one number:
+Four independent bounds, and they must not be conflated — the deleted `flatMap(this::process, 3)` collapsed all of them into one number:
 
 - `batch-size / loop-interval` is a hard ceiling on the request rate to external providers.
 - `max-concurrent-downloads` caps how many user requests are worked on at once. It counts `downloads` rows, so a collection of 500 songs is **one** in-flight download and cannot lock every other request out of admission.
 - `max-concurrent-transfers` caps how many slskd transfers exist at once. This protects bandwidth and peers' upload queues. It gates only the step that *starts* a transfer — never polling, because polling is one cheap GET and starving it stalls a download slskd is happily finishing.
+
+- `max-concurrent-searches` caps how many Soulseek searches run at once. slskd only ever runs two and queues the rest internally while still answering `POST /searches` with 200, so anything above its slot count only makes naviseerr's search budget lie (measured 27-09-2026: 26 of 50 searches "timed out" by us, then completed fine in slskd). It gates only `SEARCH_INIT`, never `SEARCH_POLL`, and by count rather than yes/no.
 
 Work is taken oldest-first with no per-collection cap, so one collection may legitimately hold every transfer slot until it is done. That is the intended default: if a user asked for something, they usually want it finished. Making it a user-facing option is planned, not hardcoded.
 

@@ -73,7 +73,7 @@ class DownloadRecoveryIT {
     void aDownloadKilledMidTransferResumesAtTheSameStep_notFromScratch() {
         UUID id = insert("PENDING");
         admit(id);
-        DownloadTask claimed = repository.claimDueTasks(10, "dead", NOW, LEASE, true).blockFirst();
+        DownloadTask claimed = repository.claimDueTasks(10, "dead", NOW, LEASE, true, 10).blockFirst();
 
         // The dead process had got as far as polling candidate 1's transfer.
         repository.save(claimed.toBuilder()
@@ -86,10 +86,10 @@ class DownloadRecoveryIT {
                 .slskdUsername("bob").slskdFilename("music/bob/song.flac").slskdTransferId("abc")
                 .build(), "dead").block();
         // ...then took the lease and died without clearing it.
-        repository.claimDueTasks(10, "dead", NOW.plusSeconds(5), LEASE, true).blockFirst();
+        repository.claimDueTasks(10, "dead", NOW.plusSeconds(5), LEASE, true, 10).blockFirst();
 
         DownloadTask resumed = repository
-                .claimDueTasks(10, "alive", NOW.plusSeconds(70), LEASE, true).blockFirst();
+                .claimDueTasks(10, "alive", NOW.plusSeconds(70), LEASE, true, 10).blockFirst();
 
         assertNotNull(resumed, "an expired lease must make the row claimable again");
         assertEquals(DownloadPhase.DOWNLOAD_POLL, resumed.phase());
@@ -149,7 +149,7 @@ class DownloadRecoveryIT {
 
         // Far in the future, so next_attempt_at is long past. Only the terminal-phase filter and
         // the partial index stop this row coming back.
-        assertNull(repository.claimDueTasks(10, "a", NOW.plusSeconds(86_400), LEASE, true)
+        assertNull(repository.claimDueTasks(10, "a", NOW.plusSeconds(86_400), LEASE, true, 10)
                 .blockFirst());
     }
 }

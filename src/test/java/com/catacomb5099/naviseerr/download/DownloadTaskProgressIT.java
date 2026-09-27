@@ -77,7 +77,7 @@ class DownloadTaskProgressIT {
     void save_roundTripsProgress() {
         UUID id = insertDownload("PENDING");
         admit(id);
-        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .blockFirst();
 
         DownloadTask updated = claimed.withPhase(DownloadPhase.DOWNLOAD_POLL, NOW)
@@ -91,7 +91,7 @@ class DownloadTaskProgressIT {
     void save_onlyAppliesWhileTheCallerHoldsTheLease() {
         UUID id = insertDownload("PENDING");
         admit(id);
-        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .blockFirst();
 
         DownloadTask updated = claimed.withProgress(new BigDecimal("90.00"));
@@ -105,7 +105,7 @@ class DownloadTaskProgressIT {
     void save_neverAppliesToATerminalRow() {
         UUID id = insertDownload("PENDING");
         admit(id);
-        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .blockFirst();
         downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
 
@@ -119,7 +119,7 @@ class DownloadTaskProgressIT {
     void finishTask_succeeded_normalisesProgressToOneHundred() {
         UUID id = insertDownload("PENDING");
         admit(id);
-        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .blockFirst();
         repository.save(claimed.withProgress(new BigDecimal("87.00")), "a").block();
 
@@ -133,7 +133,7 @@ class DownloadTaskProgressIT {
     void finishTask_failed_keepsTheLastObservedProgress() {
         UUID id = insertDownload("PENDING");
         admit(id);
-        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .blockFirst();
         repository.save(claimed.withProgress(new BigDecimal("62.00")), "a").block();
 

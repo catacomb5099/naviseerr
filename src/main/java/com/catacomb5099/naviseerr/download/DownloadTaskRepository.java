@@ -120,20 +120,39 @@ public class DownloadTaskRepository {
                    fetched_at       = now()
             """;
 
-    /** Claims due, unleased, non-terminal tasks; excludes DOWNLOAD_INIT rows when no transfer slot is free. */
+    /**
+     * Claims due, unleased, non-terminal tasks. Two branches because the two caps have different
+     * shapes: DOWNLOAD_INIT rows are excluded outright when no transfer slot is free (a yes/no gate,
+     * fine at a cap of 20), while SEARCH_INIT rows are claimed up to the NUMBER of free search slots.
+     * A yes/no gate for searches would let one pass claim {@code batch-size} of them the moment the
+     * count dipped under the cap -- ten searches in flight against a cap of two, the very flood the
+     * cap exists to stop. Two CTEs rather than one UNION because Postgres refuses
+     * {@code FOR UPDATE} inside a set operation; each CTE locks its own rows the same way the single
+     * select used to.
+     */
     private static final String CLAIM_DUE_SQL = """
+            WITH polls AS (
+                SELECT task_id FROM download_tasks
+                 WHERE next_attempt_at <= :now
+                   AND phase NOT IN ('SUCCEEDED', 'FAILED', 'SEARCH_INIT')
+                   AND (:transferSlotsFree OR phase <> 'DOWNLOAD_INIT')
+                   AND (lease_expires_at IS NULL OR lease_expires_at < :now)
+                 ORDER BY next_attempt_at
+                   FOR UPDATE SKIP LOCKED
+                 LIMIT :limit
+            ), searches AS (
+                SELECT task_id FROM download_tasks
+                 WHERE next_attempt_at <= :now
+                   AND phase = 'SEARCH_INIT'
+                   AND (lease_expires_at IS NULL OR lease_expires_at < :now)
+                 ORDER BY next_attempt_at
+                   FOR UPDATE SKIP LOCKED
+                 LIMIT :searchSlots
+            )
             UPDATE download_tasks
                SET lease_owner = :owner,
                    lease_expires_at = :leaseExpiresAt
-             WHERE task_id IN (
-                   SELECT task_id FROM download_tasks
-                    WHERE next_attempt_at <= :now
-                      AND phase NOT IN ('SUCCEEDED', 'FAILED')
-                      AND (:transferSlotsFree OR phase <> 'DOWNLOAD_INIT')
-                      AND (lease_expires_at IS NULL OR lease_expires_at < :now)
-                    ORDER BY next_attempt_at
-                      FOR UPDATE SKIP LOCKED
-                    LIMIT :limit)
+             WHERE task_id IN (SELECT task_id FROM polls UNION ALL SELECT task_id FROM searches)
             RETURNING task_id, download_id, youtube_id, song_name, phase, phase_entered_at,
                       next_attempt_at, search_id, candidates, candidate_index, retry_index,
                       slskd_username, slskd_filename, slskd_transfer_id, last_error, progress_percent
@@ -231,6 +250,13 @@ public class DownloadTaskRepository {
              WHERE phase = 'DOWNLOAD_POLL'
             """;
 
+    // Same shape, same reasoning: SEARCH_POLL is the only phase with a search running in slskd.
+    // Counting SEARCH_INIT too would close the search gate on rows the gate stops from ever leaving.
+    private static final String COUNT_ACTIVE_SEARCHES_SQL = """
+            SELECT count(*) AS total FROM download_tasks
+             WHERE phase = 'SEARCH_POLL'
+            """;
+
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
             new TypeReference<>() {};
 
@@ -320,14 +346,25 @@ public class DownloadTaskRepository {
                 .one();
     }
 
+    public Mono<Long> countActiveSearches() {
+        return client.sql(COUNT_ACTIVE_SEARCHES_SQL)
+                .map((row, meta) -> row.get("total", Long.class))
+                .one();
+    }
+
+    /**
+     * @param searchSlots how many SEARCH_INIT rows may be claimed this pass -- the free search slots.
+     *                    Zero claims none; polls and DOWNLOAD_INIT are unaffected by it.
+     */
     public Flux<DownloadTask> claimDueTasks(int limit, String owner, Instant now, Duration lease,
-                                            boolean transferSlotsFree) {
+                                            boolean transferSlotsFree, int searchSlots) {
         return client.sql(CLAIM_DUE_SQL)
                 .bind("owner", owner)
                 .bind("leaseExpiresAt", now.plus(lease))
                 .bind("now", now)
                 .bind("transferSlotsFree", transferSlotsFree)
                 .bind("limit", limit)
+                .bind("searchSlots", Math.max(0, searchSlots))
                 .map(this::toTask)
                 .all();
     }

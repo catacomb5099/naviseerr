@@ -189,7 +189,7 @@ class DownloadTaskRepositoryIT {
         admit(id, "a", "b");
 
         List<DownloadTask> claimed = repository
-                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true).collectList().block();
+                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10).collectList().block();
 
         assertEquals(2, claimed.size());
         assertEquals(2, claimed.stream().map(DownloadTask::taskId).distinct().count(),
@@ -215,7 +215,7 @@ class DownloadTaskRepositoryIT {
         UUID id = admitOneSong("PENDING");
 
         List<DownloadTask> claimed = repository
-                .claimDueTasks(10, "instance-a", NOW, Duration.ofSeconds(60), true)
+                .claimDueTasks(10, "instance-a", NOW, Duration.ofSeconds(60), true, 10)
                 .collectList().block();
 
         assertEquals(1, claimed.size());
@@ -228,26 +228,26 @@ class DownloadTaskRepositoryIT {
     void claim_skipsRowsThatAreNotYetDue() {
         admitOneSong("PENDING");
 
-        assertTrue(repository.claimDueTasks(10, "a", NOW.minusSeconds(1), Duration.ofSeconds(60), true)
+        assertTrue(repository.claimDueTasks(10, "a", NOW.minusSeconds(1), Duration.ofSeconds(60), true, 10)
                 .collectList().block().isEmpty());
     }
 
     @Test
     void claim_skipsRowsHeldByALiveLease() {
         admitOneSong("PENDING");
-        repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).collectList().block();
+        repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10).collectList().block();
 
-        assertTrue(repository.claimDueTasks(10, "b", NOW.plusSeconds(1), Duration.ofSeconds(60), true)
+        assertTrue(repository.claimDueTasks(10, "b", NOW.plusSeconds(1), Duration.ofSeconds(60), true, 10)
                 .collectList().block().isEmpty());
     }
 
     @Test
     void claim_reclaimsRowsWhoseLeaseHasExpired_thisIsCrashRecovery() {
         admitOneSong("PENDING");
-        repository.claimDueTasks(10, "dead", NOW, Duration.ofSeconds(60), true).collectList().block();
+        repository.claimDueTasks(10, "dead", NOW, Duration.ofSeconds(60), true, 10).collectList().block();
 
         List<DownloadTask> reclaimed = repository
-                .claimDueTasks(10, "alive", NOW.plusSeconds(61), Duration.ofSeconds(60), true)
+                .claimDueTasks(10, "alive", NOW.plusSeconds(61), Duration.ofSeconds(60), true, 10)
                 .collectList().block();
 
         assertEquals(1, reclaimed.size());
@@ -257,7 +257,7 @@ class DownloadTaskRepositoryIT {
     void save_roundTripsEveryFieldIncludingCandidates_andClearsTheLease() {
         UUID id = admitOneSong("PENDING");
         DownloadTask claimed = repository
-                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).blockFirst();
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10).blockFirst();
 
         DownloadTask updated = claimed.toBuilder()
                 .phase(DownloadPhase.DOWNLOAD_POLL)
@@ -271,7 +271,7 @@ class DownloadTaskRepositoryIT {
         repository.save(updated, "a").block();
 
         DownloadTask reread = repository
-                .claimDueTasks(10, "b", NOW.plusSeconds(10), Duration.ofSeconds(60), true).blockFirst();
+                .claimDueTasks(10, "b", NOW.plusSeconds(10), Duration.ofSeconds(60), true, 10).blockFirst();
 
         assertNotNull(reread, "lease must have been cleared by save()");
         assertEquals(claimed.taskId(), reread.taskId(), "save() keys on task_id, not download_id");
@@ -290,7 +290,7 @@ class DownloadTaskRepositoryIT {
         UUID id = insertDownload("PENDING", "ALBUM");
         admit(id, "a", "b");
         DownloadTask one = repository
-                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true).blockFirst();
+                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10).blockFirst();
 
         repository.save(one.withPhase(DownloadPhase.SEARCH_POLL, NOW), "x").block();
 
@@ -450,7 +450,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void save_advancesUpdatedAt() {
         UUID id = admitOneSong("PENDING");
-        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+        DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .blockFirst();
         Instant admitted = updatedAtOf(id);
 
@@ -468,7 +468,7 @@ class DownloadTaskRepositoryIT {
         downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
 
         assertTrue(repository
-                .claimDueTasks(10, "a", NOW.plusSeconds(86_400), Duration.ofSeconds(60), true)
+                .claimDueTasks(10, "a", NOW.plusSeconds(86_400), Duration.ofSeconds(60), true, 10)
                 .collectList().block().isEmpty(),
                 "a finished download must never be stepped again");
     }
@@ -483,7 +483,7 @@ class DownloadTaskRepositoryIT {
         moveToPhase(starting, DownloadPhase.DOWNLOAD_INIT);
 
         List<DownloadTask> claimed = repository
-                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), false)
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), false, 10)
                 .collectList().block();
 
         assertEquals(1, claimed.size(), "polling and searching must never be starved by the cap");
@@ -512,6 +512,54 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
+    void claimDueTasks_withNoSearchSlots_stillReturnsPollsAndDownloadInit_butNoSearchInit() {
+        UUID starting = admitOneSong("PENDING");
+        UUID polling = admitOneSong("PENDING");
+        UUID enqueueing = admitOneSong("PENDING");
+        moveToPhase(polling, DownloadPhase.SEARCH_POLL);
+        moveToPhase(enqueueing, DownloadPhase.DOWNLOAD_INIT);
+
+        List<DownloadTask> claimed = repository
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 0)
+                .collectList().block();
+
+        // Polling a running search is never gated -- that is what lets the count drop again.
+        assertEquals(java.util.Set.of(enqueueing, polling),
+                claimed.stream().map(DownloadTask::downloadId).collect(java.util.stream.Collectors.toSet()));
+        assertFalse(claimed.stream().anyMatch(t -> t.downloadId().equals(starting)),
+                "a search must not be started while slskd's two slots are both taken");
+    }
+
+    @Test
+    void claimDueTasks_claimsOnlyAsManySearchInitRowsAsThereAreFreeSearchSlots() {
+        for (int i = 0; i < 5; i++) {
+            admitOneSong("PENDING");
+        }
+
+        List<DownloadTask> claimed = repository
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 2)
+                .collectList().block();
+
+        // A yes/no gate here would have claimed all five (batch-size allows ten) the moment the
+        // count dipped under the cap -- five searches in flight against a cap of two.
+        assertEquals(2, claimed.size());
+        assertTrue(claimed.stream().allMatch(t -> t.phase() == DownloadPhase.SEARCH_INIT));
+    }
+
+    @Test
+    void countActiveSearches_countsSearchPollOnly_soTheSearchGateCannotDeadlock() {
+        // Same shape as the transfer gate's regression guard: if SEARCH_INIT counted, then enough
+        // SEARCH_INIT rows would close a gate that only SEARCH_INIT rows can be held back by, and
+        // nothing could ever reopen it.
+        moveToPhase(admitOneSong("PENDING"), DownloadPhase.SEARCH_POLL);
+        moveToPhase(admitOneSong("PENDING"), DownloadPhase.SEARCH_POLL);
+        admitOneSong("PENDING");
+        moveToPhase(admitOneSong("PENDING"), DownloadPhase.DOWNLOAD_POLL);
+
+        assertEquals(2L, repository.countActiveSearches().block());
+    }
+
+    @Test
     void claimDueTasks_toleratesARowWithCorruptCandidatesJson_andStillReturnsTheOtherValidRow() {
         UUID corrupt = admitOneSong("PENDING");
         UUID healthy = admitOneSong("PENDING");
@@ -523,7 +571,7 @@ class DownloadTaskRepositoryIT {
         // Before the fix, readCandidates threw on the corrupt row, which failed the whole Flux
         // returned by claimDueTasks -- discarding the healthy row too, not just the corrupt one.
         List<DownloadTask> claimed = repository
-                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true)
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .collectList().block();
 
         assertEquals(2, claimed.size(),

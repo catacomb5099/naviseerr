@@ -86,6 +86,15 @@ download-task:
   # legitimately hold every slot until it is done. See "Future work" for the planned user-facing
   # option to change that.
   max-concurrent-transfers: 20
+  # How many Soulseek searches may be running at once. slskd only ever sends two searches to the
+  # Soulseek server at a time and queues the rest, in order, inside itself -- while still answering
+  # every POST /searches with 200 straight away. So submitting a 50-song playlist in one go does not
+  # make it faster; it builds a queue inside slskd, and the tail of that queue sat there for minutes
+  # while our search-budget-ms clock (which starts at submission) ran out. Measured 27-09-2026: 26 of
+  # 50 searches were "timed out" by us and then completed fine in slskd a few minutes later. Matching
+  # slskd's own slot count (2, hard-coded in slskd 0.24+) means our budget only ever covers a search's
+  # real runtime. Counts SEARCH_POLL rows; gates only SEARCH_INIT (starting a search), never polling.
+  max-concurrent-searches: 2
   # Searches finish in seconds; transfers run for minutes to hours. Polling both at one cadence
   # is waste, so they get separate intervals.
   search-poll-interval-ms: 2000

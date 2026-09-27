@@ -20,7 +20,7 @@ flowchart TD
     tick["Flux.interval(loop-interval-ms) tick"] --> admit
     subgraph pass ["one pass — DownloadTaskRunner.pass()"]
       admit["ADMIT: non-terminal downloads with no task row -> INSERT download_tasks(SEARCH_INIT) + downloads.status = IN_PROGRESS. Bounded by max-concurrent-downloads."]
-      admit --> claim["CLAIM: due, unleased, non-terminal task rows, FOR UPDATE SKIP LOCKED LIMIT batch-size, stamp lease. DOWNLOAD_INIT excluded when no transfer slots free."]
+      admit --> claim["CLAIM: due, unleased, non-terminal task rows, FOR UPDATE SKIP LOCKED LIMIT batch-size, stamp lease. DOWNLOAD_INIT excluded when no transfer slots free; SEARCH_INIT claimed only up to the free search slots."]
       claim --> fetch["Fetch GET /searches and/or GET /transfers/downloads ONCE, only if a claimed row needs one"]
       fetch --> step["STEP each claimed row concurrently (flatMap): DownloadStepExecutor -> DownloadStateMachine -> one decision"]
       step --> apply["APPLY: Advance/Continue -> repository.save(next); Terminal -> DownloadService.finishTask (one song); then repository.concludeDownloads() once per pass"]
@@ -62,13 +62,15 @@ Claiming a row stamps `lease_owner` (a random UUID per process instance) and `le
 
 No stale-row reaper is built or needed. Lease expiry is precise where a time-since-`updated_at` heuristic is a guess, and it is multi-instance safe for free.
 
-## Three independent bounds
+## Four independent bounds
 
-`download-task.*` in [application.yaml](../../src/main/resources/application.yaml) exposes three separate limits. Conflating them is exactly what the deleted `flatMap(this::process, 3)` did wrong:
+`download-task.*` in [application.yaml](../../src/main/resources/application.yaml) exposes four separate limits. Conflating them is exactly what the deleted `flatMap(this::process, 3)` did wrong:
 
 - **`batch-size` / `loop-interval-ms`** is a hard ceiling on the rate of requests to slskd — at most `batch-size` claims per `loop-interval-ms`.
 - **`max-concurrent-downloads`** caps how many *user requests* are worked on at once. It counts `downloads` rows, not task rows, so a collection of 500 songs is **one** in-flight download and cannot lock every other request out of admission. Enforced in the admit step.
 - **`max-concurrent-transfers`** caps how many *real slskd transfers* exist at once — the resource that actually costs bandwidth and a peer's upload queue slot. It gates **only** the step that starts a transfer (`DOWNLOAD_INIT`), never polling: starving a poll doesn't deprioritise a download, it stalls one slskd is happily finishing, because nothing is looking at it. Enforced by excluding `DOWNLOAD_INIT` rows from the claim query when no slots are free, rather than claiming and re-deferring them — so a large collection can't spend every pass being claimed and put back.
+
+- **`max-concurrent-searches`** (added 27-09-2026) caps how many *Soulseek searches* are running at once. slskd itself only ever sends two searches to the server at a time — a literal `2` in slskd 0.24+, not configurable — and queues the rest, in order, inside itself, while still answering every `POST /searches` with 200 straight away. So starting a 50-song playlist's searches in one go does not make them faster; it builds a queue inside slskd, and our `search-budget-ms` clock (which starts at submission) charges that queue time against each search. Measured 27-09-2026: 50 searches submitted in a minute, completed strictly one after another over 4.5 minutes, 26 of them *after* naviseerr had already failed them as `TIMED_OUT` — many holding 250 responses. The default matches slskd's slot count. It counts `SEARCH_POLL` rows and gates **only** `SEARCH_INIT` (starting a search), never polling — and unlike the transfer gate it is a **count, not a yes/no**: the claim takes the number of free slots and claims at most that many `SEARCH_INIT` rows, because a yes/no gate would let one pass claim `batch-size` searches the moment the count dipped under two. `SEARCH_INIT` rows within a pass are also stepped one after another rather than concurrently, because slskd answers an overlapping `POST /searches` with 429.
 
 Downloads parked in `SEARCH_POLL` or `DOWNLOAD_POLL` cost one table row each and need no bound. Work is taken oldest-first with **no per-collection cap** — one collection may legitimately hold every transfer slot until done, which is the intended default (a user who asked for something usually wants it finished). A per-user/per-collection option is future work, not hardcoded now.
 
@@ -171,6 +173,7 @@ Nothing about a download's position is held in memory, so every recovery scenari
 | `lease-duration-ms` | 60000 | How long a claim's lease survives before another pass may reclaim the row. |
 | `max-concurrent-downloads` | 20 | Cap on in-flight `downloads` rows (user requests), enforced at admit. |
 | `max-concurrent-transfers` | 20 | Cap on real slskd transfers (`DOWNLOAD_POLL` task rows only - `DOWNLOAD_INIT` is excluded from the count so the gate can't deadlock), enforced at claim. |
+| `max-concurrent-searches` | 2 | Cap on running Soulseek searches (`SEARCH_POLL` task rows only - `SEARCH_INIT` is excluded from the count for the same deadlock reason), enforced at claim by claiming at most the free-slot count of `SEARCH_INIT` rows. Matches slskd's own hard-coded two-at-a-time limit; a higher value only lengthens slskd's internal queue. |
 | `search-poll-interval-ms` | 2000 | Re-poll cadence for `SEARCH_POLL`. |
 | `download-poll-interval-ms` | 5000 | Re-poll cadence for `DOWNLOAD_POLL`, and the retry/next-candidate delay from `DOWNLOAD_INIT`. |
 | `search-budget-ms` | 120000 | Max time in `SEARCH_POLL` before `Terminal FAILED` ("timed out"). |
