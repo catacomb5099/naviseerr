@@ -13,7 +13,6 @@ import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.FileTime;
 import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
@@ -37,7 +36,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * <pre>
  *   song              root/&lt;primary artist&gt;/&lt;song title&gt;/&lt;file as downloaded&gt;
  *   album track       root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;
- *   playlist track    filed exactly like a song; the playlist itself is one .m3u8 in root/Playlists/
+ *   playlist track    filed exactly like a song (the ADR says why)
  * </pre>
  *
  * <p>Pure path logic (locating, sanitising, choosing a target) is in static methods so it can be
@@ -51,7 +50,6 @@ public class LibraryOrganiser {
 
     /** A finished song whose file has not turned up in slskd's downloads folder by then is given up on. */
     static final Duration GIVE_UP_AFTER = Duration.ofMinutes(10);
-    static final String PLAYLISTS_FOLDER = "Playlists";
 
     private static final Pattern SEPARATORS = Pattern.compile("[\\\\/]+");
     private static final Pattern DRIVE = Pattern.compile("^[A-Za-z]:$");
@@ -163,12 +161,15 @@ public class LibraryOrganiser {
         }
         Path folder = targetFolder(job);
         Files.createDirectories(folder);
-        Path target = unique(folder.resolve(sanitiseFileName(baseName(job.slskdFilename()))));
+        String name = sanitiseFileName(baseName(job.slskdFilename()));
         // Staged under a non-audio name first: across filesystems Files.move is a copy then a
-        // delete, and a scanner must never index the half-copied file. The final step is a rename
-        // within one folder, which is atomic.
-        Path staging = target.resolveSibling(target.getFileName() + ".partial");
+        // delete, and a scanner must never index the half-copied file. The name carries the task id
+        // so two songs filing into one folder never share a staging file, which is also why
+        // REPLACE_EXISTING is safe: it can only replace this task's own leftover from a crashed pass.
+        Path staging = folder.resolve(name + "." + job.taskId() + ".partial");
         Files.move(source, staging, StandardCopyOption.REPLACE_EXISTING);
+        // The free name is picked right before the rename, so a copy filed meanwhile gets ' (2)'.
+        Path target = unique(folder.resolve(name));
         Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
         deleteIfEmpty(source.getParent(), downloadsDir);
         log.info("Filed song {} into {}", job.taskId(), target);
@@ -200,10 +201,11 @@ public class LibraryOrganiser {
 
     /**
      * Where slskd put the finished file: {@code <downloads>/<last folder of the remote path>/<file>}
-     * (slskd's default {@code ${SOURCE_DIRECTORY}} rule). If that path is missing -- a different
-     * subdirectory pattern, or a name collision that made slskd append {@code _<ticks>} -- the
-     * downloads folder is searched a few levels deep for the same name, exact match preferred,
-     * then the newest.
+     * (slskd's default {@code ${SOURCE_DIRECTORY}} rule). If that exact path is missing, the one
+     * other name slskd's default {@code exists: rename} can produce is looked for in the SAME folder:
+     * {@code <stem>_<ticks><ext>}, newest first. Nothing else is searched -- a same-named file in
+     * another folder is another song's, and a file slskd put elsewhere (a changed subdirectory
+     * pattern) is a give-up, not a guess.
      */
     Path locate(String remoteFilename) throws IOException {
         List<String> segments = segments(remoteFilename);
@@ -216,18 +218,18 @@ public class LibraryOrganiser {
         if (Files.isRegularFile(expected, LinkOption.NOFOLLOW_LINKS)) {
             return expected;
         }
-        if (!Files.isDirectory(downloadsDir)) {
+        Path folder = expected.getParent();
+        if (!Files.isDirectory(folder, LinkOption.NOFOLLOW_LINKS)) {
             return null;
         }
         int dot = name.lastIndexOf('.');
-        String stem = dot > 0 ? name.substring(0, dot) : name;
-        String ext = dot > 0 ? name.substring(dot) : "";
-        Pattern sameOrRenamed = Pattern.compile(Pattern.quote(stem) + "(_\\d+)?" + Pattern.quote(ext));
-        try (Stream<Path> files = Files.walk(downloadsDir, 3)) {
-            return files.filter(p -> Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS))
-                    .filter(p -> sameOrRenamed.matcher(p.getFileName().toString()).matches())
-                    .max(Comparator.comparing((Path p) -> p.getFileName().toString().equals(name))
-                            .thenComparing(LibraryOrganiser::lastModified))
+        Pattern renamed = Pattern.compile(Pattern.quote(dot > 0 ? name.substring(0, dot) : name)
+                + "_\\d+" + Pattern.quote(dot > 0 ? name.substring(dot) : ""));
+        try (Stream<Path> files = Files.list(folder)) {
+            // The suffix is DateTime.UtcNow.Ticks, fixed width for millennia: the newest sorts last.
+            return files.filter(p -> renamed.matcher(p.getFileName().toString()).matches())
+                    .filter(p -> Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS))
+                    .max(Comparator.naturalOrder())
                     .orElse(null);
         }
     }
@@ -255,7 +257,6 @@ public class LibraryOrganiser {
         } else {
             // A song, or one track of a playlist. Playlist tracks are NOT kept together in one folder:
             // Jellyfin would show that folder as an album named after whichever track came first.
-            // The playlist itself is one .m3u8 in root/Playlists pointing at these files.
             artist = first(job.songArtists(), "Unknown Artist");
             folder = orElse(job.songTitle(), stem(baseName(job.slskdFilename())));
         }
@@ -392,14 +393,6 @@ public class LibraryOrganiser {
         } catch (IOException e) {
             Path parent = absolute.getParent();
             return parent == null ? absolute : real(parent).resolve(absolute.getFileName());
-        }
-    }
-
-    private static FileTime lastModified(Path path) {
-        try {
-            return Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS);
-        } catch (IOException e) {
-            return FileTime.fromMillis(0);
         }
     }
 

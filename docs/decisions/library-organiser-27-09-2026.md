@@ -19,16 +19,19 @@ The owner's need: a finished download should show up in Navidrome or Jellyfin wi
 
 ### A fourth step in the download loop, not a callback
 
-Filing is a step in `DownloadTaskRunner.pass()` after `concludeDownloads`, driven by two columns
-added in V8: `download_tasks.library_path` (where the file ended up; null until then) and
-`downloads.organised_at` (when the collection's own file was written). Every pass asks the table
-"which finished songs have no `library_path` yet?" and moves those. A crash between the move and the
-write costs one pass -- the next one finds the file already in the library (the `unique()` rule gives
-the second copy a ` (2)` name; see Not decided). Nothing is held in memory, nothing reacts to an event
-that cannot be regenerated -- the same level-triggered rule the rest of the loop already follows.
+Filing is a step in `DownloadTaskRunner.pass()` after `concludeDownloads`, driven by one column added
+in V8: `download_tasks.library_path` (where the file ended up; null until then). Every pass asks the
+table "which finished songs have no `library_path` yet?" and moves those. A crash before the move costs
+one pass. A crash between the move and the write leaves the file correctly in the library and the row
+without a `library_path`: the next pass no longer finds slskd's copy (it *is* the library file) and
+gives the row up after ten minutes, so nothing is duplicated but the row never records where its file
+went. A crash between the copy and the final rename leaves `<name>.<task id>.partial` in the library,
+which is not retried -- rename it by hand. Nothing is held in memory, nothing reacts to an event that
+cannot be regenerated -- the same level-triggered rule the rest of the loop already follows.
 
-Two columns rather than a `library_files` table: each is one fact about a row that already exists,
-written once by the loop that owns those rows. A table would be one more join for one column.
+One column rather than a `library_files` table: it is one fact about a row that already exists,
+written once by the loop that owns those rows. A table would be one more join for one column. The
+playlist PR adds whatever it needs for itself.
 
 ### Off by default; on only when both folders are configured
 
@@ -49,16 +52,20 @@ slskd 0.26's rule (`DownloadService.DeriveDestination`, `${SOURCE_DIRECTORY}` pa
 at `/downloads/<last segment of the remote directory>/<remote file name>`, where the remote path is
 split on both `\` and `/`, `@@xxxxx` share roots, drive letters and `..` are dropped, and on Linux no
 character other than NUL is altered. A file shared at the peer's root has no folder and lands directly
-in `/downloads`. `LibraryOrganiser.locate` computes exactly that path first. If it is missing -- the
-operator changed slskd's subdirectory pattern, or `exists: rename` appended `_<ticks>` because a file of
-that name was already there -- it searches the downloads folder three levels deep for the same name,
-exact match preferred, newest otherwise.
+in `/downloads`. `LibraryOrganiser.locate` computes exactly that path first. If it is missing, the one
+other name slskd's default `exists: rename` can produce is looked for **in that same folder only**:
+`<stem>_<ticks><ext>`, newest first. Nothing wider: a same-named file in another folder is another
+song's (two albums both with `01 - Intro.flac` is routine), and the first version of this ADR searched
+the whole downloads folder for the name, which would have swapped such files between albums. If the
+operator changed slskd's subdirectory pattern the file is simply given up on, below.
 
 A finished song's file may not be there yet: slskd reports `Completed, Succeeded` from the transfer
 callback and moves the file out of `incomplete` afterwards. So a missing file is not an error; the row
 is left for the next pass. After ten minutes (`GIVE_UP_AFTER`) it is warned about once and never looked
 for again: the query's `finished_at > cutoff` filter is both the give-up rule and what stops the
-organiser from trawling every success in the install's history the day it is switched on.
+organiser from trawling every success in the install's history the day it is switched on. The same
+window is a hard deadline on naviseerr itself: songs that finish while naviseerr is stopped, or cannot
+see the downloads folder, for longer than ten minutes are left where slskd put them and never filed.
 
 ### Folder scheme
 
@@ -108,9 +115,11 @@ fix an untagged album. Nothing to write. A `cover.jpg` would help both servers a
 
 - A target that already exists gets a ` (2)`, ` (3)`... suffix before the extension. Two downloads
   of the same song from different peers are two files; deciding which is better is not this step's job.
-- Across filesystems `Files.move` is a copy then a delete, so the file is staged as `<name>.partial`
-  and renamed into place atomically. A scanner never indexes a half-copied audio file.
-- Symlinks are never followed (`NOFOLLOW_LINKS` everywhere; `Files.walk` does not descend them).
+- Across filesystems `Files.move` is a copy then a delete, so the file is staged as
+  `<name>.<task id>.partial` and renamed into place atomically. A scanner never indexes a half-copied
+  audio file, and two songs filing into one folder (the same song twice in a batch) never share a
+  staging file. The free ` (2)` name is chosen right before the rename, not before the copy.
+- Symlinks are never followed (`NOFOLLOW_LINKS` everywhere).
 - Every constructed path is normalised and checked with `startsWith` against the folder it must stay
   inside; `..`, `.`, `@@` roots and drive letters are dropped before a path is even built.
 - The organiser refuses to start (ERROR, disabled) if `library.root` is inside either slskd folder or
@@ -145,8 +154,10 @@ downloads shows it is needed.
 - Duplicate detection: a playlist track already in the library is downloaded again and filed as ` (2)`.
 - Two playlists with the same title share one `.m3u8`; the later one wins.
 - `cover.jpg` for albums (both servers read it).
-- A crash between the move and the `library_path` write files the same song twice (` (2)`); the
-  window is one statement and the cost is one duplicate file.
+- A crash between the move and the `library_path` write leaves the file correctly filed and the row
+  with no `library_path` (abandoned after ten minutes). No duplicate; the row just does not know.
+- slskd hosted on Windows replaces `? : *` and friends with `_` in local names; `locate` uses the raw
+  remote name, so those files would never be found. Windows-hosted slskd is unsupported here.
 - Case-insensitive collision folding (`Pixies` vs `pixies` become two folders on Linux, one on SMB).
 - Abandoned partials from before the organiser was switched on are not swept.
 

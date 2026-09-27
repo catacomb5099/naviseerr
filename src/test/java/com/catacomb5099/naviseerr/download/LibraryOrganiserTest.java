@@ -92,11 +92,13 @@ class LibraryOrganiserTest {
     }
 
     @Test
-    void locate_prefersTheExactName_overARenamedCopy() throws IOException {
-        put(downloads.resolve("Doolittle"), "05 - Debaser_639000000000000000.flac");
-        Path exact = put(downloads.resolve("Other"), "05 - Debaser.flac");
+    void locate_neverTakesASameNamedFileFromAnotherFolder() throws IOException {
+        // Another album's '05 - Debaser.flac' (or the user's own download) is not this song's file.
+        put(downloads.resolve("Other"), "05 - Debaser.flac");
+        assertNull(organiser.locate("Pixies\\Doolittle\\05 - Debaser.flac"));
 
-        assertEquals(exact, organiser.locate("Pixies\\Doolittle\\05 - Debaser.flac"));
+        Path renamed = put(downloads.resolve("Doolittle"), "05 - Debaser_639000000000000000.flac");
+        assertEquals(renamed, organiser.locate("Pixies\\Doolittle\\05 - Debaser.flac"));
     }
 
     @Test
@@ -205,6 +207,22 @@ class LibraryOrganiserTest {
         assertEquals(root.resolve("Pixies/Debaser/01 - Debaser (3).flac"), filed);
         assertEquals("audio", Files.readString(root.resolve("Pixies/Debaser/01 - Debaser.flac")),
                 "the original is untouched");
+    }
+
+    @Test
+    void aStagedFileAlreadyInTheFolder_isNeverOverwritten() throws IOException {
+        // Something else is mid-copy into this folder; this song's staging name is its own.
+        Path other = Files.writeString(Files.createDirectories(root.resolve("Pixies/Debaser"))
+                .resolve("01 - Debaser.flac.partial"), "someone else's bytes");
+        put(downloads.resolve("Doolittle"), "01 - Debaser.flac");
+
+        Path filed = organiser.file(song("Doolittle\\01 - Debaser.flac", "Debaser", "Pixies"), NOW).block();
+
+        assertEquals(root.resolve("Pixies/Debaser/01 - Debaser.flac"), filed);
+        assertEquals("someone else's bytes", Files.readString(other));
+        try (var files = Files.list(root.resolve("Pixies/Debaser"))) {
+            assertEquals(2, files.count(), "no staging file of our own left behind");
+        }
     }
 
     @Test

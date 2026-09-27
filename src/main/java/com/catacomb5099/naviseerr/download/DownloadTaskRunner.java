@@ -92,7 +92,7 @@ public class DownloadTaskRunner {
      * the same tick rather than lingering a full interval in IN_PROGRESS -- and runs unconditionally,
      * so one that was missed (a crash between the last task's terminal write and here) is picked up
      * by the next pass regardless. Filing is the same shape: it asks the table which finished songs
-     * still have no library path, so a crash mid-move costs one pass, not a file.
+     * still have no library path, so a song whose file was not moved yet is picked up again next pass.
      */
     Mono<Void> pass() {
         Instant now = clock.instant();

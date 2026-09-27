@@ -141,5 +141,5 @@ library:
   # Optional. slskd's incomplete folder as seen from here. When set, the partial file a song that
   # failed for good left behind is removed; when unset, partial files are left alone.
   slskd-incomplete-dir: ${SLSKD_INCOMPLETE_DIR:}
-  # Where the organised library goes: <root>/<Artist>/<Album or Title>/<file>, <root>/Playlists/*.m3u8.
+  # Where the organised library goes: <root>/<Artist>/<Album or Title>/<file>.
   root: ${LIBRARY_ROOT:}
