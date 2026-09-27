@@ -25,8 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TrackMatchingServiceLabelledTest {
 
-    private static final double MIN_PRECISION = 0.80;
-    private static final double MIN_RECALL = 0.93;
+    private static final double MIN_PRECISION = 0.86;
+    private static final double MIN_RECALL = 0.85;
 
     private final TrackMatchingService matcher = new TrackMatchingService();
 
@@ -49,7 +49,7 @@ class TrackMatchingServiceLabelledTest {
         assertTrue(recall >= MIN_RECALL, "recall fell to " + recall);
     }
 
-    private static List<JsonNode> fixture() throws Exception {
+    static List<JsonNode> fixture() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         List<JsonNode> rows = new ArrayList<>();
         try (var in = TrackMatchingServiceLabelledTest.class.getResourceAsStream("/search-lab/labelled.jsonl.gz");

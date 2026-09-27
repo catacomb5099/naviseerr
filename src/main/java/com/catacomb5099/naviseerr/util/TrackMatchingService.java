@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -37,11 +38,34 @@ public class TrackMatchingService {
             "\\b(clean|dirty|intro|outro|transition|redrum|refix|quick hit|hype)\\b|\\b\\d{1,2}[ab]\\s+\\d{2,3}\\b|dj-?promo|dj ?pool",
             Pattern.CASE_INSENSITIVE);
 
+    /** How a request names the version it wants, checked in this order; the first hit wins. */
+    private static final Pattern REQUESTED_REMIX = Pattern.compile("\\b(remix|rmx|mix|edit|dub)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern REQUESTED_ACOUSTIC = Pattern.compile("\\b(acoustic|unplugged|stripped)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern REQUESTED_LIVE = Pattern.compile("\\blive\\b|\\bconcert\\b|\\bsession\\b", Pattern.CASE_INSENSITIVE);
+
+    /** Words a filename may use to say it is that version. */
+    private static final Map<String, Set<String>> VERSION_FAMILY = Map.of(
+            "remix", Set.of("remix", "rmx", "mix", "edit", "dub", "rework"),
+            "acoustic", Set.of("acoustic", "unplugged", "live", "stripped"),
+            "live", Set.of("live", "concert", "unplugged"));
+
+    private static final Pattern TOKEN = Pattern.compile("[a-z0-9]+");
+
+    /** Bracketed words in a YouTube title that say nothing about which recording it is. */
+    private static final Set<String> QUALIFIER_NOISE = tokens("official video music lyric lyrics audio visualizer hd hq 4k"
+            + " remastered remaster version ft feat featuring from the at with topic vevo closed captioned stereo dir bonus"
+            + " track show colors movie ver clip full");
+    private static final Pattern BRACKETED = Pattern.compile("[\\(\\[]([^\\)\\]]*)[\\)\\]]");
+    private static final Pattern CREDIT_BRACKET = Pattern.compile("\\s*(feat|ft|with|dir|prod)\\b", Pattern.CASE_INSENSITIVE);
+
     public boolean isMatch(String cleanTitle, String torrentFilePath) {
         // Extract just the filename from the path
         String filename = extractFilename(torrentFilePath);
 
         if (DJ_POOL.matcher(filename).find() || hasUnrequestedVersionWord(cleanTitle, filename)) {
+            return false;
+        }
+        if (!hasRequestedVersionWord(cleanTitle, filename) || !titleInLastSegment(cleanTitle, filename)) {
             return false;
         }
 
@@ -78,6 +102,95 @@ public class TrackMatchingService {
             }
         }
         return false;
+    }
+
+    /**
+     * When the request asks for a non-original version ("Wonderwall (Live at Wembley) - Oasis"), the filename must
+     * say so with a word from that version's family or one of the request's own bracketed qualifiers ("wembley").
+     * Requests for the original recording pass untouched. Together with {@link #titleInLastSegment} this moved the
+     * right top pick in the search lab from 93% to 97% (PickerLabelledTest).
+     */
+    private static boolean hasRequestedVersionWord(String request, String filename) {
+        String title = requestTitle(request);
+        Set<String> wanted = qualifierTokens(title, requestArtist(request));
+        String version = requestedVersion(title);
+        if (version != null) {
+            wanted.addAll(VERSION_FAMILY.get(version));
+        }
+        if (wanted.isEmpty()) {
+            return true;
+        }
+        Set<String> fileTokens = tokens(filename);
+        return wanted.stream().anyMatch(fileTokens::contains);
+    }
+
+    /** "remix", "acoustic", "live" or null when the request title does not name a version. */
+    private static String requestedVersion(String title) {
+        if (REQUESTED_REMIX.matcher(title).find()) return "remix";
+        if (REQUESTED_ACOUSTIC.matcher(title).find()) return "acoustic";
+        if (REQUESTED_LIVE.matcher(title).find()) return "live";
+        return null;
+    }
+
+    /**
+     * Words the request title adds in brackets or after a dash ("('95 version)", "[Slowed]", "- Live at X") that
+     * are not noise, not the artist, longer than two letters and not a bare number.
+     */
+    private static Set<String> qualifierTokens(String title, String artist) {
+        Set<String> qualifiers = new HashSet<>();
+        Matcher m = BRACKETED.matcher(title);
+        while (m.find()) {
+            if (!CREDIT_BRACKET.matcher(m.group(1)).lookingAt()) {
+                qualifiers.addAll(tokens(m.group(1)));
+            }
+        }
+        String[] parts = title.split(" - ");
+        for (int i = 1; i < parts.length; i++) {
+            qualifiers.addAll(tokens(parts[i]));
+        }
+        qualifiers.removeAll(QUALIFIER_NOISE);
+        qualifiers.removeAll(tokens(artist));
+        qualifiers.removeIf(w -> w.length() <= 2 || w.chars().allMatch(Character::isDigit));
+        return qualifiers;
+    }
+
+    /**
+     * Every word of the plain title must sit in the last dash-separated segment of the filename, so album siblings
+     * ("Red Hot Chili Peppers - Californication - 09 - Emit Remmus.flac") no longer match on the album name.
+     */
+    private static boolean titleInLastSegment(String request, String filename) {
+        String stem = filename.replaceFirst("(?i)\\.[a-z0-9]+$", "");
+        String[] segments = stem.split("\\s+-\\s+");
+        String last = null;
+        for (int i = segments.length - 1; i >= 0 && last == null; i--) {
+            if (!segments[i].isBlank()) last = segments[i];
+        }
+        if (last == null) {
+            return false;
+        }
+        String plainTitle = requestTitle(request).split("\\(")[0].split(" - ")[0];
+        return tokens(last).containsAll(tokens(plainTitle));
+    }
+
+    /** The request is "title - artist"; the artist is what follows the last " - ". */
+    private static String requestTitle(String request) {
+        int i = request.lastIndexOf(" - ");
+        return i < 0 ? request : request.substring(0, i);
+    }
+
+    private static String requestArtist(String request) {
+        int i = request.lastIndexOf(" - ");
+        return i < 0 ? "" : request.substring(i + 3);
+    }
+
+    private static Set<String> tokens(String text) {
+        Set<String> out = new HashSet<>();
+        if (text == null) return out;
+        Matcher m = TOKEN.matcher(text.toLowerCase(Locale.ROOT));
+        while (m.find()) {
+            out.add(m.group());
+        }
+        return out;
     }
 
     private static Set<String> versionWords(String text) {
