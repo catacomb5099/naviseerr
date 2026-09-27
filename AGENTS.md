@@ -182,6 +182,15 @@ Downloads parked waiting on a remote poll cost one table row each and need no bo
 
 The current authoritative design lives in `docs/superpowers/specs/2026-08-13-durable-download-state-machine-design.md`, with the implementation plan in `docs/superpowers/plans/2026-08-13-durable-download-state-machine.md`.
 
+## Playlist Curator (weekly refresh)
+
+`com.catacomb5099.naviseerr.curator` is the only cron job in the project. Once a week it triggers the
+separate playlist-curator service (`POST /v1/runs`), polls the run until it finishes or a 30-minute budget
+runs out, and logs the outcome per category. It is off unless `CURATOR_URL` and `CURATOR_TOKEN` are both
+set, touches no table and adds no endpoint. The outbound client follows the `YtMusicService` pattern
+(timeout, typed error, retry of transient failures only). See
+`docs/decisions/curator-weekly-trigger-27-09-2026.md`.
+
 ## Domain Model Direction
 
 Expected core entities:

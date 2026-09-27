@@ -143,3 +143,28 @@ library:
   slskd-incomplete-dir: ${SLSKD_INCOMPLETE_DIR:}
   # Where the organised library goes: <root>/<Artist>/<Album or Title>/<file>.
   root: ${LIBRARY_ROOT:}
+
+# Playlist curator: the separate playlist-curator service (see compose.yaml) builds a fresh "suggested
+# playlists" edition per category. naviseerr owns the clock: once a week it tells the curator to start,
+# then checks back every poll-interval until the run is done. OFF unless BOTH url and token are set -- an
+# install without a curator behaves exactly as before. See docs/decisions/curator-weekly-trigger-27-09-2026.md.
+curator:
+  # Where the curator is reachable. Default matches the port compose publishes.
+  url: ${CURATOR_URL:http://localhost:8010}
+  # Shared secret. Must be the exact same value the curator is started with (its CURATOR_TOKEN);
+  # generate one with `openssl rand -hex 32`. Empty = the weekly refresh is off.
+  token: ${CURATOR_TOKEN:}
+  # When to ask for a refresh, in the server's own time zone. Spring cron: second minute hour
+  # day-of-month month day-of-week. Default: every Monday at 03:00. Override with CURATOR_CRON.
+  cron: ${CURATOR_CRON:0 0 3 * * MON}
+  # How often to ask "is the run done yet?" while it works.
+  poll-interval-ms: 30000
+  # How long to keep asking before giving up on following the run (30 min). The curator carries on
+  # regardless; this only bounds how long naviseerr watches and logs.
+  run-budget-ms: 1800000
+  # Per-request timeout. The curator answers instantly; anything slower than this is a network problem.
+  timeout-ms: 15000
+  # The trigger is retried on a timeout, a connection refused or a 5xx -- never on a 4xx (a wrong
+  # token, an unknown category). Retrying is safe: the curator ignores a second trigger while one runs.
+  trigger-retry-count: 3
+  trigger-first-back-off-ms: 10000
