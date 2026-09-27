@@ -117,7 +117,7 @@ public class YtMusicSearchResponseMapper {
         );
     }
 
-    private static List<String> mapArtistNames(List<YtMusicSearchResponse.ArtistRef> artists) {
+    public static List<String> mapArtistNames(List<YtMusicSearchResponse.ArtistRef> artists) {
         if (artists == null) {
             return Collections.emptyList();
         }
