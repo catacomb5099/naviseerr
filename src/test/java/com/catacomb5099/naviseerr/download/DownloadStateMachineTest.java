@@ -17,10 +17,12 @@ class DownloadStateMachineTest {
     private static final Duration SEARCH_POLL = Duration.ofSeconds(2);
     private static final Duration DOWNLOAD_POLL = Duration.ofSeconds(5);
     private static final Duration MISSING_GRACE = Duration.ofSeconds(60);
+    private static final Duration QUEUED_BUDGET = Duration.ofMinutes(10);
     private static final int RETRY_LIMIT = 2;
 
     private final DownloadStateMachine machine = new DownloadStateMachine(
-            SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, MISSING_GRACE, RETRY_LIMIT);
+            SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, QUEUED_BUDGET, MISSING_GRACE,
+            RETRY_LIMIT);
 
     @Test
     void searchInit_recordsSearchId_andAdvancesToSearchPoll() {
@@ -236,6 +238,71 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, RETRY_LIMIT, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Errored"), T0);
+
+        assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    // ---- a peer that keeps us in its queue -------------------------------------------------------
+
+    @Test
+    void downloadPoll_queuedRemotelyPastTheQueuedBudget_movesToTheNextCandidate_skippingSamePeerRetries() {
+        // The measured case: peer SKYLiGHT_B held 'Whip It - Devo 2.0' at "Queued, Remotely" 0% for the
+        // whole hour while seven other candidates were never tried. Straight to the next peer, not a
+        // retry of this one -- a peer that queued us for ten minutes will queue us again.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
+                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(1, next.candidateIndex(), "next peer, even though retries on alice remained");
+        assertEquals(0, next.retryIndex());
+        assertNull(next.slskdTransferId());
+    }
+
+    @Test
+    void downloadPoll_queuedRemotelyWithinTheQueuedBudget_keepsWaiting() {
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
+                T0.plus(QUEUED_BUDGET).minusSeconds(1));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_POLL, next.phase());
+        assertEquals(0, next.candidateIndex());
+    }
+
+    @Test
+    void downloadPoll_inProgressWithBytesMoving_pastTheQueuedBudget_isNotTouchedByIt() {
+        // Only the hour-long download budget bounds a transfer that is actually moving.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "InProgress", 40f, 40L),
+                T0.plus(QUEUED_BUDGET).plusSeconds(300));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_POLL, next.phase());
+        assertEquals(0, next.candidateIndex());
+    }
+
+    @Test
+    void downloadPoll_nominallyInProgressButNoBytesMoved_pastTheQueuedBudget_isTreatedAsStuck() {
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "InProgress", 0f, 0L),
+                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+
+        assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
+    }
+
+    @Test
+    void downloadPoll_lastCandidateQueuedPastTheQueuedBudget_exhaustsSources() {
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
+                T0.plus(QUEUED_BUDGET).plusSeconds(1));
 
         assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());

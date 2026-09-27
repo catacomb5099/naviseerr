@@ -40,7 +40,7 @@ Source: [DownloadTaskRunner.java](../../src/main/java/com/catacomb5099/naviseerr
 | `SEARCH_INIT` | `POST /searches` | one-shot | — | — | missing/blank search id -> `Terminal FAILED` ("Searching for downloads failed") |
 | `SEARCH_POLL` | reads batched `GET /searches` | `Continue` | `search-poll-interval-ms` (2000) | `search-budget-ms` (120000) | `Terminal FAILED` ("timed out") |
 | `DOWNLOAD_INIT` | `POST /transfers/downloads/{user}` | `Continue` (retry/next-candidate) | `download-poll-interval-ms` used as the retry delay | — (bounded by `slskd-service.retry-count` and candidate list length, not by duration) | candidates and retries exhausted -> `Terminal FAILED` ("All download sources exhausted") |
-| `DOWNLOAD_POLL` | reads batched `GET /transfers/downloads` | `Continue` | `download-poll-interval-ms` (5000) | `download-budget-ms` (3600000 = 1h); `missing-transfer-grace-ms` (60000) when the transfer is absent from the response | `Terminal FAILED` ("timed out", or "slskd has no record of this transfer") |
+| `DOWNLOAD_POLL` | reads batched `GET /transfers/downloads` | `Continue` | `download-poll-interval-ms` (5000) | `download-budget-ms` (3600000 = 1h); `queued-budget-ms` (600000 = 10 min) while the peer has not sent a byte (`Queued`/`Requested`/`Initializing`, or `InProgress` at 0 bytes); `missing-transfer-grace-ms` (60000) when the transfer is absent from the response | `Terminal FAILED` ("timed out", or "slskd has no record of this transfer"); queued budget exceeded -> `Continue` to the **next candidate** (same-peer retries skipped), or `Terminal FAILED` ("All download sources exhausted") when it was the last |
 
 A completed `SEARCH_POLL` with no usable candidates is `Terminal FAILED` ("No download candidates found"); a `DOWNLOAD_POLL` that sees any success state is `Terminal SUCCEEDED`.
 
@@ -178,6 +178,7 @@ Nothing about a download's position is held in memory, so every recovery scenari
 | `download-poll-interval-ms` | 5000 | Re-poll cadence for `DOWNLOAD_POLL`, and the retry/next-candidate delay from `DOWNLOAD_INIT`. |
 | `search-budget-ms` | 120000 | Max time in `SEARCH_POLL` before `Terminal FAILED` ("timed out"). |
 | `download-budget-ms` | 3600000 | Max time in `DOWNLOAD_POLL` before `Terminal FAILED` ("timed out"). |
+| `queued-budget-ms` | 600000 | Max time in `DOWNLOAD_POLL` with no bytes received from the peer before moving to the next candidate (added 27-09-2026: one peer held a transfer at "Queued, Remotely" 0% for the whole hour while seven other candidates went untried). Measured from `phase_entered_at`, which resets on every retry/failover, so each peer gets its own ten minutes. Transfers that are moving bytes are bounded only by `download-budget-ms`. |
 
 `slskd-service.retry-count` (unchanged) still governs the candidate-level retry count applied in `DOWNLOAD_INIT`/`DOWNLOAD_POLL` failure handling.
 

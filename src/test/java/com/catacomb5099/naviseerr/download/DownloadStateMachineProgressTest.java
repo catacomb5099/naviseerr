@@ -25,7 +25,8 @@ class DownloadStateMachineProgressTest {
     private static final int RETRY_LIMIT = 2;
 
     private final DownloadStateMachine machine = new DownloadStateMachine(
-            SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, MISSING_GRACE, RETRY_LIMIT);
+            SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, Duration.ofMinutes(10),
+            MISSING_GRACE, RETRY_LIMIT);
 
     // --- toProgress -----------------------------------------------------------------------------
 
