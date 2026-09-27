@@ -17,10 +17,10 @@ service in the sibling repo `~/IdeaProjects/ytmusic-adapter`, wrapping the Pytho
 `ytmusicapi` library (pinned `1.12.2`). It is not vendored into this repo. It runs anonymously — no
 YouTube credentials, no OAuth — and exposes a stable, versioned (`/v1/...`) JSON contract:
 `GET /v1/search`, `/v1/search/{songs|albums|artists|playlists}`, plus detail lookups by id. As of
-27-09-2026 naviseerr consumes four of those detail routes: `GET /v1/songs/{videoId}`,
+27-09-2026 naviseerr consumes five of those detail routes: `GET /v1/songs/{videoId}`,
 `GET /v1/albums/{browseId}` and `GET /v1/playlists/{playlistId}` — which is how a download request
-carrying only a YouTube id learns what to search Soulseek for — and `GET /v1/artists/{channelId}`,
-behind the read-only artist page.
+carrying only a YouTube id learns what to search Soulseek for — plus `GET /v1/artists/{channelId}`,
+behind the read-only artist page, and `GET /v1/songs/{videoId}/details`, behind the song page.
 
 Wired into [compose.yaml](../../compose.yaml) as `ytmusic-adapter`, built from
 `build: ../ytmusic-adapter` — a path outside this repo. `./gradlew bootRun` (which auto-starts
@@ -167,7 +167,7 @@ provider load and adapter semaphore occupancy — it is not a user-visible laten
 Search is not the only caller any more. `DownloadTaskRunner.gatherMetadata` resolves a download's
 YouTube id at admission time, via the first three of these methods on
 [YtMusicService](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java)
-(the fourth belongs to the artist page only; admission never calls it):
+(the last two belong to the artist page and the song page; admission never calls them):
 
 | Method | Route | Returns |
 |---|---|---|
@@ -175,6 +175,7 @@ YouTube id at admission time, via the first three of these methods on
 | `getAlbumInfo(browseId)` | `GET /v1/albums/{browseId}` | `YoutubeCollectionInfo` |
 | `getPlaylistInfo(playlistId)` | `GET /v1/playlists/{playlistId}` | `YoutubeCollectionInfo` |
 | `getArtistInfo(channelId)` | `GET /v1/artists/{channelId}` | `YtMusicDetailResponse.Artist` |
+| `getSongDetails(videoId)` | `GET /v1/songs/{videoId}/details` | `YtMusicDetailResponse.SongDetails` (adapter shape; only `SongInfoView.from` reads it) |
 
 Three things about the mapping are easy to get wrong, because the adapter's three responses are not
 the same shape:
@@ -190,7 +191,7 @@ the same shape:
   for it would spend a whole search budget to fail. Only an explicit `false` counts — album
   responses omit the field entirely, and treating null as unavailable would drop every album track.
 
-All four go through the same `execute` pipeline as search — one timeout, typed error translation,
+All five go through the same `execute` pipeline as search — one timeout, typed error translation,
 retry on availability failures only — rather than reimplementing it. That pipeline was extracted from
 `executeSearch` for exactly this reason.
 
@@ -210,6 +211,17 @@ Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/s
   `playlists` included -- the mixed page always carried `playlist` items, the mapper used to drop them.
 - `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - typed (one filtered adapter
   call each)
+
+And by [SongInfoController.java](../../src/main/java/com/catacomb5099/naviseerr/services/SongInfoController.java):
+
+- `GET /songs/{videoId}` - one song as a
+  [SongInfoView](../../src/main/java/com/catacomb5099/naviseerr/services/SongInfoView.java): artists
+  with channel ids, album, year, exact duration and view count, the per-track `explicit` flag and the
+  credits panel (`role` is YouTube's own heading, rendered verbatim). The adapter stitches it from up
+  to four YouTube Music calls, so expect 1-2.5 s. An official-video id (`(Official Video)` titles)
+  has no album, year, explicit flag or credits anywhere on YouTube Music; they come back null / `[]`,
+  not as an error, and the adapter deliberately does not guess the album twin by title search.
+  Same 404/502 handlers as `/collections/{id}`.
 
 And by [CollectionController.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java):
 

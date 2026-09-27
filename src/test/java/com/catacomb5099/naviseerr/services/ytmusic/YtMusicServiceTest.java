@@ -84,6 +84,79 @@ class YtMusicServiceTest {
             }
             """;
 
+    /** Captured verbatim from the adapter branch feat/ai-song-details running on port 8001 (27-09-2026). */
+    private static final String SONG_DETAILS_BODY = """
+            {
+              "videoId": "DntZ3-yCaFs",
+              "title": "Manchild",
+              "artists": [
+                {
+                  "name": "Sabrina Carpenter",
+                  "channelId": "UCz51ZodJbYUNfkdPHOjJKKw"
+                }
+              ],
+              "album": {
+                "name": "Man’s Best Friend",
+                "browseId": "MPREb_msfRVJDqlXJ"
+              },
+              "durationSeconds": 214,
+              "year": 2025,
+              "viewCount": 86376709,
+              "explicit": true,
+              "thumbnailUrl": "https://yt3.googleusercontent.com/pbzBdDb17dzalZDm7YdsYLfUeEr1_mmm9eG4GYU4z8vio13sRpvN9-Q6SF3gatZbpcQRqsZwMiikHHA=w544-h544-l90-rj",
+              "credits": [
+                {
+                  "role": "Performed by",
+                  "names": [
+                    "Sabrina Carpenter"
+                  ]
+                },
+                {
+                  "role": "Written by",
+                  "names": [
+                    "Sabrina Carpenter",
+                    "Jack Antonoff",
+                    "Amy Allen"
+                  ]
+                },
+                {
+                  "role": "Produced by",
+                  "names": [
+                    "Sabrina Carpenter",
+                    "Jack Antonoff"
+                  ]
+                },
+                {
+                  "role": "Music metadata provided by",
+                  "names": [
+                    "Island Records"
+                  ]
+                }
+              ]
+            }
+            """;
+
+    /** Same capture for an official-video id: no album, year, explicit flag or credits upstream. */
+    private static final String SONG_DETAILS_OMV_BODY = """
+            {
+              "videoId": "tM1RS_5IAiE",
+              "title": "Little By Little (Official Video)",
+              "artists": [
+                {
+                  "name": "Oasis",
+                  "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"
+                }
+              ],
+              "album": null,
+              "durationSeconds": 239,
+              "year": null,
+              "viewCount": 41779269,
+              "explicit": null,
+              "thumbnailUrl": "https://i.ytimg.com/vi/tM1RS_5IAiE/hq720.jpg?sqp=-oaymwEXCNUGEOADIAQqCwjVARCqCBh4INgESFo&rs=AOn4CLAL7mbX4UFeOrUCx-SUZJMCv_DwEA",
+              "credits": []
+            }
+            """;
+
     private MockWebServer server;
     private YtMusicService service;
 
@@ -512,5 +585,49 @@ class YtMusicServiceTest {
                 .verifyComplete();
 
         assertEquals(2, server.getRequestCount());
+    }
+
+    @Test
+    void getSongDetails_deserializesTheCapturedAdapterResponse() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody(SONG_DETAILS_BODY));
+
+        StepVerifier.create(service.getSongDetails("DntZ3-yCaFs"))
+                .assertNext(d -> {
+                    assertEquals("Manchild", d.getTitle());
+                    assertEquals("UCz51ZodJbYUNfkdPHOjJKKw", d.getArtists().get(0).getChannelId());
+                    assertEquals("MPREb_msfRVJDqlXJ", d.getAlbum().getBrowseId());
+                    assertEquals(214, d.getDurationSeconds());
+                    assertEquals(2025, d.getYear());
+                    assertEquals(86376709L, d.getViewCount());
+                    assertEquals(Boolean.TRUE, d.getExplicit());
+                    assertEquals(4, d.getCredits().size());
+                    assertEquals("Written by", d.getCredits().get(1).getRole());
+                    assertEquals(List.of("Sabrina Carpenter", "Jack Antonoff", "Amy Allen"), d.getCredits().get(1).getNames());
+                })
+                .verifyComplete();
+
+        RecordedRequest request = server.takeRequest(1, TimeUnit.SECONDS);
+        assertNotNull(request);
+        assertEquals("/v1/songs/DntZ3-yCaFs/details", request.getPath());
+    }
+
+    @Test
+    void getSongDetails_officialVideo_hasNullAlbumYearExplicit_andEmptyCredits() {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody(SONG_DETAILS_OMV_BODY));
+
+        StepVerifier.create(service.getSongDetails("tM1RS_5IAiE"))
+                .assertNext(d -> {
+                    assertEquals("Little By Little (Official Video)", d.getTitle());
+                    assertNull(d.getAlbum());
+                    assertNull(d.getYear());
+                    assertNull(d.getExplicit());
+                    assertEquals(239, d.getDurationSeconds());
+                    assertTrue(d.getCredits().isEmpty());
+                })
+                .verifyComplete();
     }
 }
