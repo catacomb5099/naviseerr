@@ -204,11 +204,11 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * What slskd is asked to search for. "Title - Primary Artist" is the exact string the client
-     * used to send before requests became ids, and the shape {@code TrackMatchingService} still
-     * splits on to check both halves appear in a filename. Keeping the wording identical keeps the
-     * hit rate identical; changing how a track is worded for Soulseek is its own job, with its own
-     * test, and not this one.
+     * The song's name in the shape slskd queries are built from. "Title - Primary Artist" is the
+     * exact string the client used to send before requests became ids, and the shape
+     * {@code TrackMatchingService} still splits on to check both halves appear in a filename. It is
+     * stored as-is; {@link SearchQueryTiers} derives the bare "title - artist" and the title-only
+     * fallback from it, so the rewording lives there, not here.
      */
     static String soulseekQuery(YoutubeSongInfo song) {
         return song.authorNames().isEmpty()
@@ -389,7 +389,16 @@ public class DownloadTaskRunner {
 
     private Mono<Void> apply(DownloadTask task, DownloadDecision decision) {
         return switch (decision) {
-            case DownloadDecision.Advance advance -> repository.save(advance.next(), instanceId).then();
+            case DownloadDecision.Advance advance -> {
+                if (advance.next().searchTier() > task.searchTier()) {
+                    log.info("Song '{}' of download {} found no candidates for '{}'; retrying Soulseek "
+                                    + "with looser query '{}' (tier {} of {})",
+                            task.songName(), task.downloadId(), task.searchQuery(),
+                            advance.next().searchQuery(), advance.next().searchTier() + 1,
+                            SearchQueryTiers.of(task.songName()).size());
+                }
+                yield repository.save(advance.next(), instanceId).then();
+            }
             case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {
                 log.info("Song '{}' of download {} finished as {}{}", task.songName(),

@@ -154,8 +154,9 @@ public class DownloadTaskRepository {
                    lease_expires_at = :leaseExpiresAt
              WHERE task_id IN (SELECT task_id FROM polls UNION ALL SELECT task_id FROM searches)
             RETURNING task_id, download_id, youtube_id, song_name, phase, phase_entered_at,
-                      next_attempt_at, search_id, candidates, candidate_index, retry_index,
-                      slskd_username, slskd_filename, slskd_transfer_id, last_error, progress_percent
+                      next_attempt_at, search_id, search_tier, candidates, candidate_index,
+                      retry_index, slskd_username, slskd_filename, slskd_transfer_id, last_error,
+                      progress_percent
             """;
 
     // Writes every field (DownloadTask is the complete state) and clears the lease. Guarded on the
@@ -167,6 +168,7 @@ public class DownloadTaskRepository {
                    phase_entered_at = :phaseEnteredAt,
                    next_attempt_at = :nextAttemptAt,
                    search_id = :searchId,
+                   search_tier = :searchTier,
                    candidates = :candidates,
                    candidate_index = :candidateIndex,
                    retry_index = :retryIndex,
@@ -436,6 +438,7 @@ public class DownloadTaskRepository {
                 .bind("phase", task.phase().name())
                 .bind("phaseEnteredAt", task.phaseEnteredAt())
                 .bind("nextAttemptAt", task.nextAttemptAt())
+                .bind("searchTier", task.searchTier())
                 .bind("candidates", writeCandidates(task.candidates()))
                 .bind("candidateIndex", task.candidateIndex())
                 .bind("retryIndex", task.retryIndex())
@@ -476,6 +479,7 @@ public class DownloadTaskRepository {
                 .phaseEnteredAt(row.get("phase_entered_at", Instant.class))
                 .nextAttemptAt(row.get("next_attempt_at", Instant.class))
                 .searchId(row.get("search_id", String.class))
+                .searchTier(row.get("search_tier", Integer.class))
                 .candidates(readCandidates(row.get("candidates", String.class)))
                 .candidateIndex(row.get("candidate_index", Integer.class))
                 .retryIndex(row.get("retry_index", Integer.class))

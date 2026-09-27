@@ -84,6 +84,75 @@ class DownloadStateMachineTest {
     }
 
     @Test
+    void searchPoll_completeWithNoCandidates_withAFallbackLeft_retriesWithTheTitleAlone() {
+        DownloadTask task = searchPolling("s1").toBuilder()
+                .songName("Wonderwall (Remix) [Official Video] - Oasis").build();
+        Instant later = T0.plusSeconds(30);
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), later);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, next.phase());
+        assertEquals(1, next.searchTier());
+        assertNull(next.searchId(), "the old search must not be polled again");
+        assertEquals(later, next.phaseEnteredAt(), "each tier gets a fresh search budget");
+        assertEquals("Wonderwall", next.searchQuery());
+    }
+
+    @Test
+    void searchPoll_completeWithNoCandidates_onAnArtistEchoTitle_retriesWithTheTitleAlone() {
+        DownloadTask task = searchPolling("s1").toBuilder()
+                .songName("Oasis - Don't Look Back In Anger (Official Video) - Oasis").build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(1, next.searchTier());
+        assertEquals("Don't Look Back In Anger", next.searchQuery());
+    }
+
+    @Test
+    void searchPoll_completeWithNoCandidates_onTheLastTier_fails() {
+        DownloadTask task = searchPolling("s1").toBuilder()
+                .songName("Wonderwall (Remix) [Official Video] - Oasis").searchTier(1).build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
+
+        assertEquals(DownloadFailureCode.NO_CANDIDATES,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void searchPoll_completeWithNoCandidates_onACleanTitle_stillFallsBackToTheTitleAlone() {
+        // Zero files for a well-known "title - artist" is the signature of the Soulseek server dropping
+        // the artist name (45 of 809 songs in the lab), so even a clean name gets the title-only retry.
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Thriller - Michael Jackson").build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals("Thriller", next.searchQuery());
+    }
+
+    @Test
+    void searchPoll_completeWithNoCandidates_onATitleWithoutAnArtist_failsWithoutRetrying() {
+        // No artist to drop, so there is no looser wording left: one tier, then NO_CANDIDATES.
+        DownloadTask task = searchPolling("s1").toBuilder()
+                .songName("Hello (Official Lyric Video)").build();
+        assertEquals("Hello", task.searchQuery());
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
+
+        assertEquals(DownloadFailureCode.NO_CANDIDATES,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
     void searchPoll_completeWithCandidates_storesThemAndAdvancesToDownloadInit() {
         DownloadDecision d = machine.afterSearchPoll(
                 searchPolling("s1"), SlskdFixtures.searchState("s1", true, "Completed"),
