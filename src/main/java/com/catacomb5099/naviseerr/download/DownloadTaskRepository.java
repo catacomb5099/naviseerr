@@ -259,6 +259,36 @@ public class DownloadTaskRepository {
              WHERE phase = 'SEARCH_POLL'
             """;
 
+    /**
+     * Finished songs whose file has not been filed into the library yet, oldest first, with the names
+     * their folders are built from: the song's own media row and its download's (the album's, for an
+     * album track). {@code finished_at > :cutoff} is what stops this from trawling every success in
+     * the install's history the day the organiser is switched on, and is also the give-up rule: a file
+     * that has not appeared by then is left where slskd put it and never looked for again.
+     */
+    private static final String TASKS_TO_ORGANISE_SQL = """
+            SELECT t.task_id, t.slskd_filename, t.finished_at, d.download_type,
+                   s.title AS song_title, s.artists AS song_artists,
+                   c.title AS collection_title, c.artists AS collection_artists
+              FROM download_tasks t
+              JOIN downloads d ON d.download_id = t.download_id
+              LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
+              LEFT JOIN media_items c ON c.youtube_id = d.youtube_id
+             WHERE t.phase = 'SUCCEEDED'
+               AND t.library_path IS NULL
+               AND t.slskd_filename IS NOT NULL
+               AND t.finished_at > :cutoff
+             ORDER BY t.finished_at
+             LIMIT :limit
+            """;
+
+    private static final String SET_LIBRARY_PATH_SQL = """
+            UPDATE download_tasks
+               SET library_path = :path
+             WHERE task_id = :id
+               AND library_path IS NULL
+            """;
+
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
             new TypeReference<>() {};
 
@@ -334,6 +364,36 @@ public class DownloadTaskRepository {
                 .bind("now", now)
                 .fetch()
                 .rowsUpdated();
+    }
+
+    /** Finished songs still to be moved into the library, oldest first. See {@link LibraryOrganiser}. */
+    public Flux<LibraryOrganiser.Job> tasksToOrganise(int limit, Instant cutoff) {
+        return client.sql(TASKS_TO_ORGANISE_SQL)
+                .bind("cutoff", cutoff)
+                .bind("limit", limit)
+                .map((row, meta) -> new LibraryOrganiser.Job(
+                        row.get("task_id", UUID.class),
+                        DownloadType.valueOf(row.get("download_type", String.class)),
+                        row.get("slskd_filename", String.class),
+                        row.get("finished_at", Instant.class),
+                        row.get("song_title", String.class),
+                        artists(row.get("song_artists", String[].class)),
+                        row.get("collection_title", String.class),
+                        artists(row.get("collection_artists", String[].class))))
+                .all();
+    }
+
+    /** Records where a song's file now lives. Writes once: a second call for the same task is a no-op. */
+    public Mono<Long> setLibraryPath(UUID taskId, String libraryPath) {
+        return client.sql(SET_LIBRARY_PATH_SQL)
+                .bind("id", taskId)
+                .bind("path", libraryPath)
+                .fetch()
+                .rowsUpdated();
+    }
+
+    private static List<String> artists(String[] values) {
+        return values == null ? List.of() : List.of(values);
     }
 
     public Mono<Long> countActiveDownloads() {

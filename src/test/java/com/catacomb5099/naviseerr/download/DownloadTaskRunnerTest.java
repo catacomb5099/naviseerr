@@ -37,6 +37,7 @@ class DownloadTaskRunnerTest {
     private DownloadService downloadService;
     private SlskdService slskdService;
     private YtMusicService ytMusicService;
+    private LibraryOrganiser organiser;
     private DownloadTaskRunner runner;
 
     @BeforeEach
@@ -46,6 +47,9 @@ class DownloadTaskRunnerTest {
         downloadService = mock(DownloadService.class);
         slskdService = mock(SlskdService.class);
         ytMusicService = mock(YtMusicService.class);
+        organiser = mock(LibraryOrganiser.class);
+        when(organiser.isEnabled()).thenReturn(false);
+        when(organiser.deletePartials(any())).thenReturn(Mono.empty());
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.empty());
         when(repository.createTasks(any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.upsertMedia(any())).thenReturn(Mono.just(1L));
@@ -62,8 +66,77 @@ class DownloadTaskRunnerTest {
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                ytMusicService, Clock.fixed(T0, ZoneOffset.UTC),
+                ytMusicService, organiser, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
+    }
+
+    // ---- library organiser ---------------------------------------------------------------------
+
+    @Test
+    void withTheOrganiserOff_noFilingQueryIsMade() {
+        runner.pass().block();
+
+        verify(repository, never()).tasksToOrganise(anyInt(), any());
+    }
+
+    @Test
+    void withTheOrganiserOn_eachFiledSongGetsItsLibraryPathWritten_andAMissingFileIsLeftForNextPass() {
+        LibraryOrganiser.Job filed = job(UUID.randomUUID());
+        LibraryOrganiser.Job notYet = job(UUID.randomUUID());
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(repository.tasksToOrganise(10, T0.minusSeconds(600))).thenReturn(Flux.just(filed, notYet));
+        when(organiser.file(filed, T0)).thenReturn(Mono.just(java.nio.file.Path.of("/music/A/B/c.flac")));
+        when(organiser.file(notYet, T0)).thenReturn(Mono.empty());
+        when(repository.setLibraryPath(any(), any())).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(repository).setLibraryPath(filed.taskId(), "/music/A/B/c.flac");
+        verify(repository, never()).setLibraryPath(eq(notYet.taskId()), any());
+    }
+
+    @Test
+    void aFilingErrorDoesNotStopThePass() {
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(any())).thenReturn(T0.minusSeconds(600));
+        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.just(job(UUID.randomUUID())));
+        when(organiser.file(any(), any())).thenReturn(Mono.error(new java.io.IOException("read-only")));
+
+        assertDoesNotThrow(() -> runner.pass().block());
+    }
+
+    @Test
+    void aSongThatFailedForGood_hasItsPartialFilesRemoved_butOnlyOnTheFirstFinish() {
+        DownloadTask task = downloadPolling(candidates("alice"), 0, 0, "abc");
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+                new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED)));
+
+        runner.pass().block();
+        verify(organiser).deletePartials(task);
+
+        // A duplicate finish (expired lease, re-stepped row) updates no row and cleans nothing again.
+        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(0L));
+        runner.pass().block();
+        verify(organiser, times(1)).deletePartials(task);
+    }
+
+    @Test
+    void aSongThatSucceeded_keepsItsFile_forTheFilingStep() {
+        DownloadTask task = downloadPolling(candidates("alice"), 0, 0, "abc");
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+                new DownloadDecision.Terminal(DownloadStatus.SUCCEEDED, null)));
+
+        runner.pass().block();
+
+        verify(organiser, never()).deletePartials(any());
+    }
+
+    private static LibraryOrganiser.Job job(UUID taskId) {
+        return new LibraryOrganiser.Job(taskId, DownloadType.SONG, "music\\a\\c.flac", T0.minusSeconds(5),
+                "c", List.of("A"), null, List.of());
     }
 
     @Test

@@ -347,6 +347,82 @@ class DownloadTaskRepositoryIT {
         assertEquals(firstFinishedAt, finishedAtOf(id), "finished_at must not move");
     }
 
+    // ---- library organiser ---------------------------------------------------------------------
+
+    /** A succeeded song with a peer file name, finished at {@code finishedAt}. */
+    private UUID succeededSong(UUID downloadId, String youtubeId, String filename, Instant finishedAt) {
+        UUID taskId = UUID.randomUUID();
+        template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, phase, "
+                        + "phase_entered_at, next_attempt_at, finished_at, slskd_username, slskd_filename) "
+                        + "VALUES (:task, :dl, :yt, 'q', 'SUCCEEDED', :at, :at, :at, 'bob', :file)")
+                .bind("task", taskId).bind("dl", downloadId).bind("yt", youtubeId).bind("at", finishedAt)
+                .bind("file", filename)
+                .fetch().rowsUpdated().block();
+        return taskId;
+    }
+
+    private void media(String youtubeId, String title, String... artists) {
+        repository.upsertMedia(List.of(new MediaItem(youtubeId, title, List.of(artists), null, null, null))).block();
+    }
+
+    @Test
+    void tasksToOrganise_returnsRecentSucceededSongsWithTheirOwnAndTheirCollectionsNames() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM");
+        media("yt-" + album, "Doolittle", "Pixies");
+        media("song-1", "Debaser", "Pixies", "Someone");
+        UUID taskId = succeededSong(album, "song-1", "music\\Pixies\\Doolittle\\01 - Debaser.flac", NOW);
+
+        List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600))
+                .collectList().block();
+
+        assertEquals(1, jobs.size());
+        LibraryOrganiser.Job job = jobs.getFirst();
+        assertEquals(taskId, job.taskId());
+        assertEquals(DownloadType.ALBUM, job.type());
+        assertEquals("music\\Pixies\\Doolittle\\01 - Debaser.flac", job.slskdFilename());
+        assertEquals(NOW, job.finishedAt());
+        assertEquals("Debaser", job.songTitle());
+        assertEquals(List.of("Pixies", "Someone"), job.songArtists());
+        assertEquals("Doolittle", job.collectionTitle());
+        assertEquals(List.of("Pixies"), job.collectionArtists());
+    }
+
+    @Test
+    void tasksToOrganise_skipsFailedSongs_alreadyFiledSongs_andSongsOlderThanTheCutoff() {
+        UUID dl = insertDownload("PARTIAL_SUCCESS", "PLAYLIST");
+        succeededSong(dl, "old", "a\\old.flac", NOW.minusSeconds(601));
+        UUID filed = succeededSong(dl, "filed", "a\\filed.flac", NOW);
+        repository.setLibraryPath(filed, "/music/x/filed.flac").block();
+        UUID failedId = admitOneSong("PENDING");
+        downloadService.finishTask(taskIdOf(failedId), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        UUID wanted = succeededSong(dl, "new", "a\\new.flac", NOW);
+
+        List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600))
+                .collectList().block();
+
+        assertEquals(List.of(wanted), jobs.stream().map(LibraryOrganiser.Job::taskId).toList());
+        // Names are LEFT JOINed: a song with no media row still comes back, with empty names, rather
+        // than being silently never filed.
+        assertNull(jobs.getFirst().songTitle());
+        assertEquals(List.of(), jobs.getFirst().songArtists());
+    }
+
+    @Test
+    void setLibraryPath_writesOnce() {
+        UUID dl = insertDownload("SUCCEEDED");
+        UUID taskId = succeededSong(dl, "s", "a\\s.flac", NOW);
+
+        assertEquals(1L, repository.setLibraryPath(taskId, "/music/A/s/s.flac").block());
+        assertEquals(0L, repository.setLibraryPath(taskId, "/music/elsewhere.flac").block());
+
+        String stored = template.getDatabaseClient()
+                .sql("SELECT library_path FROM download_tasks WHERE task_id = :id").bind("id", taskId)
+                .map((row, meta) -> row.get("library_path", String.class)).one().block();
+        assertEquals("/music/A/s/s.flac", stored);
+    }
+
     @Test
     void conclude_succeedsADownloadWhoseOnlySongSucceeded() {
         UUID id = admitOneSong("PENDING");

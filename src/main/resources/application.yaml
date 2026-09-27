@@ -128,3 +128,18 @@ download-task:
   # (not the hour above) before failing. slskd keeps completed transfers in that list, so "absent"
   # means the lookup is broken, not that the download finished -- fail fast and loudly instead.
   missing-transfer-grace-ms: 60000
+
+# Library organiser: moves each finished song out of slskd's downloads folder into an organised music
+# library that Navidrome / Jellyfin can scan. OFF unless BOTH slskd-downloads-dir and root are set --
+# an install that sets neither behaves exactly as before. Needs slskd's downloads folder to be visible
+# to naviseerr (same machine, or the same volume mounted into both containers). root must not be
+# inside the slskd folders or contain them; the organiser refuses to start if it is.
+# See docs/decisions/library-organiser-27-09-2026.md for the folder scheme.
+library:
+  # Where slskd's downloads folder appears on THIS machine (slskd's `directories.downloads`).
+  slskd-downloads-dir: ${SLSKD_DOWNLOADS_DIR:}
+  # Optional. slskd's incomplete folder as seen from here. When set, the partial file a song that
+  # failed for good left behind is removed; when unset, partial files are left alone.
+  slskd-incomplete-dir: ${SLSKD_INCOMPLETE_DIR:}
+  # Where the organised library goes: <root>/<Artist>/<Album or Title>/<file>.
+  root: ${LIBRARY_ROOT:}

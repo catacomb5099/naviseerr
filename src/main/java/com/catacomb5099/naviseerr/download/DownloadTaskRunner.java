@@ -36,6 +36,7 @@ public class DownloadTaskRunner {
     private final DownloadService downloadService;
     private final SlskdService slskdService;
     private final YtMusicService ytMusicService;
+    private final LibraryOrganiser organiser;
     private final Clock clock;
     private final Duration loopInterval;
     private final int batchSize;
@@ -53,6 +54,7 @@ public class DownloadTaskRunner {
             DownloadService downloadService,
             SlskdService slskdService,
             YtMusicService ytMusicService,
+            LibraryOrganiser organiser,
             Clock clock,
             @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
             @Value("${download-task.batch-size:10}") int batchSize,
@@ -65,6 +67,7 @@ public class DownloadTaskRunner {
         this.downloadService = downloadService;
         this.slskdService = slskdService;
         this.ytMusicService = ytMusicService;
+        this.organiser = organiser;
         this.clock = clock;
         this.loopInterval = loopInterval;
         this.batchSize = batchSize;
@@ -83,11 +86,13 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * Three steps, in order, every tick: admit new requests, step whatever is due, then conclude any
-     * download whose songs have all finished. Conclusion runs last so a download that finished
-     * during this very pass reports its outcome on the same tick rather than lingering a full
-     * interval in IN_PROGRESS -- and runs unconditionally, so one that was missed (a crash between
-     * the last task's terminal write and here) is picked up by the next pass regardless.
+     * Four steps, in order, every tick: admit new requests, step whatever is due, conclude any
+     * download whose songs have all finished, then file finished songs into the library. Conclusion
+     * runs after stepping so a download that finished during this very pass reports its outcome on
+     * the same tick rather than lingering a full interval in IN_PROGRESS -- and runs unconditionally,
+     * so one that was missed (a crash between the last task's terminal write and here) is picked up
+     * by the next pass regardless. Filing is the same shape: it asks the table which finished songs
+     * still have no library path, so a song whose file was not moved yet is picked up again next pass.
      */
     Mono<Void> pass() {
         Instant now = clock.instant();
@@ -98,6 +103,7 @@ public class DownloadTaskRunner {
                             if (concluded > 0) log.info("Concluded {} download(s)", concluded);
                         })
                         .then())
+                .then(organise(now))
                 .onErrorResume(error -> {
                     log.error("Download task pass failed", error);
                     return Mono.empty();
@@ -223,6 +229,26 @@ public class DownloadTaskRunner {
             case ALBUM -> ytMusicService.getAlbumInfo(id);
             case PLAYLIST -> ytMusicService.getPlaylistInfo(id);
         };
+    }
+
+    /**
+     * Moves each finished song's file from slskd's downloads folder into the library and records
+     * where it went. Off unless both library folders are configured. Every song is isolated: one
+     * that cannot be moved (not there yet, permissions) is logged and left for the next pass.
+     */
+    private Mono<Void> organise(Instant now) {
+        if (!organiser.isEnabled()) {
+            return Mono.empty();
+        }
+        return repository.tasksToOrganise(batchSize, organiser.cutoff(now))
+                .flatMap(job -> organiser.file(job, now)
+                        .flatMap(path -> repository.setLibraryPath(job.taskId(), path.toString()))
+                        .onErrorResume(error -> {
+                            log.warn("Could not file song {} ('{}') into the library; will retry "
+                                    + "next pass", job.taskId(), job.slskdFilename(), error);
+                            return Mono.empty();
+                        }), batchSize)
+                .then();
     }
 
     /** Fails a download that never got a task row. Nothing else can record this failure. */
@@ -381,7 +407,14 @@ public class DownloadTaskRunner {
                 // Only this SONG. The download's own status is settled by concludeDownloads() at the
                 // end of the pass, once every one of its songs is terminal.
                 yield downloadService.finishTask(task.taskId(), terminal.status(),
-                        terminal.failureCode(), clock.instant()).then();
+                                terminal.failureCode(), clock.instant())
+                        // rows > 0 is the first, real finish -- the same guard that stops a duplicate
+                        // finish re-stamping finished_at also stops it re-running the cleanup. A song
+                        // that failed for good will not be retried, so slskd's resume-able partial
+                        // file is just clutter now. Best effort, and never fails the song.
+                        .flatMap(rows -> rows > 0 && terminal.status() == DownloadStatus.FAILED
+                                ? organiser.deletePartials(task)
+                                : Mono.empty());
             }
         };
     }
