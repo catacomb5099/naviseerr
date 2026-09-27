@@ -289,6 +289,47 @@ public class DownloadTaskRepository {
                AND library_path IS NULL
             """;
 
+    /**
+     * Finished downloads whose collection-level work (the playlist file) is still to do: every one of
+     * their succeeded songs has either been filed or given up on ({@code finished_at <= :cutoff} with
+     * no path), and at least one WAS filed -- which is what keeps this off the install's history, where
+     * nothing was ever filed. Idempotent through {@code organised_at IS NULL}.
+     */
+    private static final String DOWNLOADS_TO_FINALISE_SQL = """
+            SELECT d.download_id, d.download_type, c.title AS collection_title
+              FROM downloads d
+              LEFT JOIN media_items c ON c.youtube_id = d.youtube_id
+             WHERE d.status IN ('SUCCEEDED', 'PARTIAL_SUCCESS')
+               AND d.organised_at IS NULL
+               AND EXISTS (SELECT 1 FROM download_tasks t
+                            WHERE t.download_id = d.download_id
+                              AND t.library_path IS NOT NULL)
+               AND NOT EXISTS (SELECT 1 FROM download_tasks t
+                                WHERE t.download_id = d.download_id
+                                  AND t.phase = 'SUCCEEDED'
+                                  AND t.library_path IS NULL
+                                  AND t.finished_at > :cutoff)
+             ORDER BY d.finished_at
+             LIMIT :limit
+            """;
+
+    /** The filed songs of one download in track order, with what a playlist line shows for each. */
+    private static final String PLAYLIST_ENTRIES_SQL = """
+            SELECT t.library_path, s.title, s.artists, s.duration_seconds
+              FROM download_tasks t
+              LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
+             WHERE t.download_id = :id
+               AND t.library_path IS NOT NULL
+             ORDER BY t.position, t.finished_at
+            """;
+
+    private static final String SET_ORGANISED_AT_SQL = """
+            UPDATE downloads
+               SET organised_at = :now
+             WHERE download_id = :id
+               AND organised_at IS NULL
+            """;
+
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
             new TypeReference<>() {};
 
@@ -388,6 +429,39 @@ public class DownloadTaskRepository {
         return client.sql(SET_LIBRARY_PATH_SQL)
                 .bind("id", taskId)
                 .bind("path", libraryPath)
+                .fetch()
+                .rowsUpdated();
+    }
+
+    /** Downloads whose songs are all filed (or given up on) and whose playlist file is still to write. */
+    public Flux<LibraryOrganiser.Collection> downloadsToFinalise(int limit, Instant cutoff) {
+        return client.sql(DOWNLOADS_TO_FINALISE_SQL)
+                .bind("cutoff", cutoff)
+                .bind("limit", limit)
+                .map((row, meta) -> new LibraryOrganiser.Collection(
+                        row.get("download_id", UUID.class),
+                        DownloadType.valueOf(row.get("download_type", String.class)),
+                        row.get("collection_title", String.class)))
+                .all();
+    }
+
+    /** One download's filed songs in track order. */
+    public Flux<LibraryOrganiser.Entry> playlistEntries(UUID downloadId) {
+        return client.sql(PLAYLIST_ENTRIES_SQL)
+                .bind("id", downloadId)
+                .map((row, meta) -> new LibraryOrganiser.Entry(
+                        row.get("library_path", String.class),
+                        row.get("title", String.class),
+                        artists(row.get("artists", String[].class)),
+                        row.get("duration_seconds", Integer.class)))
+                .all();
+    }
+
+    /** Marks a download's collection-level work done. Writes once. */
+    public Mono<Long> setOrganisedAt(UUID downloadId, Instant now) {
+        return client.sql(SET_ORGANISED_AT_SQL)
+                .bind("id", downloadId)
+                .bind("now", now)
                 .fetch()
                 .rowsUpdated();
     }

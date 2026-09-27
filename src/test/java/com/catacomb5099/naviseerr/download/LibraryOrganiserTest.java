@@ -252,6 +252,77 @@ class LibraryOrganiserTest {
         assertTrue(Files.exists(outside));
     }
 
+    // ---- playlist file ---------------------------------------------------------------------------
+
+    private static LibraryOrganiser.Entry entry(Path file, String title, Integer seconds, String... artists) {
+        return new LibraryOrganiser.Entry(file.toString(), title, List.of(artists), seconds);
+    }
+
+    @Test
+    void m3u8_isExtendedM3u_withEntriesRelativeToThePlaylistsFolder_inTheOrderGiven() {
+        Path playlists = root.resolve("Playlists");
+        String body = LibraryOrganiser.m3u8("Alt Nation 1989", List.of(
+                entry(root.resolve("Pixies/Doolittle/05 Pixies - Here Comes Your Man.flac"),
+                        "Here Comes Your Man", 210, "Pixies"),
+                entry(root.resolve("Devo/Whip It/02-devo-whip_it.mp3"), "Whip It", null, "Devo", "Someone"),
+                entry(root.resolve("Unknown Artist/track/track.flac"), null, 90)), playlists);
+
+        assertEquals("""
+                #EXTM3U
+                #PLAYLIST:Alt Nation 1989
+                #EXTINF:210,Pixies - Here Comes Your Man
+                ../Pixies/Doolittle/05 Pixies - Here Comes Your Man.flac
+                #EXTINF:-1,Devo - Whip It
+                ../Devo/Whip It/02-devo-whip_it.mp3
+                #EXTINF:90,track
+                ../Unknown Artist/track/track.flac
+                """, body);
+    }
+
+    @Test
+    void m3u8_keepsHeaderLinesOnOneLine() {
+        String body = LibraryOrganiser.m3u8("Bad\nName", List.of(
+                entry(root.resolve("A/B/c.flac"), "Ti\ntle", 1, "Ar\rtist")), root.resolve("Playlists"));
+
+        assertTrue(body.contains("#PLAYLIST:Bad Name\n"));
+        assertTrue(body.contains("#EXTINF:1,Ar tist - Ti tle\n"));
+    }
+
+    @Test
+    void writePlaylist_writesUtf8WithoutBom_lfOnly_underASanitisedName_andRewritesInPlace() throws IOException {
+        Path track = put(root.resolve("Pixies/Debaser"), "01 - Débaser.flac");
+        List<LibraryOrganiser.Entry> entries = List.of(entry(track, "Débaser", 170, "Pixies"));
+
+        Path written = organiser.writePlaylist("Mix: 1989?", entries).block();
+
+        assertEquals(root.resolve("Playlists/Mix_ 1989_.m3u8"), written);
+        byte[] bytes = Files.readAllBytes(written);
+        assertNotEquals(0xEF, bytes[0] & 0xFF, "no BOM");
+        String text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(text.contains("\r"));
+        assertTrue(text.contains("../Pixies/Debaser/01 - Débaser.flac\n"));
+        assertTrue(text.startsWith("#EXTM3U\n#PLAYLIST:Mix: 1989?\n"), "the display name keeps its punctuation");
+
+        // Second write of the same playlist replaces the file; no ' (2)', no leftover staging file.
+        Path again = organiser.writePlaylist("Mix: 1989?", entries).block();
+        assertEquals(written, again);
+        assertEquals(1, Files.list(root.resolve("Playlists")).count());
+    }
+
+    @Test
+    void writePlaylist_skipsEntriesOutsideTheLibrary_andFallsBackToAName() throws IOException {
+        Path inside = put(root.resolve("A/B"), "c.flac");
+
+        Path written = organiser.writePlaylist(null, List.of(
+                entry(tmp.resolve("elsewhere.flac"), "x", 1, "y"),
+                entry(inside, "c", 1, "A"))).block();
+
+        assertEquals(root.resolve("Playlists/Playlist.m3u8"), written);
+        String text = Files.readString(written);
+        assertFalse(text.contains("elsewhere"));
+        assertTrue(text.contains("../A/B/c.flac"));
+    }
+
     // ---- failed leftovers ------------------------------------------------------------------------
 
     @Test

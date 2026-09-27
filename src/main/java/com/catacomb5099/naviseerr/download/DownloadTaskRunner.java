@@ -233,14 +233,18 @@ public class DownloadTaskRunner {
 
     /**
      * Moves each finished song's file from slskd's downloads folder into the library and records
-     * where it went. Off unless both library folders are configured. Every song is isolated: one
-     * that cannot be moved (not there yet, permissions) is logged and left for the next pass.
+     * where it went; then, for each download whose songs are all filed, writes the collection's own
+     * file (a playlist's .m3u8) and stamps it organised. Songs first, so a playlist whose last track
+     * lands in this pass gets its file on the same tick. Off unless both library folders are
+     * configured. Every song and every download is isolated: one that cannot be handled (not there
+     * yet, permissions) is logged and left for the next pass.
      */
     private Mono<Void> organise(Instant now) {
         if (!organiser.isEnabled()) {
             return Mono.empty();
         }
-        return repository.tasksToOrganise(batchSize, organiser.cutoff(now))
+        Instant cutoff = organiser.cutoff(now);
+        return repository.tasksToOrganise(batchSize, cutoff)
                 .flatMap(job -> organiser.file(job, now)
                         .flatMap(path -> repository.setLibraryPath(job.taskId(), path.toString()))
                         .onErrorResume(error -> {
@@ -248,6 +252,26 @@ public class DownloadTaskRunner {
                                     + "next pass", job.taskId(), job.slskdFilename(), error);
                             return Mono.empty();
                         }), batchSize)
+                .then(repository.downloadsToFinalise(batchSize, cutoff)
+                        .flatMap(collection -> finalise(collection)
+                                // Deferred: the stamp must only be built once the file is written.
+                                .then(Mono.defer(() -> repository.setOrganisedAt(collection.downloadId(), now)))
+                                .onErrorResume(error -> {
+                                    log.warn("Could not finalise download {} ('{}'); will retry next "
+                                            + "pass", collection.downloadId(), collection.title(), error);
+                                    return Mono.empty();
+                                }), batchSize)
+                        .then());
+    }
+
+    /** A playlist gets its .m3u8; a song or an album needs nothing more than its files in place. */
+    private Mono<Void> finalise(LibraryOrganiser.Collection collection) {
+        if (collection.type() != DownloadType.PLAYLIST) {
+            return Mono.empty();
+        }
+        return repository.playlistEntries(collection.downloadId())
+                .collectList()
+                .flatMap(entries -> organiser.writePlaylist(collection.title(), entries))
                 .then();
     }
 
