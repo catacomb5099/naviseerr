@@ -14,4 +14,6 @@ public class SearchFile {
     Boolean isLocked;
     String extension;
     Optional<Integer> bitRate;
+    // Duration in seconds, as reported by slskd. Missing for some peers.
+    Optional<Integer> length;
 }
