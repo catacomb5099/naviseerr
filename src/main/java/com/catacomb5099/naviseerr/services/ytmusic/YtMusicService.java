@@ -33,6 +33,7 @@ public class YtMusicService {
     private static final String LIMIT_PARAM = "limit";
     private static final String MIXED_SEARCH_LABEL = "mixed";
     private static final String SONG_PATH_PREFIX = "/v1/songs/";
+    private static final String SONG_DETAILS_PATH_SUFFIX = "/details";
     private static final String ALBUM_PATH_PREFIX = "/v1/albums/";
     private static final String PLAYLIST_PATH_PREFIX = "/v1/playlists/";
     private static final String ARTIST_PATH_PREFIX = "/v1/artists/";
@@ -104,6 +105,17 @@ public class YtMusicService {
                         song.getTitle(),
                         song.getThumbnailUrl() == null ? fallbackThumbnail(id) : song.getThumbnailUrl(),
                         song.getLengthSeconds()));
+    }
+
+    /**
+     * The song page: everything {@link #getSongInfo} knows plus artists with ids, album, year, view
+     * count, the explicit flag and the credits panel. Returned as the adapter shape; the only consumer
+     * is {@code SongInfoView.from}, and a domain record between the two would be a third copy of the
+     * same ten fields.
+     */
+    public Mono<YtMusicDetailResponse.SongDetails> getSongDetails(String id) {
+        return execute(uriBuilder -> uriBuilder.path(SONG_PATH_PREFIX + id + SONG_DETAILS_PATH_SUFFIX).build(),
+                YtMusicDetailResponse.SongDetails.class, "song-details", id);
     }
 
     /**

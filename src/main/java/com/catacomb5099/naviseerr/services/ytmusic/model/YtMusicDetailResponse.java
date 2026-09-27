@@ -9,9 +9,10 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * Lombok-friendly models for the ytmusic-adapter's four "what is this id?" endpoints:
- * {@code GET /v1/songs/{videoId}}, {@code GET /v1/albums/{browseId}},
- * {@code GET /v1/playlists/{playlistId}} and {@code GET /v1/artists/{channelId}}.
+ * Lombok-friendly models for the ytmusic-adapter's five "what is this id?" endpoints:
+ * {@code GET /v1/songs/{videoId}}, {@code GET /v1/songs/{videoId}/details},
+ * {@code GET /v1/albums/{browseId}}, {@code GET /v1/playlists/{playlistId}} and
+ * {@code GET /v1/artists/{channelId}}.
  *
  * <p>Same conventions as {@link YtMusicSearchResponse}: no Pydantic aliases, so every field name is
  * the literal JSON key, and optional fields arrive as explicit nulls.
@@ -41,6 +42,40 @@ public final class YtMusicDetailResponse {
         /** The adapter's own name for a song's duration; collections call the same thing {@code durationSeconds}. */
         private Integer lengthSeconds;
         private String thumbnailUrl;
+    }
+
+    /**
+     * {@code GET /v1/songs/{videoId}/details} -- the song page. The adapter stitches this from up to
+     * four YouTube Music calls and degrades honestly: an official-video id has no album, year,
+     * explicit flag or credits anywhere upstream, so those arrive null / empty rather than as an error.
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class SongDetails {
+        private String videoId;
+        private String title;
+        private List<YtMusicSearchResponse.ArtistRef> artists;
+        private YtMusicSearchResponse.AlbumRef album;
+        private Integer durationSeconds;
+        private Integer year;
+        private Long viewCount;
+        private Boolean explicit;
+        private String thumbnailUrl;
+        private List<Credit> credits;
+    }
+
+    /** One block of YouTube Music's "Song credits" panel: {@code role} is its localized heading. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Credit {
+        private String role;
+        private List<String> names;
     }
 
     /** {@code GET /v1/albums/{browseId}} and {@code GET /v1/playlists/{playlistId}}. */
