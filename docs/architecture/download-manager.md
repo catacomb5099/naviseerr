@@ -23,9 +23,12 @@ flowchart TD
       admit --> claim["CLAIM: due, unleased, non-terminal task rows, FOR UPDATE SKIP LOCKED LIMIT batch-size, stamp lease. DOWNLOAD_INIT excluded when no transfer slots free; SEARCH_INIT claimed only up to the free search slots."]
       claim --> fetch["Fetch GET /searches and/or GET /transfers/downloads ONCE, only if a claimed row needs one"]
       fetch --> step["STEP each claimed row concurrently (flatMap): DownloadStepExecutor -> DownloadStateMachine -> one decision"]
-      step --> apply["APPLY: Advance/Continue -> repository.save(next); Terminal -> DownloadService.finishTask (one song); then repository.concludeDownloads() once per pass"]
+      step --> apply["APPLY: Advance/Continue -> repository.save(next); Terminal -> DownloadService.finishTask (one song, and on a first FAILED: LibraryOrganiser.deletePartials); then repository.concludeDownloads() once per pass"]
+      apply --> organise["ORGANISE (optional, V8): SUCCEEDED tasks with no library_path finished within 10 min -> LibraryOrganiser.file moves slskd's copy into library.root, repository.setLibraryPath"]
     end
 ```
+
+The organise step (27-09-2026) is off unless `library.slskd-downloads-dir` and `library.root` are both set; with them unset the pass is exactly the four steps above it. It is the same level-triggered shape: the table is asked which finished songs have not been filed, so a crash mid-move costs one pass. File I/O runs on `Schedulers.boundedElastic()`, never on the event loop. Folder scheme, safety rules and the give-up window are in [the ADR](../decisions/library-organiser-27-09-2026.md).
 
 Passes are serialised with `concatMap`, so a slow pass delays the next one — accepted for simplicity, since leases already make overlapping passes safe and switching later needs no other change. **Stepping the rows claimed within one pass is a separate axis and uses `flatMap(batch-size)`, not `concatMap`.** An earlier draft used `concatMap` at both levels, which meant a batch of `batch-size` claimed rows was stepped strictly one at a time: with `batch-size: 10` and slskd's 10s HTTP timeout, a single pass could take up to 100 seconds — reproducing, inside one pass, the exact head-of-line blocking this whole design exists to remove. `flatMap` needs no thread pool for this; WebFlux already runs an event loop per core.
 
