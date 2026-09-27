@@ -124,7 +124,7 @@ public final class YtMusicDetailResponse {
         private String thumbnailUrl;
     }
 
-    /** One entry of an artist's {@code related[]}. No thumbnail — the adapter has none for these. */
+    /** One entry of an artist's {@code related[]}. No thumbnail yet: ytmusicapi returns one, the adapter drops it. */
     @Data
     @NoArgsConstructor
     @AllArgsConstructor

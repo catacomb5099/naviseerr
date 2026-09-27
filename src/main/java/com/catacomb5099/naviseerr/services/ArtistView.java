@@ -23,13 +23,14 @@ import java.util.Objects;
  * @param subscribers    YouTube's own wording ("498K"), null when the adapter has none.
  * @param topSongs       {@code Track.albumId} is always {@code ""}: the adapter names a song's album
  *                       but gives no browseId for it. {@code iconURL} is YouTube's predictable
- *                       per-video thumbnail, since these tracks carry none of their own.
+ *                       per-video thumbnail, since the adapter's artist answer carries no artwork for them.
  * @param albums         {@code artists} is {@code [this artist's name]}: the shelf lists only the
  *                       artist's own releases and the adapter gives no per-album artists.
  * @param playlists      NOT "playlists featuring this artist" — YouTube Music exposes no such list.
  *                       A playlist search for the artist's name, which is the closest thing there is.
- * @param similarArtists {@code iconUrl} is {@code ""}: related artists carry no thumbnail, and one
- *                       adapter call per related artist to fetch one would turn one request into ten.
+ * @param similarArtists {@code iconUrl} is {@code ""} for now: ytmusicapi returns each related artist's
+ *                       thumbnail in the same answer, but the adapter's RelatedArtist model drops it.
+ *                       Follow-up: expose it in the adapter, then fill it here — no extra calls.
  */
 public record ArtistView(String id, String name, String iconURL, String description, String subscribers,
                          List<Track> topSongs, List<Album> albums, List<Album> singles,

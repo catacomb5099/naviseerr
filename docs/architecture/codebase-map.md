@@ -24,7 +24,8 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - `services/`
   - [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) - `@RestController` for the search endpoints, backed by YouTube Music.
   - [CollectionController.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java) / [CollectionView.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionView.java) - `@RestController` for `GET /collections/{id}` and its response DTO. The DTO lives here rather than in `schema/response/` on the `download/*View` precedent: it is shaped by the download pipeline (same track filter and `position` as the task rows), not by the search contract.
-  - `ytmusic/` - `YtMusicService`, `YtMusicConfig`, `YtMusicSearchType`, `model/YtMusicSearchResponse`, and the typed errors `YtMusicException` / `YtMusicBadRequestException` / `YtMusicUnavailableException`. The active search provider; calls the `ytmusic-adapter` sidecar. See [ytmusic-integration.md](ytmusic-integration.md).
+  - [ArtistController.java](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistController.java) / [ArtistView.java](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistView.java) - `@RestController` for `GET /artists/{channelId}` and its response DTO, placed here on the same reasoning as `CollectionView`.
+  - `ytmusic/` - `YtMusicService`, `YtMusicConfig`, `YtMusicSearchType`, `model/YtMusicSearchResponse`, `model/YtMusicDetailResponse`, and the typed errors `YtMusicException` / `YtMusicBadRequestException` / `YtMusicUnavailableException`. The active search provider; calls the `ytmusic-adapter` sidecar. See [ytmusic-integration.md](ytmusic-integration.md).
   - `lastfm/` - `LastFMService`, `LastFMConfig`, `model/LastFmSearchResponse`. **Unused since 10-08-2026**, retained on disk. See [lastfm-integration.md](lastfm-integration.md).
   - `slskd/` - `SlskdService`, `SlskdConfig`, `SlskdSearchResultProcessor`. See [slskd-integration.md](slskd-integration.md).
 - `download/` - the durable download state machine: `Download`, `DownloadStatus`, `DownloadController`, `DownloadService`, `DownloadCandidate`, `DownloadPhase`, `DownloadTask`, `DownloadDecision`, `DownloadStateMachine`, `DownloadTaskRepository`, `DownloadStepExecutor`, `DownloadTaskRunner`. See [download-manager.md](download-manager.md) and [persistence.md](persistence.md).
@@ -42,10 +43,12 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
   - `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - per-type search
 - [CollectionController.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java) (`@RestController`):
   - `GET /collections/{id}?type=ALBUM|PLAYLIST` - one album or playlist with its track list, resolved live from `ytmusic-adapter` (see [ytmusic-integration.md](ytmusic-integration.md)).
+- [ArtistController.java](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistController.java) (`@RestController`):
+  - `GET /artists/{channelId}` - one artist page (header, top songs, albums, singles, playlists, similar artists), resolved live from `ytmusic-adapter` (see [ytmusic-integration.md](ytmusic-integration.md)).
 - [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) (`@RestController`):
   - `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST` - insert a `PENDING` download row, return `202 Accepted`; processed asynchronously (see [download-manager.md](download-manager.md)).
 
-Spring beans inventory: `@RestController` x3 (`SearchService`, `CollectionController`, `DownloadController`); `@Service` (`LastFMService`, `SlskdService`, `TrackMatchingService`, `DownloadService`); `@Component` (`LastFMAPIMethodHelper`, `SlskdSearchResultProcessor`, `DownloadTaskRunner`, `DownloadStepExecutor`, `DownloadStateMachine`); `@Repository` (`DownloadTaskRepository`); `@Configuration` (`WebConfig`, `TimeConfig`, `LastFMConfig`, `SlskdConfig`).
+Spring beans inventory: `@RestController` x4 (`SearchService`, `CollectionController`, `ArtistController`, `DownloadController`); `@Service` (`LastFMService`, `SlskdService`, `TrackMatchingService`, `DownloadService`); `@Component` (`LastFMAPIMethodHelper`, `SlskdSearchResultProcessor`, `DownloadTaskRunner`, `DownloadStepExecutor`, `DownloadStateMachine`); `@Repository` (`DownloadTaskRepository`); `@Configuration` (`WebConfig`, `TimeConfig`, `LastFMConfig`, `SlskdConfig`).
 
 ## Branch topology
 

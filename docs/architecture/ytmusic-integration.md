@@ -1,13 +1,14 @@
 # YouTube Music Integration
 
-> Status: current as of 25-09-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
+> Status: current as of 27-09-2026. Agent-oriented guide - the cited source files are the source of truth; verify before relying.
 
 YouTube Music, via a sidecar adapter service, is the metadata source for search (tracks, albums,
-artists, playlists) and for browsing an album or playlist by id. It replaces LastFM as the active search backend as of this doc; see
+artists, playlists) and for browsing an album, playlist or artist by id. It replaces LastFM as the active search backend as of this doc; see
 [lastfm-integration.md](lastfm-integration.md) for the retained-but-unused Last.fm path and the ADR
 below for why. It is read-only and reactive (`Mono`), exposed through
-[SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java) and
-[CollectionController](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java).
+[SearchService](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java),
+[CollectionController](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java) and
+[ArtistController](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistController.java).
 
 ## The adapter is a separate service, not a library
 
@@ -16,10 +17,10 @@ service in the sibling repo `~/IdeaProjects/ytmusic-adapter`, wrapping the Pytho
 `ytmusicapi` library (pinned `1.12.2`). It is not vendored into this repo. It runs anonymously — no
 YouTube credentials, no OAuth — and exposes a stable, versioned (`/v1/...`) JSON contract:
 `GET /v1/search`, `/v1/search/{songs|albums|artists|playlists}`, plus detail lookups by id. As of
-14-09-2026 naviseerr consumes three of those detail routes — `GET /v1/songs/{videoId}`,
+27-09-2026 naviseerr consumes four of those detail routes: `GET /v1/songs/{videoId}`,
 `GET /v1/albums/{browseId}` and `GET /v1/playlists/{playlistId}` — which is how a download request
-carrying only a YouTube id learns what to search Soulseek for. The artist detail routes are still
-unconsumed.
+carrying only a YouTube id learns what to search Soulseek for — and `GET /v1/artists/{channelId}`,
+behind the read-only artist page.
 
 Wired into [compose.yaml](../../compose.yaml) as `ytmusic-adapter`, built from
 `build: ../ytmusic-adapter` — a path outside this repo. `./gradlew bootRun` (which auto-starts
@@ -164,14 +165,16 @@ provider load and adapter semaphore occupancy — it is not a user-visible laten
 ## Metadata lookups (the download pipeline's use of this provider)
 
 Search is not the only caller any more. `DownloadTaskRunner.gatherMetadata` resolves a download's
-YouTube id at admission time, via three methods on
-[YtMusicService](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java):
+YouTube id at admission time, via the first three of these methods on
+[YtMusicService](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java)
+(the fourth belongs to the artist page only; admission never calls it):
 
 | Method | Route | Returns |
 |---|---|---|
 | `getSongInfo(videoId)` | `GET /v1/songs/{videoId}` | `YoutubeSongInfo` |
 | `getAlbumInfo(browseId)` | `GET /v1/albums/{browseId}` | `YoutubeCollectionInfo` |
 | `getPlaylistInfo(playlistId)` | `GET /v1/playlists/{playlistId}` | `YoutubeCollectionInfo` |
+| `getArtistInfo(channelId)` | `GET /v1/artists/{channelId}` | `YtMusicDetailResponse.Artist` |
 
 Three things about the mapping are easy to get wrong, because the adapter's three responses are not
 the same shape:
@@ -187,7 +190,7 @@ the same shape:
   for it would spend a whole search budget to fail. Only an explicit `false` counts — album
   responses omit the field entirely, and treating null as unavailable would drop every album track.
 
-All three go through the same `execute` pipeline as search — one timeout, typed error translation,
+All four go through the same `execute` pipeline as search — one timeout, typed error translation,
 retry on availability failures only — rather than reimplementing it. That pipeline was extracted from
 `executeSearch` for exactly this reason.
 
@@ -219,6 +222,17 @@ And by [CollectionController.java](../../src/main/java/com/catacomb5099/naviseer
   `SearchService`'s 400, because a lookup by id that finds nothing is "not found", not "bad query";
   `YtMusicUnavailableException` is 502 as everywhere else.
 
+And by [ArtistController.java](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistController.java):
+
+- `GET /artists/{channelId}` - one artist page as an
+  [ArtistView](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistView.java): header
+  (name, picture, description, subscribers) plus top songs, albums, singles, playlists and similar
+  artists, each capped at 10 and expressed in the search DTOs so the client reuses its cards. Two
+  adapter calls in sequence: `getArtistInfo`, then a playlist search for the artist's *name* (there is
+  no "playlists featuring this artist" route). The search is best-effort - if it fails the page still
+  loads with an empty `playlists` shelf. Errors map exactly as `/collections/{id}`: the adapter's 404
+  (and the 400/422/500 folded into the same exception) is 404, `YtMusicUnavailableException` is 502.
+
 `Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`), falling back to the
 `VL`-prefixed `browseId` only when the bare id is absent. The adapter's detail route accepts either,
 but the backend keys `media_items` by whatever id the client posts, so the client must pass the id
@@ -241,7 +255,10 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   advertised `itemCount`, or `0` when YouTube gives none; `CollectionView.trackCount` is the count
   of *available* tracks after the `isAvailable: false` filter. The two can legitimately differ.
 - No caching — every search hits the adapter (and, behind it, YouTube) fresh.
-- The adapter's *artist* detail endpoints are unconsumed; there is no `services/ytmusic` code path
-  that calls them. (Album and playlist detail are consumed by admission and `/collections/{id}`.)
+- Similar artists on the artist page have no picture (`Artist.iconUrl` is `""`). Not a YouTube
+  limit: `ytmusicapi` returns a thumbnail per related artist in the same answer, but the adapter's
+  `RelatedArtist` model drops it. Expose it in the adapter, then map it in `ArtistView`; no extra call.
+- Top songs on the artist page use YouTube's predictable per-video thumbnail because the adapter's
+  `TrackDto` carries no artwork; same picture the collection view uses for playlist tracks.
 - General search returns fewer results per category than the typed routes, and blanks
   `Track.albumId` — see "Mixed (general) search" above.
