@@ -138,7 +138,7 @@ class ActiveDownloadRepositoryIT {
         UUID id = insertDownload("PENDING");
         admit(id, "song");
         DownloadTask claimed = taskRepository
-                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).blockFirst();
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10).blockFirst();
         taskRepository.save(claimed.withPhase(DownloadPhase.DOWNLOAD_POLL, NOW)
                 .withProgress(new BigDecimal("43.00")), "a").block();
 
@@ -502,7 +502,7 @@ class ActiveDownloadRepositoryIT {
         UUID id = insertDownload("PENDING");
         admit(id, "song");
         DownloadTask claimed = taskRepository
-                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true).blockFirst();
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10).blockFirst();
         taskRepository.save(claimed.toBuilder()
                 .phase(DownloadPhase.DOWNLOAD_POLL)
                 .candidates(com.catacomb5099.naviseerr.support.DownloadTaskFixtures

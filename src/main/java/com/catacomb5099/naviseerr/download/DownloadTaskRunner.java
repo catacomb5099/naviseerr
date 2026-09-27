@@ -42,6 +42,7 @@ public class DownloadTaskRunner {
     private final Duration leaseDuration;
     private final int maxConcurrentDownloads;
     private final int maxConcurrentTransfers;
+    private final int maxConcurrentSearches;
     /** Identifies this process in lease_owner. Nothing depends on it surviving a restart. */
     private final String instanceId = UUID.randomUUID().toString();
     private Disposable subscription;
@@ -57,7 +58,8 @@ public class DownloadTaskRunner {
             @Value("${download-task.batch-size:10}") int batchSize,
             @Value("${download-task.lease-duration-ms:60000}") Duration leaseDuration,
             @Value("${download-task.max-concurrent-downloads:20}") int maxConcurrentDownloads,
-            @Value("${download-task.max-concurrent-transfers:20}") int maxConcurrentTransfers) {
+            @Value("${download-task.max-concurrent-transfers:20}") int maxConcurrentTransfers,
+            @Value("${download-task.max-concurrent-searches:2}") int maxConcurrentSearches) {
         this.repository = repository;
         this.executor = executor;
         this.downloadService = downloadService;
@@ -69,6 +71,7 @@ public class DownloadTaskRunner {
         this.leaseDuration = leaseDuration;
         this.maxConcurrentDownloads = maxConcurrentDownloads;
         this.maxConcurrentTransfers = maxConcurrentTransfers;
+        this.maxConcurrentSearches = maxConcurrentSearches;
     }
 
     @PostConstruct
@@ -231,15 +234,19 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * Gates only the step that STARTS a transfer. Searches and polls of already-running transfers are
-     * never gated — polling is one cheap GET, and starving it stalls a download slskd is finishing.
+     * Gates only the two steps that START something in slskd: a transfer (DOWNLOAD_INIT) and a search
+     * (SEARCH_INIT). Polls of already-running searches and transfers are never gated — polling is one
+     * cheap GET, and starving it stalls work slskd is happily finishing. The search gate is a count,
+     * not a yes/no: slskd runs two searches at a time and queues the rest inside itself, so anything
+     * we start beyond its slots only waits in that queue while our search budget runs down.
      */
     private Mono<Void> stepDueTasks(Instant now) {
-        return repository.countActiveTransfers()
+        return Mono.zip(repository.countActiveTransfers(), repository.countActiveSearches())
                 .flatMapMany(active -> {
-                    boolean transferSlotsFree = active < maxConcurrentTransfers;
+                    boolean transferSlotsFree = active.getT1() < maxConcurrentTransfers;
+                    int searchSlots = (int) Math.max(0, maxConcurrentSearches - active.getT2());
                     return repository.claimDueTasks(batchSize, instanceId, now, leaseDuration,
-                            transferSlotsFree);
+                            transferSlotsFree, searchSlots);
                 })
                 .collectList()
                 .flatMap(this::stepAll);
@@ -327,9 +334,17 @@ public class DownloadTaskRunner {
                         })
                 : Mono.just(Map.of());
 
+        // SEARCH_INIT rows are stepped one after another: slskd answers an overlapping POST /searches
+        // with 429 ("Only one concurrent operation is permitted"). Everything else stays concurrent.
         return Mono.zip(searches, transfers)
-                .flatMap(fetched -> Flux.fromIterable(claimed)
-                        .flatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2()), batchSize)
+                .flatMap(fetched -> Flux.merge(
+                        Flux.fromIterable(claimed)
+                                .filter(task -> task.phase() == DownloadPhase.SEARCH_INIT)
+                                .concatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2())),
+                        Flux.fromIterable(claimed)
+                                .filter(task -> task.phase() != DownloadPhase.SEARCH_INIT)
+                                .flatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2()),
+                                        batchSize))
                         .then());
     }
 
