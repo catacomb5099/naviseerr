@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -69,7 +70,7 @@ class DownloadTaskRunnerTest {
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.empty());
         when(repository.save(any(), any())).thenReturn(Mono.just(1L));
-        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(downloadService.finishTask(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskdService.getAllSearches()).thenReturn(Flux.empty());
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
@@ -125,7 +126,7 @@ class DownloadTaskRunnerTest {
         verify(organiser).deletePartials(task);
 
         // A duplicate finish (expired lease, re-stepped row) updates no row and cleans nothing again.
-        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(0L));
+        when(downloadService.finishTask(any(), any(), any(), any(), any())).thenReturn(Mono.just(0L));
         runner.pass().block();
         verify(organiser, times(1)).deletePartials(task);
     }
@@ -361,7 +362,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository).save(eq(next), any());
-        verify(downloadService, never()).finishTask(any(), any(), any(), any());
+        verify(downloadService, never()).finishTask(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -388,7 +389,7 @@ class DownloadTaskRunnerTest {
 
         // The TASK's id, not the download's: one song of a collection finishing is not the
         // collection finishing.
-        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any());
+        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any(), anyString());
         verify(repository, never()).save(any(), any());
     }
 

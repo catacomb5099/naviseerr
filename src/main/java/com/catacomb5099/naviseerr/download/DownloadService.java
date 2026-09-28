@@ -36,6 +36,10 @@ public class DownloadService {
                    lease_expires_at = NULL
              WHERE task_id = :id
                AND phase NOT IN ('SUCCEEDED', 'FAILED')
+               -- Same guard as DownloadTaskRepository.SAVE_SQL. A cancel clears the lease and a retry
+               -- reopens the row with none, so a step that was mid-flight when its song was cancelled
+               -- must not land its stale outcome on the fresh attempt.
+               AND lease_owner = :owner
             """;
 
     private final R2dbcEntityTemplate entityTemplate;
@@ -62,17 +66,19 @@ public class DownloadService {
     }
 
     /**
-     * Marks one song's task row terminal. Idempotent: a second call for an already-terminal task
-     * updates nothing and returns 0. The download's own status follows from
+     * Marks one song's task row terminal. Idempotent, and owner-checked: a call for an
+     * already-terminal task, or from a caller that does not hold the row's lease, updates nothing
+     * and returns 0. The download's own status follows from
      * {@link DownloadTaskRepository#concludeDownloads()} at the end of the pass.
      */
     public Mono<Long> finishTask(UUID taskId, DownloadStatus status,
-                                 DownloadFailureCode failureCode, Instant now) {
+                                 DownloadFailureCode failureCode, Instant now, String owner) {
         DatabaseClient.GenericExecuteSpec spec = entityTemplate.getDatabaseClient()
                 .sql(FINISH_TASK_SQL)
                 .bind("status", status.name())
                 .bind("id", taskId)
-                .bind("now", now);
+                .bind("now", now)
+                .bind("owner", owner);
         // Stored by NAME, not prose: the client words it, so copy changes never touch this table.
         spec = failureCode == null
                 ? spec.bindNull("reason", String.class)

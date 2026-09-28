@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.catacomb5099.naviseerr.support.TaskFinishing.finish;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
@@ -305,7 +306,7 @@ class DownloadTaskRepositoryIT {
     void finishTask_marksTheTaskTerminalButLeavesTheDownloadAlone() {
         UUID id = admitOneSong("PENDING");
 
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertEquals("SUCCEEDED", phaseOf(id));
         // The download's status is settled by concludeDownloads(), not here -- see CONCLUDE_SQL.
@@ -317,8 +318,8 @@ class DownloadTaskRepositoryIT {
     void finishTask_recordsTheFailureReasonForLaterDebugging() {
         UUID id = admitOneSong("PENDING");
 
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.FAILED,
-                DownloadFailureCode.TIMED_OUT, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.FAILED,
+                DownloadFailureCode.TIMED_OUT, NOW);
 
         assertEquals("FAILED", phaseOf(id));
         // The NAME, not prose: the client owns the wording, so copy edits never touch this column.
@@ -329,15 +330,13 @@ class DownloadTaskRepositoryIT {
     void finishTask_onAnAlreadyTerminalTask_changesNothingAtAll() {
         UUID id = admitOneSong("PENDING");
         UUID taskId = taskIdOf(id);
-        downloadService.finishTask(taskId, DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskId, DownloadStatus.SUCCEEDED, null, NOW);
         Instant firstFinishedAt = finishedAtOf(id);
 
         // A duplicated step reaching Terminal a second time — legal, because a lease can expire
         // while the work is still alive.
-        Long rows = downloadService
-                .finishTask(taskId, DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED,
-                        NOW.plusSeconds(3600))
-                .block();
+        Long rows = finish(template, downloadService, taskId, DownloadStatus.FAILED,
+                DownloadFailureCode.SOURCES_EXHAUSTED, NOW.plusSeconds(3600));
 
         assertEquals(0L, rows, "a duplicate finish must be a no-op, not a second write");
         assertEquals("SUCCEEDED", phaseOf(id), "must not overwrite a terminal phase");
@@ -345,6 +344,28 @@ class DownloadTaskRepositoryIT {
         // The one that actually bites: re-stamping finished_at would slide this row back inside the
         // feed's retention window and resurrect a card the user dismissed hours ago.
         assertEquals(firstFinishedAt, finishedAtOf(id), "finished_at must not move");
+    }
+
+    @Test
+    void finishTask_byAnotherOwner_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        DownloadTask claimed = repository.claimDueTasks(10, "owner-a", NOW, Duration.ofMinutes(1), true, 2)
+                .blockFirst();
+
+        Long rows = downloadService.finishTask(claimed.taskId(), DownloadStatus.SUCCEEDED, null, NOW, "owner-b").block();
+
+        assertEquals(0L, rows, "a finish from a process that does not hold the lease must not land");
+        assertEquals("SEARCH_INIT", phaseOf(id));
+    }
+
+    @Test
+    void finishTask_onARowWithNoLease_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        UUID taskId = taskIdsOf(id).getFirst();
+
+        Long rows = downloadService.finishTask(taskId, DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT, NOW, "anyone").block();
+
+        assertEquals(0L, rows, "no lease means nobody is entitled to finish the row");
     }
 
     // ---- library organiser ---------------------------------------------------------------------
@@ -395,8 +416,8 @@ class DownloadTaskRepositoryIT {
         UUID filed = succeededSong(dl, "filed", "a\\filed.flac", NOW);
         repository.setLibraryPath(filed, "/music/x/filed.flac").block();
         UUID failedId = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(failedId), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        finish(template, downloadService, taskIdOf(failedId), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
         UUID wanted = succeededSong(dl, "new", "a\\new.flac", NOW);
 
         List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600))
@@ -497,7 +518,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void conclude_succeedsADownloadWhoseOnlySongSucceeded() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertEquals(1L, repository.concludeDownloads().block());
         assertEquals("SUCCEEDED", statusOf(id));
@@ -507,8 +528,8 @@ class DownloadTaskRepositoryIT {
     @Test
     void conclude_failsADownloadWhoseOnlySongFailed() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
 
         assertEquals(1L, repository.concludeDownloads().block());
         assertEquals("FAILED", statusOf(id));
@@ -519,9 +540,9 @@ class DownloadTaskRepositoryIT {
         UUID id = insertDownload("PENDING", "ALBUM");
         admit(id, "found", "missing");
         List<UUID> tasks = taskIdsOf(id);
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
 
         assertEquals(1L, repository.concludeDownloads().block());
         assertEquals("PARTIAL_SUCCESS", statusOf(id));
@@ -531,8 +552,7 @@ class DownloadTaskRepositoryIT {
     void conclude_leavesADownloadAloneWhileAnyOfItsSongsIsStillRunning() {
         UUID id = insertDownload("PENDING", "ALBUM");
         admit(id, "done", "still going");
-        downloadService.finishTask(taskIdsOf(id).getFirst(), DownloadStatus.SUCCEEDED, null, NOW)
-                .block();
+        finish(template, downloadService, taskIdsOf(id).getFirst(), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertEquals(0L, repository.concludeDownloads().block());
         assertEquals("IN_PROGRESS", statusOf(id),
@@ -542,7 +562,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void conclude_isIdempotent_soRunningItEveryPassCostsNothing() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
         repository.concludeDownloads().block();
 
         // It runs unconditionally on every pass, so "already concluded" must match no rows at all
@@ -561,10 +581,10 @@ class DownloadTaskRepositoryIT {
         admit(album, "a", "b");
         UUID song = admitOneSong("PENDING");
         for (UUID task : taskIdsOf(album)) {
-            downloadService.finishTask(task, DownloadStatus.SUCCEEDED, null, NOW).block();
+            finish(template, downloadService, task, DownloadStatus.SUCCEEDED, null, NOW);
         }
-        downloadService.finishTask(taskIdOf(song), DownloadStatus.FAILED,
-                DownloadFailureCode.TIMED_OUT, NOW).block();
+        finish(template, downloadService, taskIdOf(song), DownloadStatus.FAILED,
+                DownloadFailureCode.TIMED_OUT, NOW);
 
         assertEquals(2L, repository.concludeDownloads().block());
         assertEquals("SUCCEEDED", statusOf(album));
@@ -614,7 +634,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void claimDueTasks_neverReturnsTerminalTasks() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertTrue(repository
                 .claimDueTasks(10, "a", NOW.plusSeconds(86_400), Duration.ofSeconds(60), true, 10)

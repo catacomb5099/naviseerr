@@ -470,7 +470,7 @@ public class DownloadTaskRunner {
                 // Only this SONG. The download's own status is settled by concludeDownloads() at the
                 // end of the pass, once every one of its songs is terminal.
                 yield downloadService.finishTask(task.taskId(), terminal.status(),
-                                terminal.failureCode(), clock.instant())
+                                terminal.failureCode(), clock.instant(), instanceId)
                         // rows > 0 is the first, real finish -- the same guard that stops a duplicate
                         // finish re-stamping finished_at also stops it re-running the cleanup. A song
                         // that failed for good will not be retried, so slskd's resume-able partial
