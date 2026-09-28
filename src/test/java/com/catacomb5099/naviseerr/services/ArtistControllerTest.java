@@ -85,12 +85,14 @@ class ArtistControllerTest {
                 .jsonPath("$.playlists.length()").isEqualTo(10)
                 .jsonPath("$.playlists[0].id").isEqualTo("PL0")
                 .jsonPath("$.playlists[0].trackCount").isEqualTo(20)
-                // similarArtists -> Artist: lowercase iconUrl, blank because the adapter has none
+                // similarArtists -> Artist: lowercase iconUrl carries the adapter's thumbnail, "" when null
                 .jsonPath("$.similarArtists.length()").isEqualTo(2)
                 .jsonPath("$.similarArtists[0].id").isEqualTo("UCauJZDRVzqj1QdLAQkUuq5w")
                 .jsonPath("$.similarArtists[0].name").isEqualTo("The Breeders")
-                .jsonPath("$.similarArtists[0].iconUrl").isEqualTo("")
-                .jsonPath("$.similarArtists[0].iconURL").doesNotExist();
+                .jsonPath("$.similarArtists[0].iconUrl").value(url -> ((String) url).startsWith("https://lh3.googleusercontent.com/"))
+                .jsonPath("$.similarArtists[0].iconURL").doesNotExist()
+                .jsonPath("$.similarArtists[1].name").isEqualTo("Frank Black")
+                .jsonPath("$.similarArtists[1].iconUrl").isEqualTo("");
 
         verify(ytMusicService).getResults("Pixies", YtMusicSearchType.PLAYLISTS);
     }

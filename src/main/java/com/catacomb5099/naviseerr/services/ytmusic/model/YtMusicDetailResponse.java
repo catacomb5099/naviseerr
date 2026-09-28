@@ -166,7 +166,10 @@ public final class YtMusicDetailResponse {
         private String thumbnailUrl;
     }
 
-    /** One entry of an artist's {@code related[]}. No thumbnail yet: ytmusicapi returns one, the adapter drops it. */
+    /**
+     * One entry of an artist's {@code related[]}. {@code thumbnailUrl} is null from an adapter older
+     * than the one that started passing it through (or when YouTube has none), never an error.
+     */
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
@@ -175,5 +178,6 @@ public final class YtMusicDetailResponse {
     public static class RelatedArtist {
         private String browseId;
         private String title;
+        private String thumbnailUrl;
     }
 }

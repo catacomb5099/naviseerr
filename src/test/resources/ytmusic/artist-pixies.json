@@ -89,12 +89,14 @@
     {
       "browseId": "UCauJZDRVzqj1QdLAQkUuq5w",
       "title": "The Breeders",
-      "subscribers": "462K"
+      "subscribers": "462K",
+      "thumbnailUrl": "https://lh3.googleusercontent.com/3rBv8kN2ZqYlF0wXcJ7pQm4tHs9uVdRaEoLgKiTnMbWyPcSxUfZjAhGqDe6vOl1rN5kIwB8tCyXm=w540-h225-p-l90-rj"
     },
     {
       "browseId": "UCOtys5AvNde1B7Mq7rdPsyw",
       "title": "Frank Black",
-      "subscribers": "8.38K"
+      "subscribers": "8.38K",
+      "thumbnailUrl": null
     }
   ]
 }

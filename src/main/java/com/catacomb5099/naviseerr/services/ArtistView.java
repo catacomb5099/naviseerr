@@ -28,9 +28,8 @@ import java.util.Objects;
  *                       artist's own releases and the adapter gives no per-album artists.
  * @param playlists      NOT "playlists featuring this artist" — YouTube Music exposes no such list.
  *                       A playlist search for the artist's name, which is the closest thing there is.
- * @param similarArtists {@code iconUrl} is {@code ""} for now: ytmusicapi returns each related artist's
- *                       thumbnail in the same answer, but the adapter's RelatedArtist model drops it.
- *                       Follow-up: expose it in the adapter, then fill it here — no extra calls.
+ * @param similarArtists {@code iconUrl} is the related artist's thumbnail from the same adapter answer
+ *                       (no extra call); {@code ""} when the adapter sends none.
  */
 public record ArtistView(String id, String name, String iconURL, String description, String subscribers,
                          List<Track> topSongs, List<Album> albums, List<Album> singles,
@@ -50,7 +49,8 @@ public record ArtistView(String id, String name, String iconURL, String descript
         List<Artist> similar = orEmpty(artist.getRelated()).stream()
                 .filter(related -> related.getBrowseId() != null)
                 .limit(MAX)
-                .map(related -> new Artist(related.getBrowseId(), "", orEmpty(related.getTitle())))
+                .map(related -> new Artist(related.getBrowseId(), orEmpty(related.getThumbnailUrl()),
+                        orEmpty(related.getTitle())))
                 .toList();
         return new ArtistView(requestedId, orEmpty(artist.getName()), orEmpty(artist.getThumbnailUrl()),
                 artist.getDescription(), artist.getSubscribers(), topSongs,
