@@ -187,12 +187,12 @@ public class DownloadTaskRunner {
                                 if (admitted > 0) {
                                     log.info("Admitted download {} ({} '{}') as {} task(s)",
                                             download.getDownloadId(), download.getDownloadType(),
-                                            collection.name(), tasks.size());
+                                            collection.name(), admitted);
                                 } else {
                                     // The guards in CREATE_TASKS_SQL held, so something else had
                                     // already admitted this row. Nothing to fix, worth seeing.
-                                    log.debug("Download {} was already admitted; no tasks created",
-                                            download.getDownloadId());
+                                    log.debug("Download {} was already admitted or is no longer "
+                                            + "pending; no tasks created", download.getDownloadId());
                                 }
                             })
                             .then();
@@ -458,7 +458,23 @@ public class DownloadTaskRunner {
                             advance.next().candidates().size(), advance.next().searchQuery(),
                             advance.next().searchTier() + 1, SearchQueryTiers.of(task.songName()).size());
                 }
-                yield repository.save(advance.next(), instanceId).then();
+                yield repository.save(advance.next(), instanceId)
+                        // Zero rows means the row went terminal under us -- cancelled by the user while this
+                        // step was enqueueing. slskd now has a transfer nobody tracks; stop it. A crash before
+                        // this line still orphans one (accepted in the 13-08-2026 ADR).
+                        .flatMap(rows -> rows == 0
+                                && advance.next().phase() == DownloadPhase.DOWNLOAD_POLL
+                                && advance.next().slskdTransferId() != null
+                                ? slskdService.cancelDownload(advance.next().slskdUsername(), advance.next().slskdTransferId())
+                                        .doOnSuccess(v -> log.info("Cancelled transfer {} from '{}' that started after song {} was cancelled",
+                                                advance.next().slskdTransferId(), advance.next().slskdUsername(), task.taskId()))
+                                        .onErrorResume(error -> {
+                                            log.warn("Could not cancel orphaned transfer {} from '{}' for song {}",
+                                                    advance.next().slskdTransferId(), advance.next().slskdUsername(), task.taskId(), error);
+                                            return Mono.empty();
+                                        })
+                                : Mono.empty())
+                        .then();
             }
             case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {
@@ -475,7 +491,7 @@ public class DownloadTaskRunner {
                 // Only this SONG. The download's own status is settled by concludeDownloads() at the
                 // end of the pass, once every one of its songs is terminal.
                 yield downloadService.finishTask(task.taskId(), terminal.status(),
-                                terminal.failureCode(), clock.instant())
+                                terminal.failureCode(), clock.instant(), instanceId)
                         // rows > 0 is the first, real finish -- the same guard that stops a duplicate
                         // finish re-stamping finished_at also stops it re-running the cleanup. A song
                         // that failed for good will not be retried, so slskd's resume-able partial

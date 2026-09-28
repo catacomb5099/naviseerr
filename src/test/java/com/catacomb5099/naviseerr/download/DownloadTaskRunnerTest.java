@@ -16,6 +16,7 @@ import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -69,7 +70,7 @@ class DownloadTaskRunnerTest {
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.empty());
         when(repository.save(any(), any())).thenReturn(Mono.just(1L));
-        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(downloadService.finishTask(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskdService.getAllSearches()).thenReturn(Flux.empty());
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
@@ -125,7 +126,7 @@ class DownloadTaskRunnerTest {
         verify(organiser).deletePartials(task);
 
         // A duplicate finish (expired lease, re-stepped row) updates no row and cleans nothing again.
-        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(0L));
+        when(downloadService.finishTask(any(), any(), any(), any(), any())).thenReturn(Mono.just(0L));
         runner.pass().block();
         verify(organiser, times(1)).deletePartials(task);
     }
@@ -361,7 +362,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository).save(eq(next), any());
-        verify(downloadService, never()).finishTask(any(), any(), any(), any());
+        verify(downloadService, never()).finishTask(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -387,8 +388,11 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         // The TASK's id, not the download's: one song of a collection finishing is not the
-        // collection finishing.
-        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any());
+        // collection finishing. And the owner the claim stamped, so the finish only lands while
+        // this step still holds the lease.
+        ArgumentCaptor<String> owner = ArgumentCaptor.forClass(String.class);
+        verify(repository).claimDueTasks(anyInt(), owner.capture(), any(), any(), anyBoolean(), anyInt());
+        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any(), eq(owner.getValue()));
         verify(repository, never()).save(any(), any());
     }
 
@@ -419,6 +423,34 @@ class DownloadTaskRunnerTest {
         runner.pass().block();   // must complete, not throw
 
         verify(repository).save(any(), any());
+    }
+
+    @Test
+    void theSaveAfterDownloadInitIsRefused_cancelsTheOrphanedTransferInSlskd() {
+        DownloadTask task = downloadInit(candidates("alice"), 0, 0);
+        DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
+                .slskdUsername("alice").slskdTransferId("t-9").build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+        when(repository.save(any(), any())).thenReturn(Mono.just(0L));   // the row was cancelled meanwhile
+        when(slskdService.cancelDownload("alice", "t-9")).thenReturn(Mono.empty());
+
+        runner.pass().block();
+
+        verify(slskdService).cancelDownload("alice", "t-9");
+    }
+
+    @Test
+    void theSaveAfterDownloadInitIsAccepted_leavesTheTransferRunning() {
+        DownloadTask task = downloadInit(candidates("alice"), 0, 0);
+        DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
+                .slskdUsername("alice").slskdTransferId("t-9").build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+
+        runner.pass().block();
+
+        verify(slskdService, never()).cancelDownload(any(), any());
     }
 
     // ---- metadata gathering --------------------------------------------------------------------

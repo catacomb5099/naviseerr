@@ -33,6 +33,8 @@ import java.util.UUID;
  * @param songCount       how many songs this download resolved to. 0 while QUEUED — not yet known.
  * @param songsSucceeded  how many of them have a file. With {@code songsFailed}, lets a card read
  *                        "7 of 12" without a second request.
+ * @param songsCancelled  how many the user stopped. Kept apart from {@code songsFailed} so a card
+ *                        never calls the user's own action a failure.
  * @param requestedAt     when the request arrived.
  * @param stageEnteredAt  when the current stage began. What indeterminate stages show elapsed time
  *                        from, so a slow search reads as slow rather than as stuck.
@@ -42,7 +44,7 @@ import java.util.UUID;
  * @param failureCode     a {@link DownloadFailureCode} name, or null. Deliberately a String, not the
  *                        enum: rows written before the enum existed hold free prose, and a read path
  *                        that throws on its own history is worse than one the client can't word. For a
- *                        collection, the first song's reason; the per-song view has the rest.
+ *                        collection, the first song's reason, preferring a real failure over CANCELLED.
  */
 public record ActiveDownloadView(
         UUID downloadId,
@@ -57,6 +59,7 @@ public record ActiveDownloadView(
         int songCount,
         int songsSucceeded,
         int songsFailed,
+        int songsCancelled,
         Instant requestedAt,
         Instant stageEnteredAt,
         Instant updatedAt,

@@ -31,5 +31,13 @@ public enum DownloadFailureCode {
      * outage leaves the download PENDING for the next pass instead, so a restart of the sidecar
      * does not fail every download requested while it was down.
      */
-    METADATA_UNAVAILABLE
+    METADATA_UNAVAILABLE,
+    /**
+     * The user stopped it. A cancelled song is a FAILED row carrying this code rather than a phase of
+     * its own, so every "is this song finished?" test in the SQL and the client already treats it as
+     * finished; the read model counts these rows apart from real failures (songsCancelled) and the
+     * client words and colours them differently. Retrying a download resets these rows like any
+     * other failure, which is how a cancel is undone.
+     */
+    CANCELLED
 }

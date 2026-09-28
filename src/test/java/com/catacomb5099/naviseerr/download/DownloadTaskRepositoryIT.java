@@ -9,6 +9,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.test.context.TestPropertySource;
+import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.catacomb5099.naviseerr.support.TaskFinishing.finish;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
@@ -120,11 +123,24 @@ class DownloadTaskRepositoryIT {
 
         Long admitted = admit(id, "track one", "track two", "track three");
 
-        assertEquals(1L, admitted, "one download was admitted, whatever its song count");
+        assertEquals(3L, admitted, "one row per song was created");
         assertEquals(3L, countTaskRows());
         assertEquals("IN_PROGRESS", statusOf(id));
         assertEquals(NOW, admittedAtOf(id), "admission is the first lifecycle timestamp after the request");
         assertEquals(List.of("SEARCH_INIT", "SEARCH_INIT", "SEARCH_INIT"), phasesOf(id));
+    }
+
+    @Test
+    void createTasks_afterTheDownloadWasFailed_insertsNothing() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        // Admission selected the row, then the request was failed (or cancelled) before the song rows were written.
+        repository.failUnadmitted(id, DownloadFailureCode.METADATA_UNAVAILABLE, NOW).block();
+
+        Long created = admit(id, "a", "b", "c");
+
+        assertEquals(0L, created, "a download that is no longer pending must not get songs");
+        assertEquals(0L, countTaskRows());
+        assertEquals("FAILED", statusOf(id));
     }
 
     @Test
@@ -326,7 +342,7 @@ class DownloadTaskRepositoryIT {
     void finishTask_marksTheTaskTerminalButLeavesTheDownloadAlone() {
         UUID id = admitOneSong("PENDING");
 
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertEquals("SUCCEEDED", phaseOf(id));
         // The download's status is settled by concludeDownloads(), not here -- see CONCLUDE_SQL.
@@ -338,8 +354,8 @@ class DownloadTaskRepositoryIT {
     void finishTask_recordsTheFailureReasonForLaterDebugging() {
         UUID id = admitOneSong("PENDING");
 
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.FAILED,
-                DownloadFailureCode.TIMED_OUT, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.FAILED,
+                DownloadFailureCode.TIMED_OUT, NOW);
 
         assertEquals("FAILED", phaseOf(id));
         // The NAME, not prose: the client owns the wording, so copy edits never touch this column.
@@ -350,15 +366,13 @@ class DownloadTaskRepositoryIT {
     void finishTask_onAnAlreadyTerminalTask_changesNothingAtAll() {
         UUID id = admitOneSong("PENDING");
         UUID taskId = taskIdOf(id);
-        downloadService.finishTask(taskId, DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskId, DownloadStatus.SUCCEEDED, null, NOW);
         Instant firstFinishedAt = finishedAtOf(id);
 
         // A duplicated step reaching Terminal a second time — legal, because a lease can expire
         // while the work is still alive.
-        Long rows = downloadService
-                .finishTask(taskId, DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED,
-                        NOW.plusSeconds(3600))
-                .block();
+        Long rows = finish(template, downloadService, taskId, DownloadStatus.FAILED,
+                DownloadFailureCode.SOURCES_EXHAUSTED, NOW.plusSeconds(3600));
 
         assertEquals(0L, rows, "a duplicate finish must be a no-op, not a second write");
         assertEquals("SUCCEEDED", phaseOf(id), "must not overwrite a terminal phase");
@@ -366,6 +380,28 @@ class DownloadTaskRepositoryIT {
         // The one that actually bites: re-stamping finished_at would slide this row back inside the
         // feed's retention window and resurrect a card the user dismissed hours ago.
         assertEquals(firstFinishedAt, finishedAtOf(id), "finished_at must not move");
+    }
+
+    @Test
+    void finishTask_byAnotherOwner_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        DownloadTask claimed = repository.claimDueTasks(10, "owner-a", NOW, Duration.ofMinutes(1), true, 2)
+                .blockFirst();
+
+        Long rows = downloadService.finishTask(claimed.taskId(), DownloadStatus.SUCCEEDED, null, NOW, "owner-b").block();
+
+        assertEquals(0L, rows, "a finish from a process that does not hold the lease must not land");
+        assertEquals("SEARCH_INIT", phaseOf(id));
+    }
+
+    @Test
+    void finishTask_onARowWithNoLease_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        UUID taskId = taskIdsOf(id).getFirst();
+
+        Long rows = downloadService.finishTask(taskId, DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT, NOW, "anyone").block();
+
+        assertEquals(0L, rows, "no lease means nobody is entitled to finish the row");
     }
 
     // ---- library organiser ---------------------------------------------------------------------
@@ -416,8 +452,8 @@ class DownloadTaskRepositoryIT {
         UUID filed = succeededSong(dl, "filed", "a\\filed.flac", NOW);
         repository.setLibraryPath(filed, "/music/x/filed.flac").block();
         UUID failedId = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(failedId), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        finish(template, downloadService, taskIdOf(failedId), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
         UUID wanted = succeededSong(dl, "new", "a\\new.flac", NOW);
 
         List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600))
@@ -518,7 +554,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void conclude_succeedsADownloadWhoseOnlySongSucceeded() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertEquals(1L, repository.concludeDownloads().block());
         assertEquals("SUCCEEDED", statusOf(id));
@@ -528,8 +564,8 @@ class DownloadTaskRepositoryIT {
     @Test
     void conclude_failsADownloadWhoseOnlySongFailed() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
 
         assertEquals(1L, repository.concludeDownloads().block());
         assertEquals("FAILED", statusOf(id));
@@ -540,9 +576,9 @@ class DownloadTaskRepositoryIT {
         UUID id = insertDownload("PENDING", "ALBUM");
         admit(id, "found", "missing");
         List<UUID> tasks = taskIdsOf(id);
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
 
         assertEquals(1L, repository.concludeDownloads().block());
         assertEquals("PARTIAL_SUCCESS", statusOf(id));
@@ -552,8 +588,7 @@ class DownloadTaskRepositoryIT {
     void conclude_leavesADownloadAloneWhileAnyOfItsSongsIsStillRunning() {
         UUID id = insertDownload("PENDING", "ALBUM");
         admit(id, "done", "still going");
-        downloadService.finishTask(taskIdsOf(id).getFirst(), DownloadStatus.SUCCEEDED, null, NOW)
-                .block();
+        finish(template, downloadService, taskIdsOf(id).getFirst(), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertEquals(0L, repository.concludeDownloads().block());
         assertEquals("IN_PROGRESS", statusOf(id),
@@ -563,7 +598,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void conclude_isIdempotent_soRunningItEveryPassCostsNothing() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
         repository.concludeDownloads().block();
 
         // It runs unconditionally on every pass, so "already concluded" must match no rows at all
@@ -582,10 +617,10 @@ class DownloadTaskRepositoryIT {
         admit(album, "a", "b");
         UUID song = admitOneSong("PENDING");
         for (UUID task : taskIdsOf(album)) {
-            downloadService.finishTask(task, DownloadStatus.SUCCEEDED, null, NOW).block();
+            finish(template, downloadService, task, DownloadStatus.SUCCEEDED, null, NOW);
         }
-        downloadService.finishTask(taskIdOf(song), DownloadStatus.FAILED,
-                DownloadFailureCode.TIMED_OUT, NOW).block();
+        finish(template, downloadService, taskIdOf(song), DownloadStatus.FAILED,
+                DownloadFailureCode.TIMED_OUT, NOW);
 
         assertEquals(2L, repository.concludeDownloads().block());
         assertEquals("SUCCEEDED", statusOf(album));
@@ -618,6 +653,146 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
+    void cancelTasks_marksLiveSongsCancelled_leavesFinishedOnesAlone_andReturnsTheirTransfers() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "done", "polling", "searching");
+        List<UUID> tasks = taskIdsOf(id);
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        template.getDatabaseClient().sql("UPDATE download_tasks SET phase = 'DOWNLOAD_POLL', slskd_username = 'alice', "
+                + "slskd_transfer_id = 't-1', lease_owner = 'x' WHERE task_id = :id").bind("id", tasks.get(1)).fetch().rowsUpdated().block();
+
+        List<DownloadTask> cancelled = repository.cancelTasks(id, null, NOW).collectList().block();
+
+        assertEquals(2, cancelled.size());
+        assertEquals("SUCCEEDED", taskField(tasks.get(0), "phase"), "a finished song is not cancelled");
+        assertEquals("FAILED", taskField(tasks.get(1), "phase"));
+        assertEquals("CANCELLED", taskField(tasks.get(1), "failure_reason"));
+        assertNull(taskField(tasks.get(1), "lease_owner"), "the lease is released so nothing else can write the row");
+        DownloadTask polling = cancelled.stream().filter(t -> t.taskId().equals(tasks.get(1))).findFirst().orElseThrow();
+        assertEquals("alice", polling.slskdUsername());
+        assertEquals("t-1", polling.slskdTransferId());
+        assertTrue(repository.claimDueTasks(10, "me", NOW.plusSeconds(1), Duration.ofMinutes(1), true, 2)
+                .collectList().block().isEmpty(), "cancelled rows are never claimed again");
+    }
+
+    @Test
+    void cancelTasks_forOneSong_touchesOnlyThatSong() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "a", "b");
+        List<UUID> tasks = taskIdsOf(id);
+
+        List<DownloadTask> cancelled = repository.cancelTasks(id, tasks.get(0), NOW).collectList().block();
+
+        assertEquals(List.of(tasks.get(0)), cancelled.stream().map(DownloadTask::taskId).toList());
+        assertEquals("SEARCH_INIT", taskField(tasks.get(1), "phase"));
+    }
+
+    @Test
+    void cancelTasks_twice_theSecondIsANoOp() {
+        UUID id = admitOneSong("PENDING");
+        assertEquals(1, repository.cancelTasks(id, null, NOW).collectList().block().size());
+        assertEquals(0, repository.cancelTasks(id, null, NOW).collectList().block().size());
+    }
+
+    // ---- retry ---------------------------------------------------------------------------------
+
+    /** A finished single-song download whose song failed. */
+    private UUID failedSong() {
+        UUID id = admitOneSong("PENDING");
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES, NOW);
+        repository.concludeDownloads().block();
+        return id;
+    }
+
+    @Test
+    void retry_resetsOnlyFailedSongs_reopensTheDownload_andClearsOrganisedAt() {
+        UUID id = insertDownload("PENDING", "PLAYLIST");
+        // Numbered because taskIdsOf orders by song name.
+        admit(id, "1 ok", "2 bad", "3 stopped");
+        List<UUID> tasks = taskIdsOf(id);
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
+        repository.cancelTasks(id, tasks.get(2), NOW).blockLast();
+        repository.concludeDownloads().block();
+        repository.setOrganisedAt(id, NOW).block();
+        assertEquals("PARTIAL_SUCCESS", statusOf(id));
+
+        Long rows = repository.retry(id, NOW.plusSeconds(60)).block();
+
+        assertEquals(1L, rows);
+        assertEquals("IN_PROGRESS", statusOf(id));
+        assertNull(organisedAtOf(id), "the playlist file is rewritten once the retried songs land");
+        assertEquals("SUCCEEDED", taskField(tasks.get(0), "phase"), "a song with a file is left alone");
+        assertEquals("SEARCH_INIT", taskField(tasks.get(1), "phase"));
+        assertEquals("SEARCH_INIT", taskField(tasks.get(2), "phase"), "a cancelled song is retried too: that is how a cancel is undone");
+        assertNull(taskField(tasks.get(1), "failure_reason"));
+        assertEquals(2, repository.claimDueTasks(10, "me", NOW.plusSeconds(61), Duration.ofMinutes(1), true, 2)
+                .collectList().block().size(), "both reset songs are due again");
+    }
+
+    @Test
+    void retry_twice_theSecondIsANoOp() {
+        UUID id = failedSong();
+        assertEquals(1L, repository.retry(id, NOW).block());
+        assertEquals(0L, repository.retry(id, NOW).block(), "the second click finds no failed song left");
+    }
+
+    @Test
+    void retry_twoConcurrentCalls_exactlyOneWins() {
+        UUID id = failedSong();
+        Tuple2<Long, Long> both = Mono.zip(repository.retry(id, NOW), repository.retry(id, NOW)).block();
+        assertEquals(1L, both.getT1() + both.getT2());
+    }
+
+    @Test
+    void retry_whileInProgress_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        assertEquals(0L, repository.retry(id, NOW).block());
+        assertEquals("SEARCH_INIT", taskField(taskIdsOf(id).getFirst(), "phase"));
+    }
+
+    @Test
+    void retry_ofAFullyDownloadedDownload_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        finish(template, downloadService, taskIdsOf(id).getFirst(), DownloadStatus.SUCCEEDED, null, NOW);
+        repository.concludeDownloads().block();
+        assertEquals(0L, repository.retry(id, NOW).block());
+        assertEquals(0L, repository.readmit(id).block(), "songs exist, so this is not an unadmitted failure either");
+    }
+
+    @Test
+    void readmit_ofAnUnadmittedFailure_returnsItToPending() {
+        UUID id = insertDownload("PENDING");
+        repository.failUnadmitted(id, DownloadFailureCode.CANCELLED, NOW).block();
+
+        assertEquals(1L, repository.readmit(id).block());
+        assertEquals("PENDING", statusOf(id));
+        assertNull(failureReasonOfDownload(id));
+        assertEquals(1, repository.admitDownloads(10).collectList().block().size(), "admission picks it up again");
+    }
+
+    @Test
+    void setOrganisedAt_afterARetry_updatesNothing() {
+        UUID id = failedSong();
+        repository.retry(id, NOW).block();
+        assertEquals(0L, repository.setOrganisedAt(id, NOW).block(), "a stamp in flight when the user clicked Retry must not land");
+    }
+
+    @Test
+    void finishTask_afterTheRowWasCancelledAndRetried_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        DownloadTask claimed = repository.claimDueTasks(10, "owner-a", NOW, Duration.ofMinutes(1), true, 2).blockFirst();
+        repository.cancelTasks(id, null, NOW).blockLast();
+        repository.concludeDownloads().block();
+        repository.retry(id, NOW.plusSeconds(2)).block();
+
+        Long rows = downloadService.finishTask(claimed.taskId(), DownloadStatus.SUCCEEDED, null, NOW.plusSeconds(3), "owner-a").block();
+
+        assertEquals(0L, rows, "the old step's outcome must not land on the new attempt");
+        assertEquals("SEARCH_INIT", taskField(claimed.taskId(), "phase"));
+    }
+
+    @Test
     void save_advancesUpdatedAt() {
         UUID id = admitOneSong("PENDING");
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
@@ -635,7 +810,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void claimDueTasks_neverReturnsTerminalTasks() {
         UUID id = admitOneSong("PENDING");
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertTrue(repository
                 .claimDueTasks(10, "a", NOW.plusSeconds(86_400), Duration.ofSeconds(60), true, 10)
@@ -773,6 +948,20 @@ class DownloadTaskRepositoryIT {
                 .map((row, meta) -> row.get("finished_at", Instant.class)).one().block();
     }
 
+    private Instant organisedAtOf(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT organised_at FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> Optional.ofNullable(row.get("organised_at", Instant.class)))
+                .one().block().orElse(null);
+    }
+
+    private String failureReasonOfDownload(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT failure_reason FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> Optional.ofNullable(row.get("failure_reason", String.class)))
+                .one().block().orElse(null);
+    }
+
     private String mediaField(String youtubeId, String column) {
         return template.getDatabaseClient()
                 .sql("SELECT " + column + " FROM media_items WHERE youtube_id = :id").bind("id", youtubeId)
@@ -853,6 +1042,14 @@ class DownloadTaskRepositoryIT {
                 .sql("SELECT failure_reason FROM download_tasks WHERE download_id = :id")
                 .bind("id", id)
                 .map((row, meta) -> Optional.ofNullable(row.get("failure_reason", String.class)))
+                .one().block().orElse(null);
+    }
+
+    /** One column of one song's row, by task id; the helpers above key on the download. */
+    private String taskField(UUID taskId, String column) {
+        return template.getDatabaseClient()
+                .sql("SELECT " + column + " FROM download_tasks WHERE task_id = :id").bind("id", taskId)
+                .map((row, meta) -> Optional.ofNullable(row.get(column, String.class)))
                 .one().block().orElse(null);
     }
 

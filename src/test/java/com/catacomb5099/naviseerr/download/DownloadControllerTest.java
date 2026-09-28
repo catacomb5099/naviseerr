@@ -47,13 +47,94 @@ class DownloadControllerTest {
         return new ActiveDownloadView(UUID.randomUUID(), "vid-1", DownloadType.SONG, "song",
                 List.of("artist", "nobody"), Arrays.asList("UC-artist", null), "https://img/1.jpg",
                 DownloadStage.DOWNLOADING,
-                new BigDecimal("43.00"), 1, 0, 0, NOW, NOW, NOW, null, null);
+                new BigDecimal("43.00"), 1, 0, 0, 0, NOW, NOW, NOW, null, null);
     }
 
     private static DownloadSongView song() {
         return new DownloadSongView(UUID.randomUUID(), "vid-1", 1, "song", List.of("artist"),
                 List.of("UC-artist"), "https://img/1.jpg", 200, DownloadStage.DOWNLOADING, new BigDecimal("43.00"), null,
                 NOW, NOW, null, 3, 0, 0, "alice", "music/alice/song.flac", null);
+    }
+
+    // ---- cancel ----------------------------------------------------------------------------------
+
+    @Test
+    void cancel_whenSomethingWasCancelled_is200WithTheFreshCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.cancel(card.downloadId(), null, NOW)).thenReturn(Mono.just(2L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.cancel(card.downloadId(), null).block();
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void cancel_whenNothingWasLeftToCancel_is409WithTheCurrentCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.cancel(card.downloadId(), null, NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.cancel(card.downloadId(), null).block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(card, response.getBody());   // the client applies the 409 body
+    }
+
+    @Test
+    void cancel_ofAnUnknownDownload_is404() {
+        UUID unknown = UUID.randomUUID();
+        when(downloadService.cancel(unknown, null, NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(unknown))).thenReturn(Flux.empty());
+
+        assertEquals(HttpStatus.NOT_FOUND, controller.cancel(unknown, null).block().getStatusCode());
+    }
+
+    @Test
+    void cancel_ofOneSong_passesTheTaskIdThrough() {
+        ActiveDownloadView card = view();
+        UUID taskId = UUID.randomUUID();
+        when(downloadService.cancel(card.downloadId(), taskId, NOW)).thenReturn(Mono.just(1L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        assertEquals(HttpStatus.OK, controller.cancel(card.downloadId(), taskId).block().getStatusCode());
+        verify(downloadService).cancel(card.downloadId(), taskId, NOW);
+    }
+
+    // ---- retry -----------------------------------------------------------------------------------
+
+    @Test
+    void retry_whenSomethingWasRetried_is202WithTheFreshCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.retry(card.downloadId(), NOW)).thenReturn(Mono.just(1L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.retry(card.downloadId()).block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void retry_whenNothingToRetry_is409WithTheCurrentCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.retry(card.downloadId(), NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.retry(card.downloadId()).block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void retry_ofAnUnknownDownload_is404() {
+        UUID unknown = UUID.randomUUID();
+        when(downloadService.retry(unknown, NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(unknown))).thenReturn(Flux.empty());
+
+        assertEquals(HttpStatus.NOT_FOUND, controller.retry(unknown).block().getStatusCode());
     }
 
     // ---- one download, every song ----------------------------------------------------------------
