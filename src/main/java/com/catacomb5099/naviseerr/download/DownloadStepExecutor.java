@@ -130,10 +130,10 @@ public class DownloadStepExecutor {
                         task.searchId(), task.downloadId(), full.getState(), full.getResponseCount(),
                         full.getFileCount(), size(state.getResponses()), size(full.getResponses())))
                 // Judged against the cleaned song name, whatever was searched: the search is
-                // deliberately loose (bare "title - artist", or the title alone when Soulseek drops
-                // the artist), and the cleaned name still carries the qualifier -- "(Remix)", "(Live)"
-                // -- the picker needs to choose the right version, plus the artist it must insist on
-                // for a title-only search. Never the raw name: "Neon Indian - Polish Girl -
+                // deliberately loose (the title alone first, then "title - artist"), and the cleaned
+                // name still carries the qualifier -- "(Remix)", "(Live)" -- the picker needs to
+                // choose the right version, plus the artist it must insist on for a title-only
+                // search. Never the raw name: "Neon Indian - Polish Girl -
                 // toomainstream" made the picker read "Neon Indian" as the title and reject all 300
                 // files Soulseek offered (post-mortem of 28-09-2026). The wording goes along too: when
                 // it did not name the artist, the picker requires the artist in the file's path.

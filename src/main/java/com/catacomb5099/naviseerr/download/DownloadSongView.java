@@ -19,7 +19,8 @@ import java.util.UUID;
  * @param title           from {@code media_items}; null only for a task admitted before V6.
  * @param stage           the SONG's own stage — for a finished song, its own outcome, whatever the
  *                        collection's is.
- * @param candidateCount  how many usable files the search turned up. 0 in the search stages.
+ * @param candidateCount  how many usable files the search turned up. While a song is still searching,
+ *                        the files kept from an earlier wording (0 when none).
  * @param candidateIndex  0-based; which of those this attempt is on. With {@code retryIndex}, "third
  *                        candidate, second retry".
  * @param slskdUsername   the peer the current (or last) transfer was from.

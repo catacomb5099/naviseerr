@@ -12,21 +12,25 @@ import java.util.regex.Pattern;
  * results against. Both are derived from the same reading of the YouTube name, so what is searched
  * and what is accepted can never disagree about which words are the song.
  *
- * <p>The queries come from the 2026-09-26 search lab (809 songs, 44,008 labelled results, see
- * {@code docs/decisions/soulseek-search-lab-26-09-2026.md}). The bare {@code "title - artist"}
- * returned the requested song for 708 of the 718 songs it answered, and already held the requested
- * remix or live take for 42 of the 52 songs that asked for one -- keeping the qualifier in the search
- * won only 32 and came back empty 48 times out of 180. So the qualifier is not searched; the picker
- * sees it in {@link #pickerName} and chooses the version locally. The title-only fallback exists
- * because the Soulseek server silently drops any search containing certain artist names (Michael
- * Jackson, Depeche Mode, Linkin Park, MGMT, Two Door Cinema Club ...): 45 of 809 songs returned zero
- * peers with the artist and thousands of files without.
+ * <p>The first wording is the bare title -- the owner's call of 28-09-2026 ("just search for the song
+ * name, removing all the fluff"; see {@code docs/decisions/title-first-search-28-09-2026.md}). It is
+ * the loosest question Soulseek can be asked, so it also sidesteps the server silently dropping any
+ * search that names certain artists (Michael Jackson, Depeche Mode, Linkin Park, Lady Gaga ...: 45 of
+ * 809 songs in the lab returned zero peers with the artist and thousands of files without). The
+ * picker carries the load: a file found without naming the artist must carry the artist in its path
+ * ({@code TrackMatchingService.grade}). When the title alone finds too few acceptable files -- a
+ * common title fills slskd's response cap with other artists' songs -- the wordings that name the
+ * artist follow, starting with the bare {@code "title - artist"} that the 2026-09-26 search lab
+ * (809 songs, 44,008 labelled results, {@code docs/decisions/soulseek-search-lab-26-09-2026.md})
+ * found returning the requested song for 708 of the 718 songs it answered. The qualifier is never
+ * searched: the bare query already held the requested remix or live take for 42 of the 52 songs that
+ * asked for one, while keeping it in the search won only 32 and came back empty 48 times out of 180.
  *
  * <p>A name with three parts is read one of two ways. When a middle part names a version
  * ("Kiss Me - Radio Edit - Sixpence None The Richer") the first part is the title and the last the
  * artist, as before. Otherwise it is YouTube's own "Artist - Title" plus the uploading channel
  * ("Neon Indian - Polish Girl - toomainstream"): searching with the channel as the artist found
- * nothing in all 41 tries of the 27-09-2026 playlists, so "Artist Title" goes first, the title alone
+ * nothing in all 41 tries of the 27-09-2026 playlists, so the title alone goes first, "Artist Title"
  * second, and the channel wording last (see {@code docs/decisions/playlist-post-mortem-28-09-2026.md}).
  * After those come the same wordings with a shortened title, so the search stays general and the
  * picker does the discriminating; see {@link #of}.
@@ -136,15 +140,16 @@ public final class SearchQueryTiers {
     private SearchQueryTiers() {}
 
     /**
-     * Distinct queries in the order to try them, most specific first, at most {@value #MAX_TIERS}. A
-     * wording is only tried when the one before it produced no file the picker accepts, so a looser
-     * wording costs nothing when a tighter one hits. Never empty: a name that is nothing but noise
+     * Distinct queries in the order to try them, the title alone first, at most {@value #MAX_TIERS}.
+     * The first wording is left behind when it finds too few files the picker accepts, the later ones
+     * only when they find none ({@code DownloadStateMachine.afterSearchPoll}), so a later wording
+     * costs nothing when an earlier one hits. Never empty: a name that is nothing but noise
      * ("(Official Video)") falls back to itself rather than to an empty search.
      *
-     * <p>"Title - Artist": the bare pair, the title alone (the server drops some artists), then the
-     * same two with the title cut to its first {@value #SHORT_TITLE_WORDS} words and any dash
-     * qualifier ("Radio Edit") removed, when that is different. "Artist - Title - channel": "Artist
-     * Title", the title alone, the two short forms, and the channel wording last only if there is room.
+     * <p>"Title - Artist": the title alone, the bare pair, then the same two with the title cut to
+     * its first {@value #SHORT_TITLE_WORDS} words and any dash qualifier ("Radio Edit") removed, when
+     * that is different. "Artist - Title - channel": the title alone, "Artist Title", the two short
+     * forms, and the channel wording last only if there is room.
      */
     public static List<String> of(String songName) {
         String raw = songName == null ? "" : songName;
@@ -163,16 +168,16 @@ public final class SearchQueryTiers {
             String artistTitle = String.join(" ", leading);
             String title = String.join(" ", leading.subList(1, leading.size()));
             String shortTitle = shortTitle(title);
-            tiers.add(artistTitle);
             tiers.add(title);
+            tiers.add(artistTitle);
             tiers.add(leading.getFirst() + " " + shortTitle);
             tiers.add(shortTitle);
             tiers.add(artistTitle + " - " + artist);
         } else {
             String title = String.join(" ", leading);
             String shortTitle = shortTitle(leading.getFirst());
-            tiers.add(title + " - " + artist);
             tiers.add(title);
+            tiers.add(title + " - " + artist);
             tiers.add(shortTitle + " - " + artist);
             tiers.add(shortTitle);
         }
