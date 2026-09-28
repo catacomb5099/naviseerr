@@ -270,6 +270,68 @@ public class DownloadTaskRepository {
                       slskd_username, slskd_filename, slskd_transfer_id
             """;
 
+    /**
+     * Retries a finished download: every FAILED song (cancelled ones included -- "retry" means "the
+     * ones I did not get") goes back to the start of its pipeline, in place, and the download reopens.
+     * One statement, so a double-click's second request finds no FAILED rows left, the reset CTE is
+     * empty, and the outer UPDATE matches nothing: rows updated is 0 or 1 and IS the idempotence.
+     *
+     * <p>The previous attempt's peers and error are not kept on the row; apply() logged them when the
+     * song failed. A second row per song would break every COUNT the cards read.
+     *
+     * <p>{@code failure_reason = NULL} on downloads: the feed prefers the download's own reason over
+     * its songs', so a stale one would outrank the fresh rows. {@code organised_at = NULL}: the playlist
+     * file is rewritten whole once the retried songs are filed; songs already filed keep library_path.
+     */
+    private static final String RETRY_SQL = """
+            WITH reset AS (
+                UPDATE download_tasks
+                   SET phase = 'SEARCH_INIT',
+                       phase_entered_at = :now,
+                       next_attempt_at = :now,
+                       finished_at = NULL,
+                       failure_reason = NULL,
+                       last_error = NULL,
+                       search_id = NULL,
+                       search_tier = 0,
+                       candidates = '[]',
+                       candidate_index = 0,
+                       retry_index = 0,
+                       slskd_username = NULL,
+                       slskd_filename = NULL,
+                       slskd_transfer_id = NULL,
+                       progress_percent = 0,
+                       updated_at = now(),
+                       lease_owner = NULL,
+                       lease_expires_at = NULL
+                 WHERE download_id = :id
+                   AND phase = 'FAILED'
+                   AND EXISTS (SELECT 1 FROM downloads
+                                WHERE download_id = :id
+                                  AND status IN ('FAILED', 'PARTIAL_SUCCESS'))
+                RETURNING task_id
+            )
+            UPDATE downloads
+               SET status = 'IN_PROGRESS',
+                   failure_reason = NULL,
+                   finished_at = NULL,
+                   organised_at = NULL
+             WHERE download_id = :id
+               AND status IN ('FAILED', 'PARTIAL_SUCCESS')
+               AND EXISTS (SELECT 1 FROM reset)
+            """;
+
+    /** A download that failed before it had any songs (bad id, or cancelled while queued) goes back to PENDING; admission fetches the track list again. */
+    private static final String READMIT_SQL = """
+            UPDATE downloads
+               SET status = 'PENDING',
+                   failure_reason = NULL,
+                   finished_at = NULL
+             WHERE download_id = :id
+               AND status = 'FAILED'
+               AND NOT EXISTS (SELECT 1 FROM download_tasks WHERE download_id = :id)
+            """;
+
     // Counts DOWNLOADS in flight, not tasks, so one large collection can't lock out admission.
     private static final String COUNT_ACTIVE_DOWNLOADS_SQL = """
             SELECT count(*) AS total FROM downloads WHERE status = 'IN_PROGRESS'
@@ -358,6 +420,9 @@ public class DownloadTaskRepository {
                SET organised_at = :now
              WHERE download_id = :id
                AND organised_at IS NULL
+               -- A retry between downloadsToFinalise's SELECT and this stamp reopens the download;
+               -- stamping it then would leave the playlist file short until the next retry.
+               AND status IN ('SUCCEEDED', 'PARTIAL_SUCCESS')
             """;
 
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
@@ -454,6 +519,16 @@ public class DownloadTaskRepository {
                         .slskdTransferId(row.get("slskd_transfer_id", String.class))
                         .build())
                 .all();
+    }
+
+    /** 1 when the download's FAILED songs were reset and it reopened; 0 when there was nothing to retry. See RETRY_SQL. */
+    public Mono<Long> retry(UUID downloadId, Instant now) {
+        return client.sql(RETRY_SQL).bind("id", downloadId).bind("now", now).fetch().rowsUpdated();
+    }
+
+    /** 1 when a download that failed before it had songs went back to PENDING; 0 otherwise. */
+    public Mono<Long> readmit(UUID downloadId) {
+        return client.sql(READMIT_SQL).bind("id", downloadId).fetch().rowsUpdated();
     }
 
     /** Finished songs still to be moved into the library, oldest first. See {@link LibraryOrganiser}. */

@@ -1,7 +1,7 @@
 # Retry and cancel downloads
 
 **Date:** 28-09-2026
-**Status:** Accepted, cancel implemented; retry in the next PR
+**Status:** Accepted, implemented
 **Builds on:** `durable-download-state-machine-13-08-2026.md` (cancellation is a database write first,
 then best-effort slskd cancels) and `collection-downloads-14-09-2026.md` (a download's status is derived
 from its songs). The full design, with the SQL and the race table, is
@@ -68,8 +68,8 @@ Both are bug fixes in their own right and landed first:
   slskd call leaves that transfer running in slskd until it finishes; the song is already cancelled and
   nothing files the file.
 - **A song cancelled in the instant its transfer is being queued** can leave that transfer running in
-  slskd. The follow-up PR stops it: when the save after queuing finds the song cancelled, the runner
-  cancels the transfer it just queued.
+  slskd. The runner stops it: when the save after queuing finds the song cancelled, it cancels the
+  transfer it just queued (`DownloadTaskRunner.apply`).
 - **Cancel races the song's own success: first writer wins.** If cancel wins, a finished file may sit in
   slskd's folder unfiled. If the song wins, cancel answers 409 with the downloaded card.
 - **Cancelling deletes slskd's partial files** for that song, as any failure does, so a later retry starts
