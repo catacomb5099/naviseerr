@@ -131,6 +131,19 @@ public class DownloadService {
                 .flatMap(rows -> repository.concludeDownloads().thenReturn(rows));
     }
 
+    /**
+     * Retries a finished download. Songs that failed or were cancelled start again; songs with a file
+     * are left alone. A download that never got songs is re-queued for admission instead. 0 means
+     * nothing to retry: still running, fully downloaded, or a concurrent retry got there first.
+     */
+    public Mono<Long> retry(UUID downloadId, Instant now) {
+        return repository.retry(downloadId, now)
+                .flatMap(rows -> rows > 0 ? Mono.just(rows) : repository.readmit(downloadId))
+                .doOnNext(rows -> {
+                    if (rows > 0) log.info("Retrying download {}", downloadId);
+                });
+    }
+
     /** Same shape as DownloadStepExecutor.cancelIfAbandoned: the decision is written; slskd is told after, best effort. */
     private void stopInSlskd(DownloadTask task) {
         if (task.slskdTransferId() != null) {

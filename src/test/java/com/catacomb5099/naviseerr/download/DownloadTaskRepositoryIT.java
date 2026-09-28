@@ -9,6 +9,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.test.context.TestPropertySource;
+import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -692,6 +694,104 @@ class DownloadTaskRepositoryIT {
         assertEquals(0, repository.cancelTasks(id, null, NOW).collectList().block().size());
     }
 
+    // ---- retry ---------------------------------------------------------------------------------
+
+    /** A finished single-song download whose song failed. */
+    private UUID failedSong() {
+        UUID id = admitOneSong("PENDING");
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES, NOW);
+        repository.concludeDownloads().block();
+        return id;
+    }
+
+    @Test
+    void retry_resetsOnlyFailedSongs_reopensTheDownload_andClearsOrganisedAt() {
+        UUID id = insertDownload("PENDING", "PLAYLIST");
+        // Numbered because taskIdsOf orders by song name.
+        admit(id, "1 ok", "2 bad", "3 stopped");
+        List<UUID> tasks = taskIdsOf(id);
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
+        repository.cancelTasks(id, tasks.get(2), NOW).blockLast();
+        repository.concludeDownloads().block();
+        repository.setOrganisedAt(id, NOW).block();
+        assertEquals("PARTIAL_SUCCESS", statusOf(id));
+
+        Long rows = repository.retry(id, NOW.plusSeconds(60)).block();
+
+        assertEquals(1L, rows);
+        assertEquals("IN_PROGRESS", statusOf(id));
+        assertNull(organisedAtOf(id), "the playlist file is rewritten once the retried songs land");
+        assertEquals("SUCCEEDED", taskField(tasks.get(0), "phase"), "a song with a file is left alone");
+        assertEquals("SEARCH_INIT", taskField(tasks.get(1), "phase"));
+        assertEquals("SEARCH_INIT", taskField(tasks.get(2), "phase"), "a cancelled song is retried too: that is how a cancel is undone");
+        assertNull(taskField(tasks.get(1), "failure_reason"));
+        assertEquals(2, repository.claimDueTasks(10, "me", NOW.plusSeconds(61), Duration.ofMinutes(1), true, 2)
+                .collectList().block().size(), "both reset songs are due again");
+    }
+
+    @Test
+    void retry_twice_theSecondIsANoOp() {
+        UUID id = failedSong();
+        assertEquals(1L, repository.retry(id, NOW).block());
+        assertEquals(0L, repository.retry(id, NOW).block(), "the second click finds no failed song left");
+    }
+
+    @Test
+    void retry_twoConcurrentCalls_exactlyOneWins() {
+        UUID id = failedSong();
+        Tuple2<Long, Long> both = Mono.zip(repository.retry(id, NOW), repository.retry(id, NOW)).block();
+        assertEquals(1L, both.getT1() + both.getT2());
+    }
+
+    @Test
+    void retry_whileInProgress_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        assertEquals(0L, repository.retry(id, NOW).block());
+        assertEquals("SEARCH_INIT", taskField(taskIdsOf(id).getFirst(), "phase"));
+    }
+
+    @Test
+    void retry_ofAFullyDownloadedDownload_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        finish(template, downloadService, taskIdsOf(id).getFirst(), DownloadStatus.SUCCEEDED, null, NOW);
+        repository.concludeDownloads().block();
+        assertEquals(0L, repository.retry(id, NOW).block());
+        assertEquals(0L, repository.readmit(id).block(), "songs exist, so this is not an unadmitted failure either");
+    }
+
+    @Test
+    void readmit_ofAnUnadmittedFailure_returnsItToPending() {
+        UUID id = insertDownload("PENDING");
+        repository.failUnadmitted(id, DownloadFailureCode.CANCELLED, NOW).block();
+
+        assertEquals(1L, repository.readmit(id).block());
+        assertEquals("PENDING", statusOf(id));
+        assertNull(failureReasonOfDownload(id));
+        assertEquals(1, repository.admitDownloads(10).collectList().block().size(), "admission picks it up again");
+    }
+
+    @Test
+    void setOrganisedAt_afterARetry_updatesNothing() {
+        UUID id = failedSong();
+        repository.retry(id, NOW).block();
+        assertEquals(0L, repository.setOrganisedAt(id, NOW).block(), "a stamp in flight when the user clicked Retry must not land");
+    }
+
+    @Test
+    void finishTask_afterTheRowWasCancelledAndRetried_isANoOp() {
+        UUID id = admitOneSong("PENDING");
+        DownloadTask claimed = repository.claimDueTasks(10, "owner-a", NOW, Duration.ofMinutes(1), true, 2).blockFirst();
+        repository.cancelTasks(id, null, NOW).blockLast();
+        repository.concludeDownloads().block();
+        repository.retry(id, NOW.plusSeconds(2)).block();
+
+        Long rows = downloadService.finishTask(claimed.taskId(), DownloadStatus.SUCCEEDED, null, NOW.plusSeconds(3), "owner-a").block();
+
+        assertEquals(0L, rows, "the old step's outcome must not land on the new attempt");
+        assertEquals("SEARCH_INIT", taskField(claimed.taskId(), "phase"));
+    }
+
     @Test
     void save_advancesUpdatedAt() {
         UUID id = admitOneSong("PENDING");
@@ -846,6 +946,20 @@ class DownloadTaskRepositoryIT {
         return template.getDatabaseClient()
                 .sql("SELECT finished_at FROM downloads WHERE download_id = :id").bind("id", id)
                 .map((row, meta) -> row.get("finished_at", Instant.class)).one().block();
+    }
+
+    private Instant organisedAtOf(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT organised_at FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> Optional.ofNullable(row.get("organised_at", Instant.class)))
+                .one().block().orElse(null);
+    }
+
+    private String failureReasonOfDownload(UUID id) {
+        return template.getDatabaseClient()
+                .sql("SELECT failure_reason FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> Optional.ofNullable(row.get("failure_reason", String.class)))
+                .one().block().orElse(null);
     }
 
     private String mediaField(String youtubeId, String column) {

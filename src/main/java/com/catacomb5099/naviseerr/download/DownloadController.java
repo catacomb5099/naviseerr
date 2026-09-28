@@ -154,6 +154,16 @@ public class DownloadController {
         return outcome(id, downloadService.cancel(id, taskId, clock.instant()), HttpStatus.OK);
     }
 
+    /**
+     * Retries a finished download: every song without a file starts again. 202 with the fresh card
+     * (like a new request: the work follows), 409 with the current card when there is nothing to retry
+     * -- still running, fully downloaded, or a second click -- and 404 for an unknown id.
+     */
+    @PostMapping("/downloads/{id}/retry")
+    Mono<ResponseEntity<ActiveDownloadView>> retry(@PathVariable UUID id) {
+        return outcome(id, downloadService.retry(id, clock.instant()), HttpStatus.ACCEPTED);
+    }
+
     /** Runs a write, then reads the card back: rows > 0 is the happy status, 0 is 409, no card is 404. */
     private Mono<ResponseEntity<ActiveDownloadView>> outcome(UUID id, Mono<Long> rows, HttpStatus onSuccess) {
         return rows.flatMap(n -> activeDownloadRepository.findByIds(List.of(id)).next()

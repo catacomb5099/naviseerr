@@ -83,4 +83,26 @@ class DownloadServiceTest {
 
         assertEquals(1L, service.cancel(id, null, NOW).block());
     }
+
+    @Test
+    void retry_thatResetSongs_doesNotReadmit() {
+        when(repository.retry(id, NOW)).thenReturn(Mono.just(1L));
+        assertEquals(1L, service.retry(id, NOW).block());
+        verify(repository, never()).readmit(any());
+    }
+
+    @Test
+    void retry_withNothingToReset_fallsBackToReadmitting() {
+        when(repository.retry(id, NOW)).thenReturn(Mono.just(0L));
+        when(repository.readmit(id)).thenReturn(Mono.just(1L));
+        assertEquals(1L, service.retry(id, NOW).block());
+    }
+
+    @Test
+    void retry_withNothingToRetryOrReadmit_isZero() {
+        when(repository.retry(id, NOW)).thenReturn(Mono.just(0L));
+        when(repository.readmit(id)).thenReturn(Mono.just(0L));
+
+        assertEquals(0L, service.retry(id, NOW).block());   // the endpoint turns this 0 into its 409
+    }
 }
