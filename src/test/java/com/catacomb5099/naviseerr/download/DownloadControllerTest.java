@@ -47,7 +47,7 @@ class DownloadControllerTest {
         return new ActiveDownloadView(UUID.randomUUID(), "vid-1", DownloadType.SONG, "song",
                 List.of("artist", "nobody"), Arrays.asList("UC-artist", null), "https://img/1.jpg",
                 DownloadStage.DOWNLOADING,
-                new BigDecimal("43.00"), 1, 0, 0, NOW, NOW, NOW, null, null);
+                new BigDecimal("43.00"), 1, 0, 0, 0, NOW, NOW, NOW, null, null);
     }
 
     private static DownloadSongView song() {
