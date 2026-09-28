@@ -102,9 +102,11 @@ public class YtMusicService {
                         // getSong()'s `author` is one string, not a list -- flattened here so callers
                         // never have to know which of the two provider shapes a song came from.
                         song.getAuthor() == null ? List.of() : List.of(song.getAuthor()),
+                        song.getAuthor() == null ? List.of()
+                                : List.of(song.getChannelId() == null ? "" : song.getChannelId()),
                         song.getTitle(),
                         song.getThumbnailUrl() == null ? fallbackThumbnail(id) : song.getThumbnailUrl(),
-                        song.getLengthSeconds()));
+                        song.getLengthSeconds(), null));
     }
 
     /**
@@ -175,15 +177,15 @@ public class YtMusicService {
                                                    String requestedId) {
         String id = collection.getBrowseId() != null ? collection.getBrowseId()
                 : collection.getId() != null ? collection.getId() : requestedId;
-        List<String> authors = collection.getArtists() != null
-                ? names(collection.getArtists())
-                : collection.getAuthor() == null ? List.of() : names(List.of(collection.getAuthor()));
+        List<YtMusicSearchResponse.ArtistRef> authors = collection.getArtists() != null
+                ? collection.getArtists()
+                : collection.getAuthor() == null ? List.of() : List.of(collection.getAuthor());
         boolean isAlbum = collection.getBrowseId() != null;
         List<YoutubeSongInfo> songs = collection.getTracks() == null ? List.of()
                 : collection.getTracks().stream()
                         .filter(track -> !Boolean.FALSE.equals(track.getIsAvailable()))
                         .map(track -> new YoutubeSongInfo(track.getVideoId(),
-                                names(track.getArtists()), track.getTitle(),
+                                names(track.getArtists()), ids(track.getArtists()), track.getTitle(),
                                 isAlbum && collection.getThumbnailUrl() != null
                                         ? collection.getThumbnailUrl()
                                         : track.getVideoId() == null ? null
@@ -192,13 +194,21 @@ public class YtMusicService {
                         .toList();
         return new YoutubeCollectionInfo(id, songs,
                 collection.getYear() == null ? null : String.valueOf(collection.getYear()),
-                collection.getTitle(), authors, collection.getThumbnailUrl());
+                collection.getTitle(), names(authors), ids(authors), collection.getThumbnailUrl());
     }
 
     private static List<String> names(List<YtMusicSearchResponse.ArtistRef> artists) {
         return artists == null ? List.of() : artists.stream()
                 .map(YtMusicSearchResponse.ArtistRef::getName)
                 .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    /** Same filter as {@link #names}, so the two lists line up entry for entry; "" where YouTube gave no channel. */
+    private static List<String> ids(List<YtMusicSearchResponse.ArtistRef> artists) {
+        return artists == null ? List.of() : artists.stream()
+                .filter(artist -> artist.getName() != null)
+                .map(artist -> artist.getChannelId() == null ? "" : artist.getChannelId())
                 .toList();
     }
 

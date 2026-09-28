@@ -14,6 +14,9 @@ import java.util.List;
  * caller having to know which shape it came from.
  *
  * @param authorNames     never null; empty when the provider named no artist.
+ * @param authorIds       never null; the YouTube Music channel id of each entry in {@code authorNames},
+ *                        {@code ""} where the provider gave none, so the two stay index-aligned. What
+ *                        the client links a name to.
  * @param imageUrl        nullable. A track inside an album inherits the album's artwork; a track
  *                        inside a playlist has none of its own and falls back to YouTube's
  *                        predictable thumbnail URL for its videoId.
@@ -24,8 +27,14 @@ import java.util.List;
  *                        instead, which is why this field is not set for a single-song lookup;
  *                        artist top songs, playlist tracks and search results carry nothing.
  */
-public record YoutubeSongInfo(String id, List<String> authorNames, String name, String imageUrl,
-                              Integer durationSeconds, String plays) {
+public record YoutubeSongInfo(String id, List<String> authorNames, List<String> authorIds, String name,
+                              String imageUrl, Integer durationSeconds, String plays) {
+
+    /** Names without ids: the shape from before ids were carried, kept so a caller with none has no padding to do. */
+    public YoutubeSongInfo(String id, List<String> authorNames, String name, String imageUrl,
+                           Integer durationSeconds, String plays) {
+        this(id, authorNames, List.of(), name, imageUrl, durationSeconds, plays);
+    }
 
     /** Every source but an album has no worded play count to give, so they keep the shorter shape. */
     public YoutubeSongInfo(String id, List<String> authorNames, String name, String imageUrl,

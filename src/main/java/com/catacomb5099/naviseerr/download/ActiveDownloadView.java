@@ -20,6 +20,10 @@ import java.util.UUID;
  *                        accepted and its metadata arriving — the request carries only an id — and
  *                        for a download whose id the provider could not resolve.
  * @param artists         never null; empty when unknown. A playlist's "artist" is its author.
+ * @param artistIds       never null; the YouTube Music channel id behind each {@code artists} entry,
+ *                        so a name can be a link. Index-aligned, but an entry is null where YouTube
+ *                        gave no id, and the list is shorter (usually empty) for a row written before
+ *                        ids were stored -- a missing entry means "no link", never "wrong artist".
  * @param imageUrl        artwork, nullable for the same reason {@code title} is.
  * @param progressPercent 0-100, the mean across the download's songs; meaningful only while
  *                        {@link #stage} is {@link DownloadStage#DOWNLOADING}. Nullable, and a null
@@ -46,6 +50,7 @@ public record ActiveDownloadView(
         DownloadType downloadType,
         String title,
         List<String> artists,
+        List<String> artistIds,
         String imageUrl,
         DownloadStage stage,
         BigDecimal progressPercent,

@@ -39,6 +39,8 @@ public final class YtMusicDetailResponse {
         private String title;
         /** A single string here, unlike the {@code artists[]} of a track inside a collection. */
         private String author;
+        /** The uploader's channel, which YouTube Music resolves to the same artist page as the browse id. */
+        private String channelId;
         /** The adapter's own name for a song's duration; collections call the same thing {@code durationSeconds}. */
         private Integer lengthSeconds;
         private String thumbnailUrl;
