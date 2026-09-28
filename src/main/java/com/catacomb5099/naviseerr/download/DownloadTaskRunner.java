@@ -447,11 +447,11 @@ public class DownloadTaskRunner {
         return switch (decision) {
             case DownloadDecision.Advance advance -> {
                 if (advance.next().searchTier() > task.searchTier()) {
-                    log.info("Song '{}' of download {} found no candidates for '{}'; retrying Soulseek "
-                                    + "with looser query '{}' (tier {} of {})",
+                    log.info("Song '{}' of download {} did not find enough with '{}' ({} file(s) kept so far); "
+                                    + "trying the next wording '{}' (tier {} of {})",
                             task.songName(), task.downloadId(), task.searchQuery(),
-                            advance.next().searchQuery(), advance.next().searchTier() + 1,
-                            SearchQueryTiers.of(task.songName()).size());
+                            advance.next().candidates().size(), advance.next().searchQuery(),
+                            advance.next().searchTier() + 1, SearchQueryTiers.of(task.songName()).size());
                 }
                 yield repository.save(advance.next(), instanceId).then();
             }
