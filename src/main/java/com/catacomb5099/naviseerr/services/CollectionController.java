@@ -30,11 +30,12 @@ public class CollectionController {
     /**
      * {@code type} is required for the same reason it is on the download route: albums and playlists
      * are two adapter endpoints, and guessing from an id prefix is a heuristic. Spring rejects an
-     * unparseable value with 400 before this runs; {@code SONG} is rejected here.
+     * unparseable value with 400 before this runs; {@code SONG} is rejected here, and so is
+     * {@code CURATED}: a suggested playlist is read on {@code GET /suggested-playlists/{category}}.
      */
     @GetMapping("/collections/{id}")
     Mono<ResponseEntity<CollectionView>> collection(@PathVariable String id, @RequestParam DownloadType type) {
-        if (id == null || id.isBlank() || !type.isCollection()) {
+        if (id == null || id.isBlank() || !type.isCollection() || type == DownloadType.CURATED) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
         Mono<YoutubeCollectionInfo> info = type == DownloadType.ALBUM

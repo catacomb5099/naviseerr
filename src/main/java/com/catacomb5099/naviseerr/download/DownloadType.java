@@ -17,10 +17,22 @@ package com.catacomb5099.naviseerr.download;
 public enum DownloadType {
     SONG,
     ALBUM,
-    PLAYLIST;
+    PLAYLIST,
+    /**
+     * One edition of a suggested playlist from the playlist curator. The id is the curator's category
+     * key ({@code 80s-indie-pop}), not a YouTube id; the track list is the edition's songs, fetched from
+     * the curator at admission the way an album's is fetched from ytmusic-adapter. Filed into the
+     * library and written out as a playlist file like a {@link #PLAYLIST}.
+     */
+    CURATED;
 
     /** True when this type resolves to a track list rather than a single track. */
     public boolean isCollection() {
         return this != SONG;
+    }
+
+    /** True for the kinds that get a playlist file in the library: a YouTube playlist and a curated edition. */
+    public boolean isPlaylist() {
+        return this == PLAYLIST || this == CURATED;
     }
 }
