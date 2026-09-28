@@ -130,13 +130,21 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void searchPoll_theArtistWordingFoundNothing_downloadsTheFewTheTitleAloneFound() {
-        // "Judas - Lady Gaga" returns zero peers: Soulseek blocks the phrase. The two files "Judas" found stand.
+    void searchPoll_theArtistWordingsFoundNothing_downloadTheFewTheTitleAloneFound() {
+        // "Judas - Lady Gaga" returns zero peers: Soulseek blocks the phrase. The two files "Judas" found
+        // travel along through the remaining wordings and stand once the last one is empty too.
+        int lastTier = SearchQueryTiers.of("Judas - Lady Gaga").size() - 1;
         DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").searchTier(1)
                 .candidates(candidates("alice", "bob")).build();
 
+        DownloadTask carried = assertInstanceOf(DownloadDecision.Advance.class, machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed, TimedOut"), List.of(), T0)).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, carried.phase());
+        assertEquals(candidates("alice", "bob"), carried.candidates(), "kept across the next wording");
+
         DownloadDecision d = machine.afterSearchPoll(
-                task, SlskdFixtures.searchState("s1", true, "Completed, TimedOut"), List.of(), T0);
+                carried.toBuilder().searchTier(lastTier).build(),
+                SlskdFixtures.searchState("s1", true, "Completed, TimedOut"), List.of(), T0);
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
@@ -248,7 +256,8 @@ class DownloadStateMachineTest {
 
     @Test
     void searchPoll_theLastWordingFoundNothing_andNothingWasKept_fails() {
-        DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").searchTier(1).build();
+        int lastTier = SearchQueryTiers.of("Judas - Lady Gaga").size() - 1;
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").searchTier(lastTier).build();
 
         DownloadDecision d = machine.afterSearchPoll(
                 task, SlskdFixtures.searchState("s1", true, "Completed, TimedOut"), List.of(), T0);
