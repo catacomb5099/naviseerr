@@ -191,7 +191,7 @@ The current authoritative design lives in `docs/superpowers/specs/2026-08-13-dur
 ## Playlist Curator (weekly refresh)
 
 `com.catacomb5099.naviseerr.curator` is the only cron job in the project. Once a week it triggers the
-separate playlist-curator service (`POST /v1/runs`), polls the run until it finishes or a 30-minute budget
+separate croissant service (`POST /v1/runs`; repo catacomb5099/croissant), polls the run until it finishes or a 30-minute budget
 runs out, and logs the outcome per category. It is off unless `CURATOR_URL` and `CURATOR_TOKEN` are both
 set and touches no table. The outbound client (`CuratorClient`) follows the `YtMusicService` pattern
 (timeout, typed error, retry of transient failures only) and also reads the curator's editions for

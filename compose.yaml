@@ -36,10 +36,10 @@ services:
   # for a token. The token is REQUIRED once you do: the curator refuses to start (and says why in its
   # logs) when CURATOR_TOKEN is empty, and the same value must be in naviseerr's environment
   # (CURATOR_TOKEN in .env covers both).
-  playlist-curator:
+  croissant:
     profiles: ["curator"]
-    build: ../playlist-curator
-    container_name: naviseerr-playlist-curator
+    build: ../croissant
+    container_name: naviseerr-croissant
     restart: unless-stopped
     environment:
       CURATOR_TOKEN: ${CURATOR_TOKEN:-}

@@ -2,7 +2,7 @@
 
 **Date:** 28-09-2026
 **Status:** Accepted, implemented in two PRs (the two read endpoints; then the "make this week's playlists now" action)
-**Builds on:** `curator-weekly-trigger-27-09-2026.md` (the weekly refresh) and the playlist-curator's HTTP API
+**Builds on:** `curator-weekly-trigger-27-09-2026.md` (the weekly refresh) and croissant's HTTP API
 
 ## Context
 

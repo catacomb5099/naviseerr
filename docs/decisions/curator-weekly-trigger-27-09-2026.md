@@ -2,7 +2,7 @@
 
 **Date:** 27-09-2026
 **Status:** Accepted, implemented in one PR (trigger + poll + logging; nothing user-facing yet)
-**Companion:** the playlist-curator repo's HTTP API (agreed contract of the same date)
+**Companion:** the croissant repo's HTTP API (the repo was called playlist-curator until 28-09-2026) (agreed contract of the same date)
 
 ## Context
 
