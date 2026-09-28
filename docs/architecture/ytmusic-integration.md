@@ -269,9 +269,8 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   advertised `itemCount`, or `0` when YouTube gives none; `CollectionView.trackCount` is the count
   of *available* tracks after the `isAvailable: false` filter. The two can legitimately differ.
 - No caching — every search hits the adapter (and, behind it, YouTube) fresh.
-- Similar artists on the artist page have no picture (`Artist.iconUrl` is `""`). Not a YouTube
-  limit: `ytmusicapi` returns a thumbnail per related artist in the same answer, but the adapter's
-  `RelatedArtist` model drops it. Expose it in the adapter, then map it in `ArtistView`; no extra call.
+- Similar artists' pictures (`Artist.iconUrl`) come from the adapter's `related[].thumbnailUrl`;
+  an adapter image older than that field leaves them `""`, no error. Rebuild the adapter image.
 - Top songs on the artist page use YouTube's predictable per-video thumbnail because the adapter's
   `TrackDto` carries no artwork; same picture the collection view uses for playlist tracks.
 - General search returns fewer results per category than the typed routes, and blanks
