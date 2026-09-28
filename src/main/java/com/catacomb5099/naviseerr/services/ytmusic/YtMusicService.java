@@ -274,24 +274,34 @@ public class YtMusicService {
         int statusCode = response.statusCode().value();
         return response.bodyToMono(JsonNode.class)
                 .defaultIfEmpty(JsonNodeFactory.instance.objectNode())
-                .<YtMusicException>map(body -> buildException(statusCode, extractMessage(body, statusCode)))
+                .<YtMusicException>map(body -> buildException(statusCode, body))
                 .doOnNext(ex -> log.warn("ytmusic-adapter returned {}: {}", statusCode, ex.getMessage()))
                 .onErrorReturn(new YtMusicUnavailableException(
                         "ytmusic-adapter returned " + statusCode + " with an unreadable error body"));
     }
 
-    private YtMusicException buildException(int statusCode, String message) {
+    private YtMusicException buildException(int statusCode, JsonNode body) {
+        String message = extractMessage(body, statusCode);
         // 400/422: we sent a bad request. 500: the adapter's own internal_auth_misuse case --
         // an adapter bug, not a transient failure. Neither is worth retrying.
         if (statusCode == 400 || statusCode == 422 || statusCode == 500) {
             return new YtMusicBadRequestException(message);
         }
-        // 404: the adapter looked and YouTube Music has no such video/album/playlist. Non-retryable
-        // in the same sense as a 400 -- retrying cannot make the id exist, and the metadata calls
-        // above lean on that distinction to tell "fail this download now" from "try again next
-        // pass". Without it, one mistyped id is re-requested every loop interval, forever.
         if (statusCode == 404) {
-            return new YtMusicBadRequestException(message);
+            // The adapter's own envelope: it looked, and YouTube Music has no such video/album/
+            // playlist. Non-retryable in the same sense as a 400 -- retrying cannot make the id
+            // exist, and the metadata calls above lean on that distinction to tell "fail this
+            // download now" from "try again next pass". Without it, one mistyped id is
+            // re-requested every loop interval, forever.
+            if (body.hasNonNull("error")) {
+                return new YtMusicBadRequestException(message);
+            }
+            // No envelope means the adapter's handler never ran: FastAPI answered
+            // {"detail":"Not Found"} because the route does not exist in the image we are talking
+            // to. That is our deployment being stale, not the id being wrong -- on 28-09-2026 an
+            // old image made every song "unknown" in the client until someone read the raw body.
+            return new YtMusicUnavailableException(
+                    "ytmusic-adapter has no route for this request; is the sidecar image up to date?");
         }
         // 429/502/504 and any other unlisted status: provider failed or is unreachable.
         return new YtMusicUnavailableException(message);
