@@ -8,7 +8,9 @@ public enum YtMusicSearchType {
     SONGS("songs"),
     ALBUMS("albums"),
     ARTISTS("artists"),
-    PLAYLISTS("playlists");
+    PLAYLISTS("playlists"),
+    /** YouTube Music's own editorial playlists (ytmusicapi's {@code featured_playlists} filter), not fan-made ones. */
+    FEATURED_PLAYLISTS("featured_playlists");
 
     private final String pathSegment;
 

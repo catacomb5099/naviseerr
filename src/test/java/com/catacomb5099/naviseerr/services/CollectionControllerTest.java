@@ -9,6 +9,7 @@ import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -22,10 +23,11 @@ class CollectionControllerTest {
 
     private final YtMusicService ytMusicService = mock(YtMusicService.class);
     private final CollectionController controller = new CollectionController(ytMusicService);
+    private final WebTestClient client = WebTestClient.bindToController(controller).build();
 
     private static YoutubeCollectionInfo album() {
         return new YoutubeCollectionInfo("MPREb_1", List.of(
-                new YoutubeSongInfo("vid1", List.of("Oasis"), "Rock 'n' Roll Star", "https://img/a.jpg", 322),
+                new YoutubeSongInfo("vid1", List.of("Oasis"), "Rock 'n' Roll Star", "https://img/a.jpg", 322, "28M plays"),
                 new YoutubeSongInfo("vid2", List.of("Oasis"), "Shakermaker", "https://img/a.jpg", null)),
                 "1994", "Definitely Maybe", List.of("Oasis"), "https://img/a.jpg");
     }
@@ -60,11 +62,13 @@ class CollectionControllerTest {
                     assertEquals(List.of("Oasis"), first.artists());
                     assertEquals("https://img/a.jpg", first.iconURL());
                     assertEquals(322, first.durationSeconds());
+                    assertEquals("28M plays", first.plays());
                     assertEquals(1, first.position(), "positions are 1-based");
 
                     CollectionView.CollectionTrackView second = view.tracks().get(1);
                     assertEquals("vid2", second.id());
                     assertNull(second.durationSeconds());
+                    assertNull(second.plays());
                     assertEquals(2, second.position());
                 })
                 .verifyComplete();
@@ -87,11 +91,30 @@ class CollectionControllerTest {
                     assertEquals(List.of("YouTube Music"), view.artists());
                     assertEquals(1, view.trackCount());
                     assertEquals("vid9", view.tracks().get(0).id());
+                    assertNull(view.tracks().get(0).plays(), "YouTube gives playlist rows no play count");
                 })
                 .verifyComplete();
 
         verify(ytMusicService).getPlaylistInfo("PL1");
         verify(ytMusicService, never()).getAlbumInfo(anyString());
+    }
+
+    @Test
+    void plays_isOnTheWireUnderThatKey_inYouTubesWording_andNullWhereYouTubeGivesNone() {
+        // The client is built against the key name, and must show the string as-is rather than
+        // parse it -- the adapter warns the figure is lossy.
+        when(ytMusicService.getAlbumInfo("MPREb_1")).thenReturn(Mono.just(album()));
+        when(ytMusicService.getPlaylistInfo("PL1")).thenReturn(Mono.just(playlist()));
+
+        client.get().uri("/collections/MPREb_1?type=ALBUM").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.tracks[0].plays").isEqualTo("28M plays")
+                .jsonPath("$.tracks[1].plays").isEmpty();
+        client.get().uri("/collections/PL1?type=PLAYLIST").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.tracks[0].plays").isEmpty();
     }
 
     @Test

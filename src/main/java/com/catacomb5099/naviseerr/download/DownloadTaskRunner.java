@@ -22,6 +22,7 @@ import reactor.core.publisher.Mono;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -177,7 +178,8 @@ public class DownloadTaskRunner {
                     // the feed joins on downloads.youtube_id, and the two can differ (a playlist
                     // requested as VL... is answered as PL...).
                     media.add(new MediaItem(download.getYoutubeId(), collection.name(),
-                            collection.authorNames(), collection.imageUrl(), null, songs.size()));
+                            collection.authorNames(), collection.authorIds(), collection.imageUrl(),
+                            null, songs.size()));
                     songs.stream().map(MediaItem::of).forEach(media::add);
                     return repository.upsertMedia(media)
                             .then(repository.createTasks(download.getDownloadId(), tasks, now))
@@ -185,12 +187,12 @@ public class DownloadTaskRunner {
                                 if (admitted > 0) {
                                     log.info("Admitted download {} ({} '{}') as {} task(s)",
                                             download.getDownloadId(), download.getDownloadType(),
-                                            collection.name(), tasks.size());
+                                            collection.name(), admitted);
                                 } else {
                                     // The guards in CREATE_TASKS_SQL held, so something else had
                                     // already admitted this row. Nothing to fix, worth seeing.
-                                    log.debug("Download {} was already admitted; no tasks created",
-                                            download.getDownloadId());
+                                    log.debug("Download {} was already admitted or is no longer "
+                                            + "pending; no tasks created", download.getDownloadId());
                                 }
                             })
                             .then();
@@ -241,7 +243,7 @@ public class DownloadTaskRunner {
         return switch (download.getDownloadType()) {
             case SONG -> ytMusicService.getSongInfo(id)
                     .map(song -> new YoutubeCollectionInfo(song.id(), List.of(song), null,
-                            song.name(), song.authorNames(), song.imageUrl()));
+                            song.name(), song.authorNames(), song.authorIds(), song.imageUrl()));
             case ALBUM -> ytMusicService.getAlbumInfo(id);
             case PLAYLIST -> ytMusicService.getPlaylistInfo(id);
             case CURATED -> curatorClient.getEdition(id).map(edition -> curatedCollection(id, edition));
@@ -251,16 +253,19 @@ public class DownloadTaskRunner {
     /**
      * An edition of a suggested playlist in the shape every other collection arrives in. The curator
      * stores no artwork, so every song gets YouTube's predictable thumbnail and the playlist borrows
-     * its first song's; the author line says who made the list.
+     * its first song's; the author line says who made the list. The curator knows artists by name
+     * only, so every id is blank and the names stay plain text.
      */
     static YoutubeCollectionInfo curatedCollection(String category, CuratorEdition edition) {
         List<YoutubeSongInfo> songs = edition.tracks().stream()
                 .filter(track -> track.videoId() != null)
-                .map(track -> new YoutubeSongInfo(track.videoId(), track.artists(), track.title(),
-                        YtMusicService.fallbackThumbnail(track.videoId()), null))
+                .map(track -> new YoutubeSongInfo(track.videoId(), track.artists(),
+                        Collections.nCopies(track.artists().size(), ""), track.title(),
+                        YtMusicService.fallbackThumbnail(track.videoId()), null, null))
                 .toList();
         String image = songs.isEmpty() ? null : songs.getFirst().imageUrl();
-        return new YoutubeCollectionInfo(category, songs, null, edition.title(), List.of("Naviseerr"), image);
+        return new YoutubeCollectionInfo(category, songs, null, edition.title(), List.of("Naviseerr"),
+                List.of(""), image);
     }
 
     /**
@@ -447,13 +452,29 @@ public class DownloadTaskRunner {
         return switch (decision) {
             case DownloadDecision.Advance advance -> {
                 if (advance.next().searchTier() > task.searchTier()) {
-                    log.info("Song '{}' of download {} found no candidates for '{}'; retrying Soulseek "
-                                    + "with looser query '{}' (tier {} of {})",
+                    log.info("Song '{}' of download {} did not find enough with '{}' ({} file(s) kept so far); "
+                                    + "trying the next wording '{}' (tier {} of {})",
                             task.songName(), task.downloadId(), task.searchQuery(),
-                            advance.next().searchQuery(), advance.next().searchTier() + 1,
-                            SearchQueryTiers.of(task.songName()).size());
+                            advance.next().candidates().size(), advance.next().searchQuery(),
+                            advance.next().searchTier() + 1, SearchQueryTiers.of(task.songName()).size());
                 }
-                yield repository.save(advance.next(), instanceId).then();
+                yield repository.save(advance.next(), instanceId)
+                        // Zero rows means the row went terminal under us -- cancelled by the user while this
+                        // step was enqueueing. slskd now has a transfer nobody tracks; stop it. A crash before
+                        // this line still orphans one (accepted in the 13-08-2026 ADR).
+                        .flatMap(rows -> rows == 0
+                                && advance.next().phase() == DownloadPhase.DOWNLOAD_POLL
+                                && advance.next().slskdTransferId() != null
+                                ? slskdService.cancelDownload(advance.next().slskdUsername(), advance.next().slskdTransferId())
+                                        .doOnSuccess(v -> log.info("Cancelled transfer {} from '{}' that started after song {} was cancelled",
+                                                advance.next().slskdTransferId(), advance.next().slskdUsername(), task.taskId()))
+                                        .onErrorResume(error -> {
+                                            log.warn("Could not cancel orphaned transfer {} from '{}' for song {}",
+                                                    advance.next().slskdTransferId(), advance.next().slskdUsername(), task.taskId(), error);
+                                            return Mono.empty();
+                                        })
+                                : Mono.empty())
+                        .then();
             }
             case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {
@@ -470,7 +491,7 @@ public class DownloadTaskRunner {
                 // Only this SONG. The download's own status is settled by concludeDownloads() at the
                 // end of the pass, once every one of its songs is terminal.
                 yield downloadService.finishTask(task.taskId(), terminal.status(),
-                                terminal.failureCode(), clock.instant())
+                                terminal.failureCode(), clock.instant(), instanceId)
                         // rows > 0 is the first, real finish -- the same guard that stops a duplicate
                         // finish re-stamping finished_at also stops it re-running the cleanup. A song
                         // that failed for good will not be retried, so slskd's resume-able partial

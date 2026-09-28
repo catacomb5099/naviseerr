@@ -53,40 +53,41 @@ public class DownloadTaskRepository {
             """;
 
     /**
-     * Creates every task row for one download and admits it, in one statement. One row per song:
-     * one for a song request, N for an album or playlist.
+     * Creates every task row for one download and admits it, in one statement. One row per song.
+     *
+     * <p>The status flip comes FIRST and the insert depends on it. The {@code UPDATE} takes the row
+     * lock, so a cancel (or admission failure) that lands in the gap between selecting the download
+     * and running this statement wins or loses cleanly: under READ COMMITTED an {@code UPDATE} that
+     * waited on the row re-checks {@code status = 'PENDING'} against the committed version, finds it
+     * false, and the insert then has nothing to depend on. The old order (insert first, then flip)
+     * left a finished download with live song rows the loop would search for.
      *
      * <p>{@code unnest} of two parallel arrays rather than a multi-row VALUES list, because the song
-     * count is only known at runtime and a statement whose text depends on it cannot be a constant,
-     * cannot be prepared once, and puts string building on the write path.
+     * count is only known at runtime. {@code WITH ORDINALITY} numbers the songs in the provider's order.
+     * {@code song_name} is the Soulseek query wording, not a display title; see V6.
      *
-     * <p>The guards make it a no-op rather than a duplicator if it somehow runs twice for the same
-     * download: {@code status = 'PENDING'} has already been consumed by the first run, and the
-     * {@code NOT EXISTS} stops the insert itself.
-     *
-     * <p>{@code WITH ORDINALITY} numbers the songs in the order the provider listed them, which is
-     * the collection's track order — the only order a per-song view should ever show an album in.
-     * {@code song_name} here is the Soulseek query wording, not a display title; see V6.
+     * @return task rows created: N for an admitted N-song download, 0 when it was no longer PENDING
+     *         or already had songs
      */
     private static final String CREATE_TASKS_SQL = """
-            WITH created AS (
-                INSERT INTO download_tasks
-                    (task_id, download_id, youtube_id, song_name, position, phase,
-                     phase_entered_at, next_attempt_at)
-                SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, s.position,
-                       'SEARCH_INIT', :now, :now
-                  FROM unnest(:youtubeIds::text[], :songNames::text[])
-                       WITH ORDINALITY AS s(youtube_id, song_name, position)
-                 WHERE NOT EXISTS (SELECT 1 FROM download_tasks t
+            WITH admitted AS (
+                UPDATE downloads
+                   SET status = 'IN_PROGRESS',
+                       admitted_at = :now
+                 WHERE download_id = :downloadId
+                   AND status = 'PENDING'
+                   AND NOT EXISTS (SELECT 1 FROM download_tasks t
                                     WHERE t.download_id = :downloadId)
                 RETURNING download_id
             )
-            UPDATE downloads
-               SET status = 'IN_PROGRESS',
-                   admitted_at = :now
-             WHERE download_id = :downloadId
-               AND status = 'PENDING'
-               AND EXISTS (SELECT 1 FROM created)
+            INSERT INTO download_tasks
+                (task_id, download_id, youtube_id, song_name, position, phase,
+                 phase_entered_at, next_attempt_at)
+            SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, s.position,
+                   'SEARCH_INIT', :now, :now
+              FROM unnest(:youtubeIds::text[], :songNames::text[])
+                   WITH ORDINALITY AS s(youtube_id, song_name, position)
+             WHERE EXISTS (SELECT 1 FROM admitted)
             """;
 
     /**
@@ -103,17 +104,22 @@ public class DownloadTaskRepository {
      * lookup does.
      */
     private static final String UPSERT_MEDIA_SQL = """
-            INSERT INTO media_items (youtube_id, title, artists, image_url, duration_seconds, track_count)
-            SELECT x."youtubeId", x.title, COALESCE(x.artists, '{}'), x."imageUrl",
-                   x."durationSeconds", x."trackCount"
+            INSERT INTO media_items (youtube_id, title, artists, artist_ids, image_url, duration_seconds,
+                                     track_count)
+            SELECT x."youtubeId", x.title, COALESCE(x.artists, '{}'), COALESCE(x."artistIds", '{}'),
+                   x."imageUrl", x."durationSeconds", x."trackCount"
               FROM jsonb_to_recordset(:items::jsonb)
-                   AS x("youtubeId" text, title text, artists text[], "imageUrl" text,
-                        "durationSeconds" int, "trackCount" int)
+                   AS x("youtubeId" text, title text, artists text[], "artistIds" text[],
+                        "imageUrl" text, "durationSeconds" int, "trackCount" int)
              WHERE x."youtubeId" IS NOT NULL
             ON CONFLICT (youtube_id) DO UPDATE
                SET title            = COALESCE(EXCLUDED.title, media_items.title),
                    artists          = CASE WHEN EXCLUDED.artists = '{}' THEN media_items.artists
                                            ELSE EXCLUDED.artists END,
+                   -- Keyed on the NAMES, not the ids: ids belong with the names they came with, so
+                   -- they follow them -- kept together, replaced together.
+                   artist_ids       = CASE WHEN EXCLUDED.artists = '{}' THEN media_items.artist_ids
+                                           ELSE EXCLUDED.artist_ids END,
                    image_url        = COALESCE(EXCLUDED.image_url, media_items.image_url),
                    duration_seconds = COALESCE(EXCLUDED.duration_seconds, media_items.duration_seconds),
                    track_count      = COALESCE(EXCLUDED.track_count, media_items.track_count),
@@ -240,6 +246,92 @@ public class DownloadTaskRepository {
                AND status = 'PENDING'
             """;
 
+    /**
+     * Cancels every unfinished song of a download, or one song when {@code :taskId} is given. The SET
+     * is {@link DownloadService#FINISH_TASK_SQL}'s with the reason fixed to CANCELLED; the guard is the
+     * same "still unfinished" test, and deliberately NOT a lease test: a step that is mid-flight will
+     * find the row finished when it comes back and write nothing (SAVE_SQL/FINISH_TASK_SQL guards).
+     * RETURNING hands back what the caller needs to stop the transfer in slskd and remove partial
+     * files. Bind the whole-download case with {@code bindNull("taskId", UUID.class)}.
+     */
+    private static final String CANCEL_SQL = """
+            UPDATE download_tasks
+               SET phase = 'FAILED',
+                   failure_reason = 'CANCELLED',
+                   phase_entered_at = :now,
+                   finished_at = :now,
+                   updated_at = now(),
+                   lease_owner = NULL,
+                   lease_expires_at = NULL
+             WHERE download_id = :id
+               AND phase NOT IN ('SUCCEEDED', 'FAILED')
+               AND (:taskId::uuid IS NULL OR task_id = :taskId)
+            RETURNING task_id, download_id, candidates, candidate_index,
+                      slskd_username, slskd_filename, slskd_transfer_id
+            """;
+
+    /**
+     * Retries a finished download: every FAILED song (cancelled ones included -- "retry" means "the
+     * ones I did not get") goes back to the start of its pipeline, in place, and the download reopens.
+     * One statement, so a double-click's second request finds no FAILED rows left, the reset CTE is
+     * empty, and the outer UPDATE matches nothing: rows updated is 0 or 1 and IS the idempotence.
+     *
+     * <p>The previous attempt's peers and error are not kept on the row; apply() logged them when the
+     * song failed. A second row per song would break every COUNT the cards read.
+     *
+     * <p>{@code failure_reason = NULL} on downloads: the feed prefers the download's own reason over
+     * its songs', so a stale one would outrank the fresh rows. {@code organised_at = NULL}: the playlist
+     * file is rewritten whole once the retried songs are filed; songs already filed keep library_path.
+     */
+    private static final String RETRY_SQL = """
+            WITH reset AS (
+                UPDATE download_tasks
+                   SET phase = 'SEARCH_INIT',
+                       phase_entered_at = :now,
+                       next_attempt_at = :now,
+                       finished_at = NULL,
+                       failure_reason = NULL,
+                       last_error = NULL,
+                       search_id = NULL,
+                       search_tier = 0,
+                       candidates = '[]',
+                       candidate_index = 0,
+                       retry_index = 0,
+                       slskd_username = NULL,
+                       slskd_filename = NULL,
+                       slskd_transfer_id = NULL,
+                       progress_percent = 0,
+                       updated_at = now(),
+                       lease_owner = NULL,
+                       lease_expires_at = NULL
+                 WHERE download_id = :id
+                   AND phase = 'FAILED'
+                   AND EXISTS (SELECT 1 FROM downloads
+                                WHERE download_id = :id
+                                  AND status IN ('FAILED', 'PARTIAL_SUCCESS'))
+                RETURNING task_id
+            )
+            UPDATE downloads
+               SET status = 'IN_PROGRESS',
+                   failure_reason = NULL,
+                   finished_at = NULL,
+                   organised_at = NULL
+             WHERE download_id = :id
+               AND status IN ('FAILED', 'PARTIAL_SUCCESS')
+               AND EXISTS (SELECT 1 FROM reset)
+            """;
+
+    /** A download that failed before it had any songs (bad id, or cancelled while queued) goes back to PENDING; admission fetches the track list again. */
+    private static final String READMIT_SQL = """
+            UPDATE downloads
+               SET status = 'PENDING',
+                   failure_reason = NULL,
+                   finished_at = NULL
+             WHERE download_id = :id
+               AND status = 'FAILED'
+               AND NOT EXISTS (SELECT 1 FROM download_tasks WHERE download_id = :id)
+            """;
+
     // Counts DOWNLOADS in flight, not tasks, so one large collection can't lock out admission.
     private static final String COUNT_ACTIVE_DOWNLOADS_SQL = """
             SELECT count(*) AS total FROM downloads WHERE status = 'IN_PROGRESS'
@@ -328,6 +420,9 @@ public class DownloadTaskRepository {
                SET organised_at = :now
              WHERE download_id = :id
                AND organised_at IS NULL
+               -- A retry between downloadsToFinalise's SELECT and this stamp reopens the download;
+               -- stamping it then would leave the playlist file short until the next retry.
+               AND status IN ('SUCCEEDED', 'PARTIAL_SUCCESS')
             """;
 
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
@@ -351,7 +446,8 @@ public class DownloadTaskRepository {
 
     /**
      * @param tasks in the collection's track order; their index becomes {@code position}
-     * @return rows updated: 1 when the download was admitted, 0 when it had already been
+     * @return task rows created: N for an admitted N-song download, 0 when the download was no
+     *         longer PENDING or already had songs
      */
     public Mono<Long> createTasks(UUID downloadId, List<DownloadTask> tasks, Instant now) {
         if (tasks.isEmpty()) {
@@ -405,6 +501,34 @@ public class DownloadTaskRepository {
                 .bind("now", now)
                 .fetch()
                 .rowsUpdated();
+    }
+
+    /** The songs this call cancelled, with what stopping them in slskd and on disk needs. Empty when nothing was left to cancel. */
+    public Flux<DownloadTask> cancelTasks(UUID downloadId, UUID taskId, Instant now) {
+        DatabaseClient.GenericExecuteSpec spec = client.sql(CANCEL_SQL)
+                .bind("id", downloadId)
+                .bind("now", now);
+        spec = taskId == null ? spec.bindNull("taskId", UUID.class) : spec.bind("taskId", taskId);
+        return spec.map((row, meta) -> DownloadTask.builder()
+                        .taskId(row.get("task_id", UUID.class))
+                        .downloadId(row.get("download_id", UUID.class))
+                        .candidates(readCandidates(row.get("candidates", String.class)))
+                        .candidateIndex(row.get("candidate_index", Integer.class))
+                        .slskdUsername(row.get("slskd_username", String.class))
+                        .slskdFilename(row.get("slskd_filename", String.class))
+                        .slskdTransferId(row.get("slskd_transfer_id", String.class))
+                        .build())
+                .all();
+    }
+
+    /** 1 when the download's FAILED songs were reset and it reopened; 0 when there was nothing to retry. See RETRY_SQL. */
+    public Mono<Long> retry(UUID downloadId, Instant now) {
+        return client.sql(RETRY_SQL).bind("id", downloadId).bind("now", now).fetch().rowsUpdated();
+    }
+
+    /** 1 when a download that failed before it had songs went back to PENDING; 0 otherwise. */
+    public Mono<Long> readmit(UUID downloadId) {
+        return client.sql(READMIT_SQL).bind("id", downloadId).fetch().rowsUpdated();
     }
 
     /** Finished songs still to be moved into the library, oldest first. See {@link LibraryOrganiser}. */

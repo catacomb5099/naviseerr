@@ -39,6 +39,8 @@ public final class YtMusicDetailResponse {
         private String title;
         /** A single string here, unlike the {@code artists[]} of a track inside a collection. */
         private String author;
+        /** The uploader's channel, which YouTube Music resolves to the same artist page as the browse id. */
+        private String channelId;
         /** The adapter's own name for a song's duration; collections call the same thing {@code durationSeconds}. */
         private Integer lengthSeconds;
         private String thumbnailUrl;
@@ -116,6 +118,11 @@ public final class YtMusicDetailResponse {
         private List<YtMusicSearchResponse.ArtistRef> artists;
         private Integer durationSeconds;
         /**
+         * YouTube's own wording ("28M plays"). Present on album tracks, null on playlist and top-song
+         * rows. Passed through, never parsed: the adapter warns the figure is lossy upstream.
+         */
+        private String views;
+        /**
          * Playlists can carry an unavailable track (region-blocked, deleted). Null on album
          * responses, so only an explicit {@code false} means "do not try this one".
          */
@@ -159,7 +166,10 @@ public final class YtMusicDetailResponse {
         private String thumbnailUrl;
     }
 
-    /** One entry of an artist's {@code related[]}. No thumbnail yet: ytmusicapi returns one, the adapter drops it. */
+    /**
+     * One entry of an artist's {@code related[]}. {@code thumbnailUrl} is null from an adapter older
+     * than the one that started passing it through (or when YouTube has none), never an error.
+     */
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
@@ -168,5 +178,6 @@ public final class YtMusicDetailResponse {
     public static class RelatedArtist {
         private String browseId;
         private String title;
+        private String thumbnailUrl;
     }
 }

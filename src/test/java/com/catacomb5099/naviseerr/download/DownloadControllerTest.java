@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -12,6 +13,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -43,14 +45,96 @@ class DownloadControllerTest {
 
     private static ActiveDownloadView view() {
         return new ActiveDownloadView(UUID.randomUUID(), "vid-1", DownloadType.SONG, "song",
-                List.of("artist"), "https://img/1.jpg", DownloadStage.DOWNLOADING,
-                new BigDecimal("43.00"), 1, 0, 0, NOW, NOW, NOW, null, null);
+                List.of("artist", "nobody"), Arrays.asList("UC-artist", null), "https://img/1.jpg",
+                DownloadStage.DOWNLOADING,
+                new BigDecimal("43.00"), 1, 0, 0, 0, NOW, NOW, NOW, null, null);
     }
 
     private static DownloadSongView song() {
         return new DownloadSongView(UUID.randomUUID(), "vid-1", 1, "song", List.of("artist"),
-                "https://img/1.jpg", 200, DownloadStage.DOWNLOADING, new BigDecimal("43.00"), null,
+                List.of("UC-artist"), "https://img/1.jpg", 200, DownloadStage.DOWNLOADING, new BigDecimal("43.00"), null,
                 NOW, NOW, null, 3, 0, 0, "alice", "music/alice/song.flac", null);
+    }
+
+    // ---- cancel ----------------------------------------------------------------------------------
+
+    @Test
+    void cancel_whenSomethingWasCancelled_is200WithTheFreshCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.cancel(card.downloadId(), null, NOW)).thenReturn(Mono.just(2L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.cancel(card.downloadId(), null).block();
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void cancel_whenNothingWasLeftToCancel_is409WithTheCurrentCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.cancel(card.downloadId(), null, NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.cancel(card.downloadId(), null).block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(card, response.getBody());   // the client applies the 409 body
+    }
+
+    @Test
+    void cancel_ofAnUnknownDownload_is404() {
+        UUID unknown = UUID.randomUUID();
+        when(downloadService.cancel(unknown, null, NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(unknown))).thenReturn(Flux.empty());
+
+        assertEquals(HttpStatus.NOT_FOUND, controller.cancel(unknown, null).block().getStatusCode());
+    }
+
+    @Test
+    void cancel_ofOneSong_passesTheTaskIdThrough() {
+        ActiveDownloadView card = view();
+        UUID taskId = UUID.randomUUID();
+        when(downloadService.cancel(card.downloadId(), taskId, NOW)).thenReturn(Mono.just(1L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        assertEquals(HttpStatus.OK, controller.cancel(card.downloadId(), taskId).block().getStatusCode());
+        verify(downloadService).cancel(card.downloadId(), taskId, NOW);
+    }
+
+    // ---- retry -----------------------------------------------------------------------------------
+
+    @Test
+    void retry_whenSomethingWasRetried_is202WithTheFreshCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.retry(card.downloadId(), NOW)).thenReturn(Mono.just(1L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.retry(card.downloadId()).block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void retry_whenNothingToRetry_is409WithTheCurrentCard() {
+        ActiveDownloadView card = view();
+        when(downloadService.retry(card.downloadId(), NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<ActiveDownloadView> response = controller.retry(card.downloadId()).block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void retry_ofAnUnknownDownload_is404() {
+        UUID unknown = UUID.randomUUID();
+        when(downloadService.retry(unknown, NOW)).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(unknown))).thenReturn(Flux.empty());
+
+        assertEquals(HttpStatus.NOT_FOUND, controller.retry(unknown).block().getStatusCode());
     }
 
     // ---- one download, every song ----------------------------------------------------------------
@@ -67,6 +151,25 @@ class DownloadControllerTest {
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(card, response.getBody().download());
         assertEquals(List.of(song), response.getBody().songs());
+    }
+
+    @Test
+    void downloadDetail_putsOneArtistIdPerName_onTheWire_nullWhereThereIsNone() {
+        ActiveDownloadView card = view();
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+        when(activeDownloadRepository.findSongs(card.downloadId())).thenReturn(Flux.just(song()));
+
+        // Through the JSON layer on purpose: the key name and the kept null ARE the client contract.
+        WebTestClient.bindToController(controller).build()
+                .get().uri("/downloads/" + card.downloadId())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.download.artists.length()").isEqualTo(2)
+                .jsonPath("$.download.artistIds.length()").isEqualTo(2)
+                .jsonPath("$.download.artistIds[0]").isEqualTo("UC-artist")
+                .jsonPath("$.download.artistIds[1]").isEmpty()
+                .jsonPath("$.songs[0].artistIds[0]").isEqualTo("UC-artist");
     }
 
     @Test
@@ -214,5 +317,48 @@ class DownloadControllerTest {
                 .limit(DownloadController.MAX_RESOLVE_IDS).toList();
 
         assertEquals(HttpStatus.OK, controller.downloadsByIds(exactly).block().getStatusCode());
+    }
+
+    // ---- the history table's type filter -------------------------------------------------------
+
+    private static final AllDownloadsResponse EMPTY_PAGE = new AllDownloadsResponse(List.of(), 0);
+
+    @Test
+    void allDownloads_withNoType_asksForEverything() {
+        when(activeDownloadRepository.findAll(any(), any(), any())).thenReturn(Mono.just(EMPTY_PAGE));
+
+        controller.allDownloads(20, 1, null).block();
+
+        verify(activeDownloadRepository).findAll(20, 1, List.of());
+    }
+
+    @Test
+    void allDownloads_passesTheTypeThrough() {
+        when(activeDownloadRepository.findAll(any(), any(), any())).thenReturn(Mono.just(EMPTY_PAGE));
+
+        controller.allDownloads(20, 1, DownloadType.SONG).block();
+
+        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.SONG));
+    }
+
+    @Test
+    void allDownloads_playlistAlsoMeansCurated() {
+        when(activeDownloadRepository.findAll(any(), any(), any())).thenReturn(Mono.just(EMPTY_PAGE));
+
+        controller.allDownloads(20, 1, DownloadType.PLAYLIST).block();
+
+        // To the user a suggested playlist is a playlist; the client's Playlists pill already folds
+        // the two, so the server's filter has to agree or the pill shows a shorter list than the count.
+        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED));
+    }
+
+    @Test
+    void allDownloads_withAnUnknownType_is400_beforeTheQueryRuns() {
+        // Through the HTTP layer, because the rejection is Spring's enum conversion, not this class.
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+
+        http.get().uri("/downloads/all?type=MIXTAPE").exchange().expectStatus().isBadRequest();
+
+        verify(activeDownloadRepository, never()).findAll(any(), any(), any());
     }
 }

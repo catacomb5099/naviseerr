@@ -16,6 +16,7 @@ import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -69,7 +70,7 @@ class DownloadTaskRunnerTest {
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.empty());
         when(repository.save(any(), any())).thenReturn(Mono.just(1L));
-        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(downloadService.finishTask(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskdService.getAllSearches()).thenReturn(Flux.empty());
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
@@ -125,7 +126,7 @@ class DownloadTaskRunnerTest {
         verify(organiser).deletePartials(task);
 
         // A duplicate finish (expired lease, re-stepped row) updates no row and cleans nothing again.
-        when(downloadService.finishTask(any(), any(), any(), any())).thenReturn(Mono.just(0L));
+        when(downloadService.finishTask(any(), any(), any(), any(), any())).thenReturn(Mono.just(0L));
         runner.pass().block();
         verify(organiser, times(1)).deletePartials(task);
     }
@@ -361,7 +362,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository).save(eq(next), any());
-        verify(downloadService, never()).finishTask(any(), any(), any(), any());
+        verify(downloadService, never()).finishTask(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -387,8 +388,11 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         // The TASK's id, not the download's: one song of a collection finishing is not the
-        // collection finishing.
-        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any());
+        // collection finishing. And the owner the claim stamped, so the finish only lands while
+        // this step still holds the lease.
+        ArgumentCaptor<String> owner = ArgumentCaptor.forClass(String.class);
+        verify(repository).claimDueTasks(anyInt(), owner.capture(), any(), any(), anyBoolean(), anyInt());
+        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any(), eq(owner.getValue()));
         verify(repository, never()).save(any(), any());
     }
 
@@ -421,6 +425,34 @@ class DownloadTaskRunnerTest {
         verify(repository).save(any(), any());
     }
 
+    @Test
+    void theSaveAfterDownloadInitIsRefused_cancelsTheOrphanedTransferInSlskd() {
+        DownloadTask task = downloadInit(candidates("alice"), 0, 0);
+        DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
+                .slskdUsername("alice").slskdTransferId("t-9").build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+        when(repository.save(any(), any())).thenReturn(Mono.just(0L));   // the row was cancelled meanwhile
+        when(slskdService.cancelDownload("alice", "t-9")).thenReturn(Mono.empty());
+
+        runner.pass().block();
+
+        verify(slskdService).cancelDownload("alice", "t-9");
+    }
+
+    @Test
+    void theSaveAfterDownloadInitIsAccepted_leavesTheTransferRunning() {
+        DownloadTask task = downloadInit(candidates("alice"), 0, 0);
+        DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
+                .slskdUsername("alice").slskdTransferId("t-9").build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+
+        runner.pass().block();
+
+        verify(slskdService, never()).cancelDownload(any(), any());
+    }
+
     // ---- metadata gathering --------------------------------------------------------------------
 
     @Test
@@ -428,8 +460,8 @@ class DownloadTaskRunnerTest {
         Download request = pendingRequest(DownloadType.SONG, "vid-1");
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
         when(ytMusicService.getSongInfo("vid-1"))
-                .thenReturn(Mono.just(new YoutubeSongInfo("vid-1", List.of("Rick Astley"),
-                        "Never Gonna Give You Up", "https://img/rick.jpg", 213)));
+                .thenReturn(Mono.just(new YoutubeSongInfo("vid-1", List.of("Rick Astley"), List.of("UC-rick"),
+                        "Never Gonna Give You Up", "https://img/rick.jpg", 213, null)));
 
         runner.pass().block();
 
@@ -447,7 +479,8 @@ class DownloadTaskRunnerTest {
                 .anyMatch(m -> m.youtubeId().equals("vid-1")
                         && m.title().equals("Never Gonna Give You Up")
                         && m.imageUrl().equals("https://img/rick.jpg")
-                        && m.artists().equals(List.of("Rick Astley")))));
+                        && m.artists().equals(List.of("Rick Astley"))
+                        && m.artistIds().equals(List.of("UC-rick")))));
     }
 
     @Test
@@ -475,16 +508,19 @@ class DownloadTaskRunnerTest {
                 eq(T0));
         // The playlist's own media row is keyed by the category the REQUEST carried, named after the
         // edition, credited to Naviseerr and pictured with its first song; every song gets YouTube's
-        // predictable thumbnail because the curator stores none.
+        // predictable thumbnail because the curator stores none. Nor does it store channel ids, so
+        // every name gets a blank one and renders as plain text.
         verify(repository).upsertMedia(argThat(items -> items.size() == 3
                 && items.stream().anyMatch(m -> m.youtubeId().equals("80s-indie-pop")
                         && m.title().equals("80s indie pop")
                         && m.artists().equals(List.of("Naviseerr"))
+                        && m.artistIds().equals(List.of(""))
                         && m.trackCount() == 2
                         && m.imageUrl().equals("https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg"))
                 && items.stream().anyMatch(m -> m.youtubeId().equals("ewnLtRyqAzo")
                         && m.title().equals("Decomposing Trees")
                         && m.artists().equals(List.of("Galaxie 500"))
+                        && m.artistIds().equals(List.of(""))
                         && m.imageUrl().equals("https://i.ytimg.com/vi/ewnLtRyqAzo/hqdefault.jpg"))));
     }
 
@@ -552,7 +588,7 @@ class DownloadTaskRunnerTest {
                         new YoutubeSongInfo("v1", List.of("A"), "one", "https://img/a.jpg", 100),
                         new YoutubeSongInfo("v2", List.of("A"), "two", "https://img/a.jpg", 100),
                         new YoutubeSongInfo("v3", List.of("A"), "three", "https://img/a.jpg", 100)),
-                        "1999", "The Album", List.of("A"), "https://img/a.jpg")));
+                        "1999", "The Album", List.of("A"), List.of("UC-a"), "https://img/a.jpg")));
 
         runner.pass().block();
 
@@ -563,6 +599,7 @@ class DownloadTaskRunnerTest {
         verify(repository).upsertMedia(argThat(items -> items.size() == 4
                 && items.getFirst().youtubeId().equals("MPREb_1")
                 && items.getFirst().title().equals("The Album")
+                && items.getFirst().artistIds().equals(List.of("UC-a"))
                 && items.getFirst().trackCount() == 3));
     }
 

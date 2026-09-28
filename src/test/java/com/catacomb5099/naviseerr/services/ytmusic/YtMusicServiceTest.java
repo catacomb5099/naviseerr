@@ -204,6 +204,19 @@ class YtMusicServiceTest {
     }
 
     @Test
+    void getResults_withACallerChosenLimit_passesItThrough_andHitsTheFeaturedPlaylistsRoute() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"query\":\"Oasis\",\"type\":\"featured_playlists\",\"count\":0,\"items\":[]}"));
+
+        StepVerifier.create(service.getResults("Oasis", YtMusicSearchType.FEATURED_PLAYLISTS, 20))
+                .assertNext(response -> assertTrue(response.getPlaylists().isEmpty()))
+                .verifyComplete();
+
+        assertEquals("/v1/search/featured_playlists?q=Oasis&limit=20", server.takeRequest().getPath());
+    }
+
+    @Test
     void getResults_generalSearch_issuesExactlyOneUnfilteredRequest() throws InterruptedException {
         server.enqueue(new MockResponse().setResponseCode(200)
                 .addHeader("Content-Type", "application/json")
@@ -375,9 +388,10 @@ class YtMusicServiceTest {
               "tracks": [
                 {"videoId": "v1", "title": "Rock 'n' Roll Star",
                  "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 1,
-                 "durationSeconds": 322},
+                 "durationSeconds": 322, "views": "28M plays"},
                 {"videoId": "v2", "title": "Shakermaker",
-                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 2}
+                 "artists": [{"name": "Oasis", "channelId": "UC1"}, {"name": "Bonehead", "channelId": null}],
+                 "trackNumber": 2}
               ]
             }
             """;
@@ -392,7 +406,7 @@ class YtMusicServiceTest {
               "thumbnailUrl": "https://example.com/playlist.jpg",
               "tracks": [
                 {"videoId": "v1", "title": "Wonderwall",
-                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "isAvailable": true},
+                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "isAvailable": true, "views": null},
                 {"videoId": "v2", "title": "Common People",
                  "artists": [{"name": "Pulp", "channelId": "UC3"}], "isAvailable": null},
                 {"videoId": "v3", "title": "Taken Down",
@@ -413,6 +427,8 @@ class YtMusicServiceTest {
                     // The whole point of the flattening: callers never have to know that a song
                     // response says `author` where a collection's tracks say `artists`.
                     assertEquals(List.of("Oasis"), song.authorNames());
+                    // The uploader's channel, which is the artist page the client links the name to.
+                    assertEquals(List.of("UCmMUZbaYdNH0bEd1PAlAqsA"), song.authorIds());
                     assertEquals("https://example.com/song.jpg", song.imageUrl());
                     assertEquals(259, song.durationSeconds(),
                             "the adapter calls it lengthSeconds on a song; the pipeline has one name");
@@ -442,7 +458,10 @@ class YtMusicServiceTest {
                 .setBody("{\"videoId\":\"v1\",\"title\":\"Untitled\",\"author\":null}"));
 
         StepVerifier.create(service.getSongInfo("v1"))
-                .assertNext(song -> assertEquals(List.of(), song.authorNames()))
+                .assertNext(song -> {
+                    assertEquals(List.of(), song.authorNames());
+                    assertEquals(List.of(), song.authorIds());
+                })
                 .verifyComplete();
     }
 
@@ -457,16 +476,25 @@ class YtMusicServiceTest {
                     assertEquals("Definitely Maybe", album.name());
                     assertEquals("1994", album.year());
                     assertEquals(List.of("Oasis"), album.authorNames());
+                    assertEquals(List.of("UCmMUZbaYdNH0bEd1PAlAqsA"), album.authorIds());
                     // One task row per entry here, so a dropped track is a song the user asked for
                     // and never gets.
                     assertEquals(List.of("v1", "v2"),
                             album.songs().stream().map(s -> s.id()).toList());
                     assertEquals("Rock 'n' Roll Star", album.songs().getFirst().name());
+                    assertEquals(List.of("UC1"), album.songs().getFirst().authorIds());
+                    // A name with no channel keeps its slot as "", so ids[i] is always names[i].
+                    assertEquals(List.of("Oasis", "Bonehead"), album.songs().get(1).authorNames());
+                    assertEquals(List.of("UC1", ""), album.songs().get(1).authorIds());
                     assertEquals("https://example.com/album.jpg", album.imageUrl());
                     // An album's tracks ARE the album: they inherit its cover rather than falling
                     // back to a letterboxed video frame.
                     assertEquals("https://example.com/album.jpg", album.songs().getFirst().imageUrl());
                     assertEquals(322, album.songs().getFirst().durationSeconds());
+                    // YouTube's wording, passed through: the adapter says the figure is lossy, so
+                    // nobody downstream may turn "28M plays" into a number.
+                    assertEquals("28M plays", album.songs().getFirst().plays());
+                    assertNull(album.songs().get(1).plays(), "absent on the wire is null, not an error");
                 })
                 .verifyComplete();
 
@@ -484,12 +512,16 @@ class YtMusicServiceTest {
                     assertEquals("PL123", playlist.id());
                     assertEquals("Britpop Essentials", playlist.name());
                     assertEquals(List.of("YouTube Music"), playlist.authorNames());
+                    assertEquals(List.of("UC2"), playlist.authorIds());
+                    assertEquals(List.of("UC1"), playlist.songs().getFirst().authorIds());
                     assertNull(playlist.year(), "only albums have a year");
                     assertEquals("https://example.com/playlist.jpg", playlist.imageUrl());
                     // A playlist's tracks come from anywhere, so the playlist's cover would be the
                     // WRONG picture for them; each gets YouTube's own thumbnail for its videoId.
                     assertEquals("https://i.ytimg.com/vi/v1/hqdefault.jpg",
                             playlist.songs().getFirst().imageUrl());
+                    assertNull(playlist.songs().getFirst().plays(),
+                            "YouTube hands out play counts on album tracks only");
                 })
                 .verifyComplete();
 
@@ -570,6 +602,42 @@ class YtMusicServiceTest {
                 .verify();
 
         assertEquals(1, server.getRequestCount(), "a 404 must not be retried");
+    }
+
+    @Test
+    void a404WithoutTheAdaptersEnvelope_isAStaleSidecar_notAnUnknownSong_andIsRetried() {
+        // FastAPI's own route-not-found body: the adapter's handler never ran, so this says nothing
+        // about the id. An image predating /details answered every song this way on 28-09-2026 and
+        // the client showed "YouTube Music doesn't know this song" for all of them.
+        server.enqueue(new MockResponse().setResponseCode(404)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"detail\":\"Not Found\"}"));
+        server.enqueue(new MockResponse().setResponseCode(404)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"detail\":\"Not Found\"}"));
+
+        StepVerifier.create(service.getSongDetails("DntZ3-yCaFs"))
+                .expectErrorSatisfies(error -> {
+                    assertInstanceOf(YtMusicUnavailableException.class, error);
+                    assertTrue(error.getMessage().contains("has no route for this request"));
+                    assertTrue(error.getMessage().contains("image up to date"));
+                })
+                .verify();
+
+        assertEquals(2, server.getRequestCount(), "an outage is retried; an unknown id is not");
+    }
+
+    @Test
+    void a404WithAnEmptyBody_isAlsoTreatedAsUnavailable_andRetriedToSuccess() {
+        server.enqueue(new MockResponse().setResponseCode(404));
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody(SONG_DETAILS_BODY));
+
+        StepVerifier.create(service.getSongDetails("DntZ3-yCaFs"))
+                .assertNext(d -> assertEquals("Manchild", d.getTitle()))
+                .verifyComplete();
+
+        assertEquals(2, server.getRequestCount());
     }
 
     @Test

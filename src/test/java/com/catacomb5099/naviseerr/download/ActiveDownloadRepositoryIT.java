@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.TestcontainersConfiguration;
+import com.catacomb5099.naviseerr.support.TaskFinishing;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,9 +13,11 @@ import org.springframework.test.context.TestPropertySource;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -54,9 +57,10 @@ class ActiveDownloadRepositoryIT {
     }
 
     /** What the runner writes before the task rows: the download's own name and picture. */
-    private void describe(UUID downloadId, String title, List<String> artists, String imageUrl) {
+    private void describe(UUID downloadId, String title, List<String> artists, List<String> artistIds,
+                          String imageUrl) {
         taskRepository.upsertMedia(List.of(
-                new MediaItem("yt-" + downloadId, title, artists, imageUrl, null, null))).block();
+                new MediaItem("yt-" + downloadId, title, artists, artistIds, imageUrl, null, null))).block();
     }
 
     /**
@@ -65,7 +69,7 @@ class ActiveDownloadRepositoryIT {
      */
     private void admit(UUID downloadId, String... songNames) {
         taskRepository.upsertMedia(java.util.Arrays.stream(songNames)
-                .map(name -> new MediaItem("yt-" + name, name, List.of("The Band"), null, 180, null))
+                .map(name -> new MediaItem("yt-" + name, name, List.of("The Band"), List.of(""), null, 180, null))
                 .toList()).block();
         taskRepository.createTasks(downloadId,
                 java.util.Arrays.stream(songNames)
@@ -77,9 +81,14 @@ class ActiveDownloadRepositoryIT {
     /** Finishes a song and settles its download, which is what one runner pass does. */
     private void finish(UUID downloadId, DownloadStatus status, DownloadFailureCode code) {
         for (UUID taskId : taskIdsOf(downloadId)) {
-            downloadService.finishTask(taskId, status, code, NOW).block();
+            TaskFinishing.finish(template, downloadService, taskId, status, code, NOW);
         }
         taskRepository.concludeDownloads().block();
+    }
+
+    /** Finishes one task row by id, without concluding its download -- for mixed-outcome setups. */
+    private void finishTask(UUID taskId, DownloadStatus status, DownloadFailureCode code) {
+        TaskFinishing.finish(template, downloadService, taskId, status, code, NOW);
     }
 
     private List<UUID> taskIdsOf(UUID downloadId) {
@@ -304,9 +313,9 @@ class ActiveDownloadRepositoryIT {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "found", "missing");
         List<UUID> tasks = taskIdsOf(album);
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        TaskFinishing.finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        TaskFinishing.finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
         taskRepository.concludeDownloads().block();
 
         ActiveDownloadView view = active().getFirst();
@@ -316,6 +325,40 @@ class ActiveDownloadRepositoryIT {
         // collection would finish and then never be reported at all.
         assertEquals("NO_CANDIDATES", view.failureCode(),
                 "a collection reports a reason as soon as one of its songs has one");
+    }
+
+    @Test
+    void aCollection_countsCancelledSongsApartFromFailedOnes_andKeepsTheRealReason() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "one", "two", "three");
+        List<UUID> tasks = taskIdsOf(id);
+        finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null);
+        finishTask(tasks.get(1), DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES);
+        finishTask(tasks.get(2), DownloadStatus.FAILED, DownloadFailureCode.CANCELLED);
+        taskRepository.concludeDownloads().block();   // the loop's end-of-pass step
+
+        ActiveDownloadView view = active().stream().filter(v -> v.downloadId().equals(id)).findFirst().orElseThrow();
+
+        assertEquals(1, view.songsSucceeded());
+        assertEquals(1, view.songsFailed(), "the user's own cancel is not a failure");
+        assertEquals(1, view.songsCancelled());
+        assertEquals("NO_CANDIDATES", view.failureCode(), "a real failure outranks a cancellation");
+        assertEquals(DownloadStage.PARTIAL_SUCCESS, view.stage());
+    }
+
+    @Test
+    void anAllCancelledCollection_readsCancelled() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "one", "two");
+        taskIdsOf(id).forEach(t -> finishTask(t, DownloadStatus.FAILED, DownloadFailureCode.CANCELLED));
+        taskRepository.concludeDownloads().block();
+
+        ActiveDownloadView view = active().stream().filter(v -> v.downloadId().equals(id)).findFirst().orElseThrow();
+
+        assertEquals(0, view.songsFailed());
+        assertEquals(2, view.songsCancelled());
+        assertEquals("CANCELLED", view.failureCode());
+        assertEquals(DownloadStage.FAILED, view.stage());
     }
 
     // ---- the history endpoint ------------------------------------------------------------------
@@ -332,7 +375,7 @@ class ActiveDownloadRepositoryIT {
         UUID song = insertDownload("PENDING");
         admit(song, "just one");
 
-        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1).block();
+        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1, List.of()).block();
 
         assertEquals(2, page.downloads().size(), "five tracks and a single are two downloads");
         assertEquals(1, page.totalPages());
@@ -344,8 +387,8 @@ class ActiveDownloadRepositoryIT {
             admit(insertDownload("PENDING"), "song " + i);
         }
 
-        AllDownloadsResponse first = activeDownloadRepository.findAll(2, 1).block();
-        AllDownloadsResponse last = activeDownloadRepository.findAll(2, 3).block();
+        AllDownloadsResponse first = activeDownloadRepository.findAll(2, 1, List.of()).block();
+        AllDownloadsResponse last = activeDownloadRepository.findAll(2, 3, List.of()).block();
 
         assertEquals(2, first.downloads().size());
         assertEquals(3, first.totalPages(), "5 downloads at 2 per page");
@@ -356,7 +399,7 @@ class ActiveDownloadRepositoryIT {
     void findAll_pastTheEnd_reportsZeroPages_soTheClientGoesBackToPageOne() {
         admit(insertDownload("PENDING"), "song");
 
-        AllDownloadsResponse beyond = activeDownloadRepository.findAll(20, 5).block();
+        AllDownloadsResponse beyond = activeDownloadRepository.findAll(20, 5, List.of()).block();
 
         // No rows means the window function has nothing to report, so the true total is unknowable
         // from this query alone -- 0 is the agreed signal rather than a second round trip.
@@ -371,10 +414,59 @@ class ActiveDownloadRepositoryIT {
         finish(id, DownloadStatus.SUCCEEDED, null);
 
         // This is the history endpoint: unlike findActive it has no retention window at all.
-        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1).block();
+        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1, List.of()).block();
 
         assertEquals(1, page.downloads().size());
         assertEquals(DownloadStage.SUCCEEDED, page.downloads().getFirst().stage());
+    }
+
+    // The type filter has to narrow the list BEFORE the window function counts it. Filtering the
+    // page after it arrived is what the client used to do, and why its pager kept saying
+    // "Page 1 of 7" over a list of two songs.
+
+    @Test
+    void findAll_byType_pagesOverThatTypeOnly() {
+        for (int i = 0; i < 3; i++) {
+            insertDownload("PENDING", "SONG");
+        }
+        insertDownload("PENDING", "ALBUM");
+        insertDownload("PENDING", "PLAYLIST");
+
+        AllDownloadsResponse first = activeDownloadRepository.findAll(2, 1, List.of(DownloadType.SONG)).block();
+        AllDownloadsResponse beyond = activeDownloadRepository.findAll(2, 5, List.of(DownloadType.SONG)).block();
+
+        assertEquals(2, first.downloads().size());
+        assertEquals(2, first.totalPages(), "3 songs at 2 per page, the album and playlist not counted");
+        assertTrue(first.downloads().stream().allMatch(d -> d.downloadType() == DownloadType.SONG));
+        assertEquals(0, beyond.totalPages(), "past the end of the filtered list is still the go-back signal");
+    }
+
+    @Test
+    void findAll_byTypes_matchesEveryListedType_soPlaylistCanIncludeCurated() {
+        insertDownload("PENDING", "PLAYLIST");
+        insertDownload("PENDING", "CURATED");
+        insertDownload("PENDING", "SONG");
+        insertDownload("PENDING", "ALBUM");
+
+        AllDownloadsResponse page = activeDownloadRepository
+                .findAll(10, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED)).block();
+
+        assertEquals(Set.of(DownloadType.PLAYLIST, DownloadType.CURATED),
+                page.downloads().stream().map(ActiveDownloadView::downloadType).collect(Collectors.toSet()));
+        assertEquals(1, page.totalPages());
+    }
+
+    @Test
+    void findAll_withNoTypes_isTheUnfilteredHistory() {
+        insertDownload("PENDING", "SONG");
+        insertDownload("PENDING", "ALBUM");
+        insertDownload("PENDING", "CURATED");
+
+        AllDownloadsResponse empty = activeDownloadRepository.findAll(10, 1, List.of()).block();
+        AllDownloadsResponse nul = activeDownloadRepository.findAll(10, 1, null).block();
+
+        assertEquals(3, empty.downloads().size());
+        assertEquals(empty.downloads(), nul.downloads());
     }
 
     // ---- metadata: title, artists, artwork come from media_items ------------------------------
@@ -382,13 +474,14 @@ class ActiveDownloadRepositoryIT {
     @Test
     void findActive_reportsTitleArtistsAndArtworkFromTheMediaRow() {
         UUID album = insertDownload("PENDING", "ALBUM");
-        describe(album, "Definitely Maybe", List.of("Oasis"), "https://img/dm.jpg");
+        describe(album, "Definitely Maybe", List.of("Oasis"), List.of("UC-oasis"), "https://img/dm.jpg");
         admit(album, "a", "b");
 
         ActiveDownloadView view = active().getFirst();
 
         assertEquals("Definitely Maybe", view.title());
         assertEquals(List.of("Oasis"), view.artists());
+        assertEquals(List.of("UC-oasis"), view.artistIds(), "one id per name, so the name can be a link");
         assertEquals("https://img/dm.jpg", view.imageUrl());
         assertEquals(DownloadType.ALBUM, view.downloadType());
         assertEquals("yt-" + album, view.youtubeId());
@@ -404,6 +497,7 @@ class ActiveDownloadRepositoryIT {
 
         assertNull(view.title());
         assertEquals(List.of(), view.artists());
+        assertEquals(List.of(), view.artistIds());
         assertEquals(0, view.songCount(), "not yet known");
     }
 
@@ -412,9 +506,9 @@ class ActiveDownloadRepositoryIT {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "done", "gone", "running");
         List<UUID> tasks = taskIdsOf(album);  // ordered by song_name: done, gone, running
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        TaskFinishing.finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        TaskFinishing.finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
 
         ActiveDownloadView view = active().getFirst();
 
@@ -470,6 +564,9 @@ class ActiveDownloadRepositoryIT {
         assertEquals(DownloadStage.DOWNLOADING, alpha.stage());
         assertEquals(0, alpha.progressPercent().compareTo(new BigDecimal("40.00")));
         assertEquals(List.of("The Band"), alpha.artists());
+        // Stored as '' (a name YouTube gave no page for), reported as null: still one entry per
+        // name, so the client can index the two lists together.
+        assertEquals(Collections.singletonList(null), alpha.artistIds());
         assertEquals(180, alpha.durationSeconds());
         assertEquals("yt-alpha", alpha.youtubeId());
         assertEquals(DownloadStage.STARTING, songs.get(0).stage());
@@ -480,9 +577,9 @@ class ActiveDownloadRepositoryIT {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "found", "missing");
         List<UUID> tasks = taskIdsOf(album);
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        TaskFinishing.finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        TaskFinishing.finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
         taskRepository.concludeDownloads().block();
 
         List<DownloadSongView> songs = activeDownloadRepository.findSongs(album).collectList().block();

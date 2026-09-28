@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services;
 
+import com.catacomb5099.naviseerr.schema.response.Playlist;
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicSearchType;
@@ -15,12 +16,19 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Slf4j
 @RestController
 @AllArgsConstructor
 public class SearchService {
+    /** How many of each playlist source keep YouTube Music's own ranking at the top of the shelf. */
+    static final int PINNED_PER_SOURCE = 2;
+
     private final YtMusicService ytMusicService;
 
     @GetMapping("/search/{query}")
@@ -60,13 +68,49 @@ public class SearchService {
                 .doOnError(error -> log.error("YtMusic artist search failed for query='{}'", query, error));
     }
 
+    /**
+     * Fan-made and YouTube Music's own featured playlists together: both searches run at once
+     * and {@link #mix} orders the union. The featured leg is a bonus -- when it fails (an
+     * adapter image without that route, say) the shelf still shows the fan-made list; the
+     * fan-made leg keeps its usual error handling.
+     */
     @GetMapping("/search/{query}/playlists")
     Mono<SearchResponse> searchPlaylists(@PathVariable String query) {
         log.info("Received YtMusic playlist search request for query='{}'", query);
-        return ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS)
+        Mono<List<Playlist>> featured = ytMusicService.getResults(query, YtMusicSearchType.FEATURED_PLAYLISTS)
+                .map(result -> orEmpty(result.getPlaylists()))
+                .onErrorResume(error -> {
+                    log.warn("Featured playlist search failed for query='{}', showing fan-made playlists only: {}", query, error.toString());
+                    return Mono.just(List.of());
+                });
+        Mono<List<Playlist>> fanMade = ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS)
+                .map(result -> orEmpty(result.getPlaylists()));
+        return Mono.zip(featured, fanMade, (editorial, community) -> mix(editorial, community, ThreadLocalRandom.current()))
+                .map(playlists -> new SearchResponse(List.of(), List.of(), List.of(), playlists))
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic playlist search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic playlist search for query='{}': playlists={}", query, size(result.getPlaylists())))
                 .doOnError(error -> log.error("YtMusic playlist search failed for query='{}'", query, error));
+    }
+
+    /**
+     * The top {@value #PINNED_PER_SOURCE} featured playlists, then the top {@value #PINNED_PER_SOURCE}
+     * fan-made ones, each in YouTube Music's own order; everything after those is shuffled together
+     * so repeat searches surface different playlists from both pools.
+     */
+    static List<Playlist> mix(List<Playlist> featured, List<Playlist> fanMade, Random random) {
+        int pinnedFeatured = Math.min(PINNED_PER_SOURCE, featured.size());
+        int pinnedFanMade = Math.min(PINNED_PER_SOURCE, fanMade.size());
+        List<Playlist> mixed = new ArrayList<>(featured.subList(0, pinnedFeatured));
+        mixed.addAll(fanMade.subList(0, pinnedFanMade));
+        List<Playlist> rest = new ArrayList<>(featured.subList(pinnedFeatured, featured.size()));
+        rest.addAll(fanMade.subList(pinnedFanMade, fanMade.size()));
+        Collections.shuffle(rest, random);
+        mixed.addAll(rest);
+        return mixed;
+    }
+
+    private static List<Playlist> orEmpty(List<Playlist> playlists) {
+        return playlists == null ? List.of() : playlists;
     }
 
     private static int size(List<?> list) {

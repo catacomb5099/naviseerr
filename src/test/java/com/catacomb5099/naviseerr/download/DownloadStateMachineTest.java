@@ -19,11 +19,12 @@ class DownloadStateMachineTest {
     private static final Duration MISSING_GRACE = Duration.ofSeconds(60);
     private static final Duration QUEUED_BUDGET = Duration.ofMinutes(10);
     private static final int RETRY_LIMIT = 2;
+    private static final int FIRST_WORDING_MIN_CANDIDATES = 3;
 
     private final StallingSharers stallingSharers = new StallingSharers(Duration.ofHours(6));
     private final DownloadStateMachine machine = new DownloadStateMachine(
             SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, QUEUED_BUDGET, MISSING_GRACE,
-            RETRY_LIMIT, stallingSharers);
+            RETRY_LIMIT, FIRST_WORDING_MIN_CANDIDATES, stallingSharers);
 
     @Test
     void searchInit_recordsSearchId_andAdvancesToSearchPoll() {
@@ -85,7 +86,7 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_withAFallbackLeft_retriesWithTheTitleAlone() {
+    void searchPoll_completeWithNoCandidates_withAWordingLeft_movesOnToTheOneWithTheArtist() {
         DownloadTask task = searchPolling("s1").toBuilder()
                 .songName("Wonderwall (Remix) [Official Video] - Oasis").build();
         Instant later = T0.plusSeconds(30);
@@ -98,11 +99,175 @@ class DownloadStateMachineTest {
         assertEquals(1, next.searchTier());
         assertNull(next.searchId(), "the old search must not be polled again");
         assertEquals(later, next.phaseEnteredAt(), "each tier gets a fresh search budget");
-        assertEquals("Wonderwall", next.searchQuery());
+        assertEquals("Wonderwall - Oasis", next.searchQuery());
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_onAnArtistEchoTitle_retriesWithTheTitleAlone() {
+    void searchPoll_theTitleAloneFoundTooFew_movesOn_butKeepsWhatItFound() {
+        // The owner's rule: the title alone is "enough" at three acceptable files; under that, the
+        // wordings that name the artist get their turn, but the few files stay on the row.
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), candidates("alice", "bob"), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, next.phase());
+        assertEquals("Judas - Lady Gaga", next.searchQuery());
+        assertEquals(candidates("alice", "bob"), next.candidates());
+    }
+
+    @Test
+    void searchPoll_theTitleAloneFoundEnough_downloadsWithoutAnotherSearch() {
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), candidates("a", "b", "c"), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(0, next.searchTier());
+    }
+
+    @Test
+    void searchPoll_theArtistWordingsFoundNothing_downloadTheFewTheTitleAloneFound() {
+        // "Judas - Lady Gaga" returns zero peers: Soulseek blocks the phrase. The two files "Judas" found
+        // travel along through the remaining wordings and stand once the last one is empty too.
+        int lastTier = SearchQueryTiers.of("Judas - Lady Gaga").size() - 1;
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").searchTier(1)
+                .candidates(candidates("alice", "bob")).build();
+
+        DownloadTask carried = assertInstanceOf(DownloadDecision.Advance.class, machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed, TimedOut"), List.of(), T0)).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, carried.phase());
+        assertEquals(candidates("alice", "bob"), carried.candidates(), "kept across the next wording");
+
+        DownloadDecision d = machine.afterSearchPoll(
+                carried.toBuilder().searchTier(lastTier).build(),
+                SlskdFixtures.searchState("s1", true, "Completed, TimedOut"), List.of(), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(candidates("alice", "bob"), next.candidates());
+        assertEquals("alice", next.currentCandidate().username());
+    }
+
+    @Test
+    void searchPoll_aLaterWording_isEnoughWithOneFile() {
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").searchTier(1).build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), candidates("alice"), T0);
+
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, d).next().phase());
+    }
+
+    @Test
+    void searchPoll_theTitleAloneFoundTooFew_butNoWordingIsLeft_downloadsThem() {
+        // "Hello (Official Lyric Video)" has no artist, so the title is the only wording: one file is enough.
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Hello (Official Lyric Video)").build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), candidates("alice"), T0);
+
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, d).next().phase());
+    }
+
+    /** The same candidates with another picker grade ("OTHER_VERSION", "UNVERIFIED"). */
+    private static List<DownloadCandidate> graded(String grade, String... usernames) {
+        return candidates(usernames).stream().map(c -> new DownloadCandidate(c.username(), c.filename(),
+                c.extension(), c.bitRate(), c.size(), c.code(), c.isLocked(), c.hasFreeUploadSlot(),
+                c.queueLength(), c.uploadSpeed(), grade)).toList();
+    }
+
+    @Test
+    void searchPoll_theTitleAlone_threeStudioCopiesOfARequestedLiveTake_areNotEnough() {
+        // "Wonderwall" alone returns Oasis's studio take three times over; the live take the request asked
+        // for may only turn up once the wording names the artist, so the studio copies do not settle it.
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Wonderwall (Live at Wembley) - Oasis").build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), graded("OTHER_VERSION", "a", "b", "c"), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, next.phase());
+        assertEquals("Wonderwall - Oasis", next.searchQuery());
+        assertEquals(graded("OTHER_VERSION", "a", "b", "c"), next.candidates(), "kept: any version beats none");
+    }
+
+    @Test
+    void searchPoll_unverifiedFiles_travelAsTheLastResort_andAConfirmedFileReplacesThem() {
+        // "This Charming Man - Lo Mejor del Rock de los 80": the "artist" is a channel, so no path names it.
+        DownloadTask task = searchPolling("s1").toBuilder().songName("This Charming Man - Lo Mejor del Rock de los 80").build();
+
+        DownloadTask carried = assertInstanceOf(DownloadDecision.Advance.class, machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), graded("UNVERIFIED", "smiths1", "smiths2"), T0)).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, carried.phase());
+        assertEquals(graded("UNVERIFIED", "smiths1", "smiths2"), carried.candidates());
+
+        // the artist wording finds one confirmed file: it wins over the unverified pair
+        DownloadTask confirmed = assertInstanceOf(DownloadDecision.Advance.class, machine.afterSearchPoll(
+                carried, SlskdFixtures.searchState("s2", true, "Completed"), candidates("real"), T0)).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, confirmed.phase());
+        assertEquals(candidates("real"), confirmed.candidates());
+
+        // ... or every artist wording comes back empty (the channel is in no path): the unverified pair stands
+        int lastTier = SearchQueryTiers.of(task.songName()).size() - 1;
+        DownloadTask lastResort = assertInstanceOf(DownloadDecision.Advance.class, machine.afterSearchPoll(
+                carried.toBuilder().searchTier(lastTier).build(),
+                SlskdFixtures.searchState("s3", true, "Completed, TimedOut"), List.of(), T0)).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, lastResort.phase());
+        assertEquals(graded("UNVERIFIED", "smiths1", "smiths2"), lastResort.candidates());
+    }
+
+    @Test
+    void searchPoll_aLaterWording_isNotEnoughWithOnlyUnverifiedFiles() {
+        // a long title has more wordings after "title - artist" (the short-title forms), so there is one to move on to
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Another thing that I'm supposed to do - Gretel").searchTier(1).build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed"), graded("UNVERIFIED", "x"), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, next.phase());
+        assertEquals(graded("UNVERIFIED", "x"), next.candidates());
+    }
+
+    @Test
+    void aLaterSearch_thatTimesOut_errorsOrCannotStart_downloadsTheKeptFilesInsteadOfFailing() {
+        DownloadTask kept = searchPolling("s2").toBuilder().songName("Judas - Lady Gaga").searchTier(1)
+                .candidates(candidates("alice", "bob")).build();
+
+        // stuck in slskd past the search budget
+        DownloadDecision timedOut = machine.afterSearchPoll(kept, SlskdFixtures.searchState("s2", false, "InProgress"),
+                List.of(), T0.plus(SEARCH_BUDGET).plusSeconds(1));
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, timedOut).next().phase());
+        // slskd reports the search errored
+        DownloadDecision errored = machine.afterSearchPoll(kept, SlskdFixtures.searchState("s2", false, "Errored"), List.of(), T0);
+        assertEquals(candidates("alice", "bob"), assertInstanceOf(DownloadDecision.Advance.class, errored).next().candidates());
+        // slskd answered the start with no search id
+        DownloadDecision blank = machine.afterSearchInit(kept.withPhase(DownloadPhase.SEARCH_INIT, T0),
+                SlskdFixtures.searchState(null, false, "InProgress"), T0);
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, blank).next().phase());
+        // the slskd call kept failing until the budget ran out
+        DownloadDecision failed = machine.onCallFailed(kept, SlskdFixtures.transportFailure(), T0.plus(SEARCH_BUDGET).plusSeconds(1));
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, failed).next().phase());
+    }
+
+    @Test
+    void searchPoll_theLastWordingFoundNothing_andNothingWasKept_fails() {
+        int lastTier = SearchQueryTiers.of("Judas - Lady Gaga").size() - 1;
+        DownloadTask task = searchPolling("s1").toBuilder().songName("Judas - Lady Gaga").searchTier(lastTier).build();
+
+        DownloadDecision d = machine.afterSearchPoll(
+                task, SlskdFixtures.searchState("s1", true, "Completed, TimedOut"), List.of(), T0);
+
+        assertEquals(DownloadFailureCode.NO_CANDIDATES,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void searchPoll_completeWithNoCandidates_onAnArtistEchoTitle_movesOnToTheDedupedArtistWording() {
         DownloadTask task = searchPolling("s1").toBuilder()
                 .songName("Oasis - Don't Look Back In Anger (Official Video) - Oasis").build();
 
@@ -111,7 +276,7 @@ class DownloadStateMachineTest {
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
         assertEquals(1, next.searchTier());
-        assertEquals("Don't Look Back In Anger", next.searchQuery());
+        assertEquals("Don't Look Back In Anger - Oasis", next.searchQuery());
     }
 
     @Test
@@ -127,16 +292,17 @@ class DownloadStateMachineTest {
     }
 
     @Test
-    void searchPoll_completeWithNoCandidates_onACleanTitle_stillFallsBackToTheTitleAlone() {
-        // Zero files for a well-known "title - artist" is the signature of the Soulseek server dropping
-        // the artist name (45 of 809 songs in the lab), so even a clean name gets the title-only retry.
+    void searchPoll_completeWithNoCandidates_onACleanTitle_stillMovesOnToTheArtistWording() {
+        // The title alone came back with nothing acceptable, so the artist wording gets its turn even
+        // though nothing was cleaned out of the name.
         DownloadTask task = searchPolling("s1").toBuilder().songName("Thriller - Michael Jackson").build();
+        assertEquals("Thriller", task.searchQuery());
 
         DownloadDecision d = machine.afterSearchPoll(
                 task, SlskdFixtures.searchState("s1", true, "Completed"), List.of(), T0);
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
-        assertEquals("Thriller", next.searchQuery());
+        assertEquals("Thriller - Michael Jackson", next.searchQuery());
     }
 
     @Test
@@ -527,6 +693,93 @@ class DownloadStateMachineTest {
 
         assertEquals(DownloadFailureCode.SEARCH_FAILED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    // ---- 28-09-2026: a search that fails to START is retried by count, not by the wall clock ----
+
+    @Test
+    void callFailed_startingASearch_longAfterTheRowWasCreated_isRetried_notFailed() {
+        // The row waited 20 minutes for a search slot; the search budget (120 s from creation) is long
+        // spent, but no search is running yet, so the budget has nothing to say about this call.
+        Instant twentyMinutesLater = T0.plusSeconds(20 * 60);
+
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_INIT), SlskdFixtures.responseFailure(429), twentyMinutesLater);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, next.phase());
+        assertEquals(1, next.retryIndex());
+        assertEquals(twentyMinutesLater.plus(SEARCH_POLL), next.nextAttemptAt());
+        assertNotNull(next.lastError(), "the reason must be kept on the row for the next post-mortem");
+        assertTrue(next.lastError().contains("429"), next.lastError());
+    }
+
+    @Test
+    void callFailed_startingASearch_withATransportFailure_isRetriedTheSameWay() {
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_INIT), SlskdFixtures.transportFailure(), T0.plusSeconds(600));
+
+        assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().retryIndex());
+    }
+
+    @Test
+    void callFailed_startingASearch_onceTheRetriesAreUsedUp_andTheBudgetIsSpent_fails() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().retryIndex(RETRY_LIMIT).build();
+
+        DownloadDecision d = machine.onCallFailed(task, SlskdFixtures.transportFailure(), T0.plus(SEARCH_BUDGET).plusSeconds(1));
+
+        assertEquals(DownloadFailureCode.SEARCH_FAILED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void callFailed_startingASearch_withinTheBudget_keepsRetryingPastTheCount() {
+        // A fresh row keeps today's outage tolerance: slskd restarting for ten seconds must not fail it.
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().retryIndex(RETRY_LIMIT + 3).build();
+
+        DownloadDecision d = machine.onCallFailed(task, SlskdFixtures.transportFailure(), T0.plusSeconds(10));
+
+        assertEquals(RETRY_LIMIT + 4, assertInstanceOf(DownloadDecision.Continue.class, d).next().retryIndex());
+    }
+
+    @Test
+    void callFailed_startingASearch_withAnErrorThatHasNoMessage_recordsItsName() {
+        var silent = new org.springframework.web.reactive.function.client.WebClientRequestException(
+                new java.io.IOException(), org.springframework.http.HttpMethod.POST,
+                java.net.URI.create("https://slskd.example/api/v0/searches"), new org.springframework.http.HttpHeaders());
+
+        DownloadDecision d = machine.onCallFailed(at(DownloadPhase.SEARCH_INIT), silent, T0.plusSeconds(600));
+
+        assertEquals("WebClientRequestException", assertInstanceOf(DownloadDecision.Continue.class, d).next().lastError());
+    }
+
+    @Test
+    void callFailed_startingASearch_withKeptFiles_downloadsThemWhenTheRetriesRunOut() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().searchTier(1).retryIndex(RETRY_LIMIT)
+                .candidates(candidates("alice")).build();
+
+        DownloadDecision d = machine.onCallFailed(task, SlskdFixtures.transportFailure(), T0.plus(SEARCH_BUDGET).plusSeconds(1));
+
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, d).next().phase());
+    }
+
+    @Test
+    void callFailed_startingASearch_withUnrecognisedError_stillFailsAtOnce() {
+        DownloadDecision d = machine.onCallFailed(at(DownloadPhase.SEARCH_INIT), new RuntimeException("boom"), T0);
+
+        assertEquals(DownloadFailureCode.SEARCH_FAILED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void searchInit_succeeding_forgetsTheStartAttempts() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().retryIndex(2).lastError("429").build();
+
+        DownloadDecision d = machine.afterSearchInit(task, SlskdFixtures.searchState("s1", false, "InProgress"), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(0, next.retryIndex(), "start attempts must not eat into the download retries");
+        assertNull(next.lastError());
     }
 
     @Test

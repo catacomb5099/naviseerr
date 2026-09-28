@@ -20,6 +20,10 @@ import java.util.UUID;
  *                        accepted and its metadata arriving — the request carries only an id — and
  *                        for a download whose id the provider could not resolve.
  * @param artists         never null; empty when unknown. A playlist's "artist" is its author.
+ * @param artistIds       never null; the YouTube Music channel id behind each {@code artists} entry,
+ *                        so a name can be a link. Index-aligned, but an entry is null where YouTube
+ *                        gave no id, and the list is shorter (usually empty) for a row written before
+ *                        ids were stored -- a missing entry means "no link", never "wrong artist".
  * @param imageUrl        artwork, nullable for the same reason {@code title} is.
  * @param progressPercent 0-100, the mean across the download's songs; meaningful only while
  *                        {@link #stage} is {@link DownloadStage#DOWNLOADING}. Nullable, and a null
@@ -29,6 +33,8 @@ import java.util.UUID;
  * @param songCount       how many songs this download resolved to. 0 while QUEUED — not yet known.
  * @param songsSucceeded  how many of them have a file. With {@code songsFailed}, lets a card read
  *                        "7 of 12" without a second request.
+ * @param songsCancelled  how many the user stopped. Kept apart from {@code songsFailed} so a card
+ *                        never calls the user's own action a failure.
  * @param requestedAt     when the request arrived.
  * @param stageEnteredAt  when the current stage began. What indeterminate stages show elapsed time
  *                        from, so a slow search reads as slow rather than as stuck.
@@ -38,7 +44,7 @@ import java.util.UUID;
  * @param failureCode     a {@link DownloadFailureCode} name, or null. Deliberately a String, not the
  *                        enum: rows written before the enum existed hold free prose, and a read path
  *                        that throws on its own history is worse than one the client can't word. For a
- *                        collection, the first song's reason; the per-song view has the rest.
+ *                        collection, the first song's reason, preferring a real failure over CANCELLED.
  */
 public record ActiveDownloadView(
         UUID downloadId,
@@ -46,12 +52,14 @@ public record ActiveDownloadView(
         DownloadType downloadType,
         String title,
         List<String> artists,
+        List<String> artistIds,
         String imageUrl,
         DownloadStage stage,
         BigDecimal progressPercent,
         int songCount,
         int songsSucceeded,
         int songsFailed,
+        int songsCancelled,
         Instant requestedAt,
         Instant stageEnteredAt,
         Instant updatedAt,

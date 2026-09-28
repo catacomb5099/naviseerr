@@ -15,14 +15,15 @@ HERE = Path(__file__).parent
 RAW = HERE / "raw"
 RAW.mkdir(exist_ok=True)
 
-# Zscaler on this laptop: build a CA bundle once, point both stacks at it before importing them.
-CA = RAW / "ca.pem"
-if not CA.exists():
-    import certifi
-    zs = Path.home() / ".gh-catacombs" / "zscaler-root-ca.crt"
-    CA.write_bytes(Path(certifi.where()).read_bytes() + (zs.read_bytes() if zs.exists() else b""))
-os.environ.setdefault("REQUESTS_CA_BUNDLE", str(CA))
-os.environ.setdefault("SSL_CERT_FILE", str(CA))
+# Behind a TLS-intercepting proxy, set EXTRA_CA_CERT=/path/to/proxy-root.pem: it is appended to
+# certifi's bundle once (raw/ca.pem) and both HTTP stacks are pointed at it. Unset = system default.
+if extra := os.environ.get("EXTRA_CA_CERT"):
+    CA = RAW / "ca.pem"
+    if not CA.exists():
+        import certifi
+        CA.write_bytes(Path(certifi.where()).read_bytes() + Path(extra).read_bytes())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", str(CA))
+    os.environ.setdefault("SSL_CERT_FILE", str(CA))
 
 import httpx  # noqa: E402
 

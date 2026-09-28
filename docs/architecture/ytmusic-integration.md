@@ -42,11 +42,13 @@ this codebase.
 
 [YtMusicService.java](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java):
 
-- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists|playlists}` (the adapter's typed sugar
-  routes; `type` is [YtMusicSearchType](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicSearchType.java),
+- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists|playlists|featured_playlists}`
+  (the adapter's typed sugar routes; `type` is [YtMusicSearchType](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicSearchType.java),
   the LastFM-era `LastFMAPIMethod`'s replacement), passing `yt-music-service.search-result-limit`
-  (`10`) as `limit`. The response is mapped through `YtMusicSearchResponseMapper`, which yields a
-  `SearchResponse` with only that one list populated (the adapter already filtered server-side).
+  (`10`) as `limit`. `getResults(query, type, limit)` is the same call with a caller-chosen page
+  size, for the artist page's featured-playlist search, which filters the answer afterwards. The
+  response is mapped through `YtMusicSearchResponseMapper`, which yields a `SearchResponse` with
+  only that one list populated (the adapter already filtered server-side).
 - `getResults(query)` - **one** unfiltered `GET /v1/search` call, passing
   `yt-music-service.mixed-search-limit` (`100`) as `limit`. `YtMusicSearchResponseMapper` partitions
   the mixed response into all four lists in a single pass. This used to fan out the three typed
@@ -80,7 +82,9 @@ Two-exception hierarchy, both extending `YtMusicException`
 |---|---|---|
 | `200` with `count: 0` | *(none — empty lists)* | n/a; this is "no good match", not a failure |
 | `400`, `422`, `500` | `YtMusicBadRequestException` | No |
-| `429`, `502`, `504`, `404`, any other status | `YtMusicUnavailableException` | Yes |
+| `404` **with** the adapter's `{"error":{"code":"not_found",…}}` envelope — it looked, the id does not exist | `YtMusicBadRequestException` | No |
+| `404` **without** it — FastAPI's `{"detail":"Not Found"}` or an empty body: the running image has no such route | `YtMusicUnavailableException` ("…is the sidecar image up to date?") | Yes |
+| `429`, `502`, `504`, any other status | `YtMusicUnavailableException` | Yes |
 | client-side timeout / connection refused / decode failure | `YtMusicUnavailableException` | Yes |
 
 Retries reuse [ReactivePoller.defaultBackoff](../../src/main/java/com/catacomb5099/naviseerr/util/networkcalls/ReactivePoller.java)
@@ -202,6 +206,14 @@ download now" from "try again next pass", so classifying it as unavailable would
 re-requested every loop interval for the life of the install. See
 [the ADR](../decisions/collection-downloads-14-09-2026.md).
 
+The one 404 that is *not* a bad request is the one the adapter never produced. FastAPI answers
+`{"detail":"Not Found"}` (no `error` envelope) when the path has no route at all, which happens when
+the running `ytmusic-adapter` image predates an endpoint naviseerr now calls — on 28-09-2026 a stale
+image made `/v1/songs/{id}/details` 404 for every song, and every controller dutifully reported
+"unknown song". `buildException` tells the two apart by the envelope: no envelope maps to
+`YtMusicUnavailableException` with a message naming the likely cause, so the client shows "Couldn't
+load … Try again" and the log says to rebuild the image.
+
 ## Endpoints
 
 Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java),
@@ -209,8 +221,11 @@ Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/s
 
 - `GET /search/{query}` - mixed (one unfiltered adapter call; see above). Fills all four lists,
   `playlists` included -- the mixed page always carried `playlist` items, the mapper used to drop them.
-- `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - typed (one filtered adapter
-  call each)
+- `GET /search/{query}/tracks` | `/albums` | `/artists` - typed (one filtered adapter call each)
+- `GET /search/{query}/playlists` - two filtered adapter calls at once (`playlists` = fan-made,
+  `featured_playlists` = YouTube Music's own), merged by `SearchService.mix`: top two of each pinned
+  in YouTube's order (featured first), the rest of both shuffled. A failing featured call degrades
+  to fan-made only; the fan-made call keeps the usual error handling.
 
 And by [SongInfoController.java](../../src/main/java/com/catacomb5099/naviseerr/services/SongInfoController.java):
 
@@ -227,7 +242,9 @@ And by [CollectionController.java](../../src/main/java/com/catacomb5099/naviseer
 
 - `GET /collections/{id}?type=ALBUM|PLAYLIST` - one album or playlist as a
   [CollectionView](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionView.java):
-  header plus every available track with a 1-based `position`. Calls the same `getAlbumInfo` /
+  header plus every available track with a 1-based `position` and, on an album's tracks only,
+  YouTube's own `plays` wording ("28M plays", passed through unparsed; null on a playlist's, where
+  YouTube gives none). Calls the same `getAlbumInfo` /
   `getPlaylistInfo` as admission, so what the client sees is what a download of the same id would
   create task rows for. `type=SONG` is 400 (a track has no collection view); the adapter's 404 --
   which the client maps to `YtMusicBadRequestException`, see above -- becomes a 404 here, *not*
@@ -239,13 +256,25 @@ And by [ArtistController.java](../../src/main/java/com/catacomb5099/naviseerr/se
 - `GET /artists/{channelId}` - one artist page as an
   [ArtistView](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistView.java): header
   (name, picture, description, subscribers) plus top songs, albums, singles, playlists and similar
-  artists, each capped at 10 and expressed in the search DTOs so the client reuses its cards. Two
-  adapter calls in sequence: `getArtistInfo`, then a playlist search for the artist's *name* (there is
-  no "playlists featuring this artist" route). The search is best-effort - if it fails the page still
-  loads with an empty `playlists` shelf. Errors map exactly as `/collections/{id}`: the adapter's 404
-  (and the 400/422/500 folded into the same exception) is 404, `YtMusicUnavailableException` is 502.
+  artists, each capped at 10 and expressed in the search DTOs so the client reuses its cards. Up to
+  fourteen adapter calls: `getArtistInfo`, then a `featured_playlists` search for the artist's
+  *name* with `limit=20` (there is no "playlists featuring this artist" route; this is YouTube
+  Music's own editorial playlists its search links to the name), then up to 12 `getPlaylistInfo`
+  lookups. Playlists whose title contains the artist's name or a related artist's name ("Presenting
+  Oasis", "Presenting The Kooks") are dropped, comparing lowercased letters and digits with accents
+  stripped; the first 12 survivors are then opened (four at a time, YouTube's order kept) and only
+  those whose track list credits the artist - whole folded name, so "Pixies Tribute Band" is not
+  Pixies - stay, because the search links a playlist to a name for reasons other than membership
+  (for Oasis: "Summer House", 131 tracks, no Oasis). The lookup reads the adapter's default
+  `/v1/playlists/{id}` page of 100 tracks, so an artist buried deeper in a very long playlist is
+  missed; a playlist that fails to open is dropped. `ArtistView` caps the result at 10. The whole
+  step is best-effort - if it fails (including an adapter that does not know the
+  `featured_playlists` type yet) the page still loads with an empty `playlists` shelf. Errors map
+  exactly as `/collections/{id}`: the adapter's 404 (and the 400/422/500 folded into the same
+  exception) is 404, `YtMusicUnavailableException` is 502.
 
-`Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`), falling back to the
+`Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`, or `RDCLAK5uy_...` for a
+featured playlist; `/v1/playlists/{id}` accepts both), falling back to the
 `VL`-prefixed `browseId` only when the bare id is absent. The adapter's detail route accepts either,
 but the backend keys `media_items` by whatever id the client posts, so the client must pass the id
 it was given through to both `/collections/{id}` and `/download/collection/{id}` unchanged.
@@ -267,9 +296,8 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   advertised `itemCount`, or `0` when YouTube gives none; `CollectionView.trackCount` is the count
   of *available* tracks after the `isAvailable: false` filter. The two can legitimately differ.
 - No caching — every search hits the adapter (and, behind it, YouTube) fresh.
-- Similar artists on the artist page have no picture (`Artist.iconUrl` is `""`). Not a YouTube
-  limit: `ytmusicapi` returns a thumbnail per related artist in the same answer, but the adapter's
-  `RelatedArtist` model drops it. Expose it in the adapter, then map it in `ArtistView`; no extra call.
+- Similar artists' pictures (`Artist.iconUrl`) come from the adapter's `related[].thumbnailUrl`;
+  an adapter image older than that field leaves them `""`, no error. Rebuild the adapter image.
 - Top songs on the artist page use YouTube's predictable per-video thumbnail because the adapter's
   `TrackDto` carries no artwork; same picture the collection view uses for playlist tracks.
 - General search returns fewer results per category than the typed routes, and blanks
