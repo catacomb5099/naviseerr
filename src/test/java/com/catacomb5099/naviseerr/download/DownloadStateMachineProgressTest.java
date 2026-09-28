@@ -26,7 +26,7 @@ class DownloadStateMachineProgressTest {
 
     private final DownloadStateMachine machine = new DownloadStateMachine(
             SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, Duration.ofMinutes(10),
-            MISSING_GRACE, RETRY_LIMIT);
+            MISSING_GRACE, RETRY_LIMIT, new StallingSharers(Duration.ofHours(6)));
 
     // --- toProgress -----------------------------------------------------------------------------
 

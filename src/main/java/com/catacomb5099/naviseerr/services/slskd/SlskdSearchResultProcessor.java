@@ -25,6 +25,8 @@ public class SlskdSearchResultProcessor {
     int minBitRate;
     @Value("${slskd-service.max-files-per-download}")
     int maxFilesPerDownload;
+    @Value("${download-task.max-sharer-queue:50}")
+    int maxSharerQueue;
 
     // A free slot is a fact about now; uploadSpeed is the peer's own unverified claim about its
     // history. So: can they start at all, then how many people are ahead of you, then speed.
@@ -56,12 +58,25 @@ public class SlskdSearchResultProcessor {
             // Most candidates share the duration of the mainstream release; remixes, live takes and
             // album re-records are the odd lengths out. Prefer the most shared length, then fall back
             // to who can serve the file fastest. Measured 80% -> 93% correct top pick on 718 songs.
+            //
+            // One exception sits in front of the duration vote: a sharer with no free upload slot
+            // AND more than max-sharer-queue files already waiting goes to the back of the whole
+            // list, whatever its file's length. The duration vote protects against the wrong version;
+            // this protects against a sharer that will not reach us inside queued-budget-ms at all
+            // (27-09-2026: two such sharers cost ten minutes per song, 58 times). Putting the
+            // demotion inside each duration group instead would change nothing, because
+            // BY_AVAILABILITY already sorts busy sharers to the end of their group. The price is
+            // small: only when EVERY sharer of the majority length is that overloaded does an
+            // odd-length file get tried first, and the threshold is set high enough that "busy" alone
+            // never triggers it.
             Map<Integer, Long> countByLength = candidates.stream()
                     .flatMap(entry -> entry.getValue().getLength().stream())
                     .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
             candidates = candidates.stream()
                     .sorted(Comparator
-                            .comparingLong((Map.Entry<SearchResponseItem, SearchFile> entry) ->
+                            .comparing((Map.Entry<SearchResponseItem, SearchFile> entry) ->
+                                    isOverloaded(entry.getKey()))
+                            .thenComparingLong(entry ->
                                     -entry.getValue().getLength().map(countByLength::get).orElse(0L))
                             .thenComparing(BY_AVAILABILITY))
                     .toList();
@@ -69,6 +84,12 @@ public class SlskdSearchResultProcessor {
             log.info("Completed candidate selection for query='{}' - {} response(s), {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, responses.size(), state.getFileCount(), candidates.size(), maxFilesPerDownload);
             return candidates.stream().limit(maxFilesPerDownload).toList();
         });
+    }
+
+    /** No slot for us now and a long line ahead of us: the profile of a sharer that never serves. */
+    private boolean isOverloaded(SearchResponseItem sharer) {
+        return !Boolean.TRUE.equals(sharer.getHasFreeUploadsSlot())
+                && sharer.getQueueLength() > maxSharerQueue;
     }
 
     private boolean isRelevant(SearchFile file, String trackTitle) {

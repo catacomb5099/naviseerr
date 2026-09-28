@@ -121,9 +121,23 @@ download-task:
   # and then serve the file fine, so shorter would abandon good sources. Each candidate gets at most
   # this long before we move on; the measured case (27-09-2026) spent the entire hour at 0% on one
   # peer with seven untried alternatives. Transfers that are moving bytes are untouched by this; only
-  # download-budget-ms bounds them. The abandoned transfer is left alive in slskd (no cancel call
-  # yet), so it may still download later and is not counted by max-concurrent-transfers.
+  # download-budget-ms bounds them. The abandoned transfer is cancelled in slskd (best effort) so it
+  # stops holding a place in that peer's queue, and the peer is remembered -- see the next setting.
   queued-budget-ms: 600000
+  # How long a sharer that hit queued-budget-ms stays on the "stalling" list. While it is on the
+  # list, EVERY song skips that sharer's files as long as it has at least one other sharer to try;
+  # if every remaining candidate is a stalling sharer they are still tried (a slow success beats a
+  # failure). In memory only: lost on restart, and each naviseerr process keeps its own list. Six
+  # hours because the two sharers measured on 27-09-2026 never served a single file all evening
+  # (58 transfers stuck at 0%; 23 songs each lost ten minutes on one of them before succeeding
+  # elsewhere), while a sharer that was merely busy is worth asking again the next day.
+  stalling-sharer-cooldown-ms: 21600000
+  # A sharer that advertises no free upload slot AND more than this many files already queued is
+  # ranked behind every other candidate, even those whose file length differs from the majority.
+  # High on purpose: "busy" alone should not lose a sharer its place, only "will not reach us within
+  # queued-budget-ms". The sharer's free-slot flag, queue length and speed are now stored on each
+  # candidate so the database shows why it was ranked where it was.
+  max-sharer-queue: 50
   # A DOWNLOAD_POLL row whose transfer is absent from GET /transfers/downloads gets this much grace
   # (not the hour above) before failing. slskd keeps completed transfers in that list, so "absent"
   # means the lookup is broken, not that the download finished -- fail fast and loudly instead.

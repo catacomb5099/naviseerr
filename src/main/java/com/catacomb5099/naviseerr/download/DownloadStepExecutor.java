@@ -1,7 +1,9 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.schema.slskd.TransferState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
+import com.catacomb5099.naviseerr.util.TransferedFileUtil;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import lombok.extern.slf4j.Slf4j;
@@ -76,9 +78,37 @@ public class DownloadStepExecutor {
 
             // Same "missing means still running" handling as SEARCH_POLL, via TransferedFileUtil's
             // existing null-safety — see the Javadoc on DownloadStateMachine.afterDownloadPoll.
-            case DOWNLOAD_POLL -> Mono.just(stateMachine.afterDownloadPoll(
-                    task, transfersById.get(task.slskdTransferId()), now));
+            case DOWNLOAD_POLL -> Mono.fromSupplier(() -> {
+                TransferedFile file = transfersById.get(task.slskdTransferId());
+                DownloadDecision decision = stateMachine.afterDownloadPoll(task, file, now);
+                cancelIfAbandoned(task, file, decision);
+                return decision;
+            });
         };
+    }
+
+    /**
+     * When a poll decides to stop waiting on a transfer that slskd still has running -- a sharer
+     * that queued us past the queued budget, or the hour-long download budget running out -- tell
+     * slskd to cancel it. Otherwise the request keeps our place in that sharer's queue and sits in
+     * slskd's list forever (58 of them after the 27-09-2026 evening). Fire-and-forget: the decision
+     * is already made and is written whether or not slskd hears this; a failure is a WARN, nothing
+     * more. A transfer slskd reports as Completed (succeeded, errored, rejected) needs no cancel.
+     */
+    private void cancelIfAbandoned(DownloadTask task, TransferedFile file, DownloadDecision decision) {
+        boolean stillPolling = decision instanceof DownloadDecision.Continue proceed
+                && proceed.next().phase() == DownloadPhase.DOWNLOAD_POLL;
+        List<TransferState> states = TransferedFileUtil.getStateList(file);
+        if (stillPolling || states.isEmpty() || states.contains(TransferState.COMPLETED)) {
+            return;
+        }
+        Mono.defer(() -> slskdService.cancelDownload(file.getUsername(), file.getId()))
+                .subscribe(ignored -> { },
+                        error -> log.warn("Could not cancel abandoned transfer {} from '{}' for "
+                                + "download {}; it stays in slskd's list", file.getId(),
+                                file.getUsername(), task.downloadId(), error),
+                        () -> log.info("Cancelled abandoned transfer {} from '{}' for download {}",
+                                file.getId(), file.getUsername(), task.downloadId()));
     }
 
     private Mono<DownloadDecision> decideAfterSearchPoll(DownloadTask task, SearchState state,

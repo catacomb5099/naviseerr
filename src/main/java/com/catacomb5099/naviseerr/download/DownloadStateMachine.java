@@ -21,7 +21,8 @@ import java.util.Objects;
 /**
  * Every branching decision in the download pipeline. Pure: no I/O, no Reactor, no clock of its own —
  * {@code now} is always passed in. That is what makes the whole branch matrix testable without mocking
- * HTTP or sleeping.
+ * HTTP or sleeping. The one piece of shared state it consults is {@link StallingSharers}, an in-memory
+ * list, so a test can hand it a fresh one.
  */
 @Component
 public class DownloadStateMachine {
@@ -33,6 +34,7 @@ public class DownloadStateMachine {
     private final Duration queuedBudget;
     private final Duration missingTransferGrace;
     private final int retryLimit;
+    private final StallingSharers stallingSharers;
 
     public DownloadStateMachine(
             @Value("${download-task.search-poll-interval-ms:2000}") Duration searchPollInterval,
@@ -41,7 +43,8 @@ public class DownloadStateMachine {
             @Value("${download-task.download-budget-ms:3600000}") Duration downloadBudget,
             @Value("${download-task.queued-budget-ms:600000}") Duration queuedBudget,
             @Value("${download-task.missing-transfer-grace-ms:60000}") Duration missingTransferGrace,
-            @Value("${slskd-service.retry-count}") int retryLimit) {
+            @Value("${slskd-service.retry-count}") int retryLimit,
+            StallingSharers stallingSharers) {
         this.searchPollInterval = searchPollInterval;
         this.downloadPollInterval = downloadPollInterval;
         this.searchBudget = searchBudget;
@@ -49,6 +52,7 @@ public class DownloadStateMachine {
         this.queuedBudget = queuedBudget;
         this.missingTransferGrace = missingTransferGrace;
         this.retryLimit = retryLimit;
+        this.stallingSharers = stallingSharers;
     }
 
     public DownloadDecision afterSearchInit(DownloadTask task, SearchState started, Instant now) {
@@ -93,7 +97,7 @@ public class DownloadStateMachine {
         }
         DownloadTask next = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now);
         return new DownloadDecision.Advance(next.toBuilder()
-                .candidates(selected).candidateIndex(0).retryIndex(0)
+                .candidates(selected).candidateIndex(pickCandidate(selected, 0, now)).retryIndex(0)
                 .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
                 .progressPercent(BigDecimal.ZERO)
                 .build());
@@ -121,6 +125,12 @@ public class DownloadStateMachine {
         if (states.stream().anyMatch(TransferState::isSuccess)) {
             return new DownloadDecision.Terminal(DownloadStatus.SUCCEEDED, null);
         }
+        if (states.contains(TransferState.REJECTED)) {
+            // The sharer said no ("Transfer rejected: File not shared." -- its share index is
+            // stale -- or "Overwhelmed with requests"). Asking for the same file again gets the same
+            // answer; measured 27-09-2026, 8 such rejections were each retried in place for nothing.
+            return nextCandidate(task, now);
+        }
         if (states.stream().anyMatch(TransferState::isFailure)) {
             return retryOrAdvanceCandidate(task, now);
         }
@@ -147,14 +157,14 @@ public class DownloadStateMachine {
         // is needed to know how long we have been in this peer's queue. Straight to the next
         // candidate, not a same-peer retry: a peer that kept us waiting ten minutes will do it again,
         // and the measured case (peer SKYLiGHT_B, 27-09-2026) sat at 0% for the entire hour while
-        // seven other candidates were never tried.
-        // ponytail: the abandoned transfer is left alive in slskd (there is no cancel call yet), so it
-        // keeps our place in that peer's queue and is no longer counted by max-concurrent-transfers.
-        // Cancelling it (DELETE /transfers/downloads/{user}/{id}) is the next PR.
+        // seven other candidates were never tried. The sharer is also remembered, so every OTHER
+        // song skips it too (see StallingSharers), and DownloadStepExecutor cancels the abandoned
+        // transfer in slskd once this decision is out.
         boolean waiting = !states.contains(TransferState.LOCALLY)
                 && (!states.contains(TransferState.IN_PROGRESS)
                         || Objects.equals(0L, file.getBytesTransferred()));
         if (waiting && task.isPastBudget(now, queuedBudget)) {
+            stallingSharers.markStalled(task.slskdUsername(), now);
             return nextCandidate(task, now);
         }
         return new DownloadDecision.Continue(observed.dueAt(now.plus(downloadPollInterval)));
@@ -209,10 +219,26 @@ public class DownloadStateMachine {
 
     private DownloadDecision nextCandidate(DownloadTask task, Instant now) {
         if (task.candidateIndex() + 1 < task.candidates().size()) {
-            return new DownloadDecision.Continue(rebuild(task, now, task.candidateIndex() + 1, 0));
+            return new DownloadDecision.Continue(rebuild(task, now,
+                    pickCandidate(task.candidates(), task.candidateIndex() + 1, now), 0));
         }
         return new DownloadDecision.Terminal(DownloadStatus.FAILED,
                 DownloadFailureCode.SOURCES_EXHAUSTED);
+    }
+
+    /**
+     * The first candidate at or after {@code from} whose sharer is not currently on the stalling
+     * list; if every remaining one is, {@code from} itself -- a slow success beats giving up. The
+     * skipped ones are never revisited: a sharer that stalled another song within the last few
+     * hours is the worst bet in the list, not a fallback worth keeping.
+     */
+    private int pickCandidate(List<DownloadCandidate> candidates, int from, Instant now) {
+        for (int i = from; i < candidates.size(); i++) {
+            if (!stallingSharers.isStalling(candidates.get(i).username(), now)) {
+                return i;
+            }
+        }
+        return from;
     }
 
     /**
