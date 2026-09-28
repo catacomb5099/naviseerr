@@ -651,6 +651,48 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
+    void cancelTasks_marksLiveSongsCancelled_leavesFinishedOnesAlone_andReturnsTheirTransfers() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "done", "polling", "searching");
+        List<UUID> tasks = taskIdsOf(id);
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        template.getDatabaseClient().sql("UPDATE download_tasks SET phase = 'DOWNLOAD_POLL', slskd_username = 'alice', "
+                + "slskd_transfer_id = 't-1', lease_owner = 'x' WHERE task_id = :id").bind("id", tasks.get(1)).fetch().rowsUpdated().block();
+
+        List<DownloadTask> cancelled = repository.cancelTasks(id, null, NOW).collectList().block();
+
+        assertEquals(2, cancelled.size());
+        assertEquals("SUCCEEDED", taskField(tasks.get(0), "phase"), "a finished song is not cancelled");
+        assertEquals("FAILED", taskField(tasks.get(1), "phase"));
+        assertEquals("CANCELLED", taskField(tasks.get(1), "failure_reason"));
+        assertNull(taskField(tasks.get(1), "lease_owner"), "the lease is released so nothing else can write the row");
+        DownloadTask polling = cancelled.stream().filter(t -> t.taskId().equals(tasks.get(1))).findFirst().orElseThrow();
+        assertEquals("alice", polling.slskdUsername());
+        assertEquals("t-1", polling.slskdTransferId());
+        assertTrue(repository.claimDueTasks(10, "me", NOW.plusSeconds(1), Duration.ofMinutes(1), true, 2)
+                .collectList().block().isEmpty(), "cancelled rows are never claimed again");
+    }
+
+    @Test
+    void cancelTasks_forOneSong_touchesOnlyThatSong() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "a", "b");
+        List<UUID> tasks = taskIdsOf(id);
+
+        List<DownloadTask> cancelled = repository.cancelTasks(id, tasks.get(0), NOW).collectList().block();
+
+        assertEquals(List.of(tasks.get(0)), cancelled.stream().map(DownloadTask::taskId).toList());
+        assertEquals("SEARCH_INIT", taskField(tasks.get(1), "phase"));
+    }
+
+    @Test
+    void cancelTasks_twice_theSecondIsANoOp() {
+        UUID id = admitOneSong("PENDING");
+        assertEquals(1, repository.cancelTasks(id, null, NOW).collectList().block().size());
+        assertEquals(0, repository.cancelTasks(id, null, NOW).collectList().block().size());
+    }
+
+    @Test
     void save_advancesUpdatedAt() {
         UUID id = admitOneSong("PENDING");
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
@@ -886,6 +928,14 @@ class DownloadTaskRepositoryIT {
                 .sql("SELECT failure_reason FROM download_tasks WHERE download_id = :id")
                 .bind("id", id)
                 .map((row, meta) -> Optional.ofNullable(row.get("failure_reason", String.class)))
+                .one().block().orElse(null);
+    }
+
+    /** One column of one song's row, by task id; the helpers above key on the download. */
+    private String taskField(UUID taskId, String column) {
+        return template.getDatabaseClient()
+                .sql("SELECT " + column + " FROM download_tasks WHERE task_id = :id").bind("id", taskId)
+                .map((row, meta) -> Optional.ofNullable(row.get(column, String.class)))
                 .one().block().orElse(null);
     }
 

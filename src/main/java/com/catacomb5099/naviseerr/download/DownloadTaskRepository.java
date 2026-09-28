@@ -246,6 +246,30 @@ public class DownloadTaskRepository {
                AND status = 'PENDING'
             """;
 
+    /**
+     * Cancels every unfinished song of a download, or one song when {@code :taskId} is given. The SET
+     * is {@link DownloadService#FINISH_TASK_SQL}'s with the reason fixed to CANCELLED; the guard is the
+     * same "still unfinished" test, and deliberately NOT a lease test: a step that is mid-flight will
+     * find the row finished when it comes back and write nothing (SAVE_SQL/FINISH_TASK_SQL guards).
+     * RETURNING hands back what the caller needs to stop the transfer in slskd and remove partial
+     * files. Bind the whole-download case with {@code bindNull("taskId", UUID.class)}.
+     */
+    private static final String CANCEL_SQL = """
+            UPDATE download_tasks
+               SET phase = 'FAILED',
+                   failure_reason = 'CANCELLED',
+                   phase_entered_at = :now,
+                   finished_at = :now,
+                   updated_at = now(),
+                   lease_owner = NULL,
+                   lease_expires_at = NULL
+             WHERE download_id = :id
+               AND phase NOT IN ('SUCCEEDED', 'FAILED')
+               AND (:taskId::uuid IS NULL OR task_id = :taskId)
+            RETURNING task_id, download_id, candidates, candidate_index,
+                      slskd_username, slskd_filename, slskd_transfer_id
+            """;
+
     // Counts DOWNLOADS in flight, not tasks, so one large collection can't lock out admission.
     private static final String COUNT_ACTIVE_DOWNLOADS_SQL = """
             SELECT count(*) AS total FROM downloads WHERE status = 'IN_PROGRESS'
@@ -412,6 +436,24 @@ public class DownloadTaskRepository {
                 .bind("now", now)
                 .fetch()
                 .rowsUpdated();
+    }
+
+    /** The songs this call cancelled, with what stopping them in slskd and on disk needs. Empty when nothing was left to cancel. */
+    public Flux<DownloadTask> cancelTasks(UUID downloadId, UUID taskId, Instant now) {
+        DatabaseClient.GenericExecuteSpec spec = client.sql(CANCEL_SQL)
+                .bind("id", downloadId)
+                .bind("now", now);
+        spec = taskId == null ? spec.bindNull("taskId", UUID.class) : spec.bind("taskId", taskId);
+        return spec.map((row, meta) -> DownloadTask.builder()
+                        .taskId(row.get("task_id", UUID.class))
+                        .downloadId(row.get("download_id", UUID.class))
+                        .candidates(readCandidates(row.get("candidates", String.class)))
+                        .candidateIndex(row.get("candidate_index", Integer.class))
+                        .slskdUsername(row.get("slskd_username", String.class))
+                        .slskdFilename(row.get("slskd_filename", String.class))
+                        .slskdTransferId(row.get("slskd_transfer_id", String.class))
+                        .build())
+                .all();
     }
 
     /** Finished songs still to be moved into the library, oldest first. See {@link LibraryOrganiser}. */
