@@ -89,7 +89,7 @@ class ArtistControllerTest {
                 .jsonPath("$.similarArtists.length()").isEqualTo(2)
                 .jsonPath("$.similarArtists[0].id").isEqualTo("UCauJZDRVzqj1QdLAQkUuq5w")
                 .jsonPath("$.similarArtists[0].name").isEqualTo("The Breeders")
-                .jsonPath("$.similarArtists[0].iconUrl").value(url -> ((String) url).startsWith("https://lh3.googleusercontent.com/"))
+                .jsonPath("$.similarArtists[0].iconUrl").isEqualTo("https://lh3.googleusercontent.com/3rBv8kN2ZqYlF0wXcJ7pQm4tHs9uVdRaEoLgKiTnMbWyPcSxUfZjAhGqDe6vOl1rN5kIwB8tCyXm=w540-h225-p-l90-rj")
                 .jsonPath("$.similarArtists[0].iconURL").doesNotExist()
                 .jsonPath("$.similarArtists[1].name").isEqualTo("Frank Black")
                 .jsonPath("$.similarArtists[1].iconUrl").isEqualTo("");
