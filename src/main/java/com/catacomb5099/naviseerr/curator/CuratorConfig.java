@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.reactive.function.client.WebClient;
 
 /**
- * Outbound client for the playlist-curator sidecar. Every {@code /v1/*} request carries the shared
+ * Outbound client for the croissant sidecar (the playlist curator). Every {@code /v1/*} request carries the shared
  * bearer token (env {@code CURATOR_TOKEN}, the same value the curator itself is started with).
  * {@code @EnableScheduling} lives here because {@link CuratorScheduler} is the only cron job in the
  * project; the download loop uses its own {@code Flux.interval} and does not need it.

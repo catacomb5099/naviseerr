@@ -158,7 +158,7 @@ library:
   # Where the organised library goes: <root>/<Artist>/<Album or Title>/<file>.
   root: ${LIBRARY_ROOT:}
 
-# Playlist curator: the separate playlist-curator service (see compose.yaml) builds a fresh "suggested
+# Playlist curator: the separate croissant service (see compose.yaml) builds a fresh "suggested
 # playlists" edition per category. naviseerr owns the clock: once a week it tells the curator to start,
 # then checks back every poll-interval until the run is done. OFF unless BOTH url and token are set -- an
 # install without a curator behaves exactly as before. See docs/decisions/curator-weekly-trigger-27-09-2026.md.

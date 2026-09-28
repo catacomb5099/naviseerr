@@ -53,7 +53,7 @@ public class CuratorScheduler {
         this.refreshDay = refreshDay(cron);
         if (!enabled) {
             log.info("Weekly curator refresh OFF: suggested playlists are not refreshed. Set CURATOR_URL "
-                    + "and CURATOR_TOKEN (the same token the playlist-curator is started with) to turn it on.");
+                    + "and CURATOR_TOKEN (the same token croissant is started with) to turn it on.");
         }
     }
 
