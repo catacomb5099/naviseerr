@@ -39,7 +39,7 @@ class DownloadStepExecutorTest {
         DownloadStateMachine machine = new DownloadStateMachine(
                 Duration.ofSeconds(2), Duration.ofSeconds(5),
                 Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofMinutes(10),
-                Duration.ofSeconds(60), 2);
+                Duration.ofSeconds(60), 2, new StallingSharers(Duration.ofHours(6)));
         executor = new DownloadStepExecutor(slskdService, searchProcessor, machine,
                 Clock.fixed(T0, ZoneOffset.UTC));
     }
@@ -201,6 +201,30 @@ class DownloadStepExecutorTest {
         assertEquals(DownloadStatus.SUCCEEDED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).status());
         verify(slskdService, never()).getAllDownloads();
+    }
+
+    @Test
+    void downloadPoll_givingUpOnAQueuedSharer_cancelsTheAbandonedTransferInSlskd() {
+        when(slskdService.cancelDownload("alice", "abc")).thenReturn(Mono.empty());
+        TransferedFile stuck = SlskdFixtures.transfer("abc", "alice", "Queued, Remotely");
+        // phaseEnteredAt is T0 and the clock is fixed at T0, so back-date the phase past the budget.
+        DownloadTask task = downloadPolling(candidates("alice", "bob"), 0, 0, "abc").toBuilder()
+                .phaseEnteredAt(T0.minus(Duration.ofMinutes(11))).build();
+
+        DownloadDecision d = executor.execute(task, Map.of(), Map.of("abc", stuck)).block();
+
+        assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
+        verify(slskdService).cancelDownload("alice", "abc");
+    }
+
+    @Test
+    void downloadPoll_aTransferSlskdAlreadyCompleted_isNotCancelled() {
+        TransferedFile done = SlskdFixtures.transfer("abc", "alice", "Completed, Rejected");
+
+        executor.execute(downloadPolling(candidates("alice", "bob"), 0, 0, "abc"), Map.of(),
+                Map.of("abc", done)).block();
+
+        verify(slskdService, never()).cancelDownload(any(), any());
     }
 
     @Test

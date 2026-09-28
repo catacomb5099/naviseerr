@@ -28,6 +28,7 @@ class SlskdSearchResultProcessorTest {
         // sensible defaults
         ReflectionTestUtils.setField(processor, "minBitRate", 128);
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 5);
+        ReflectionTestUtils.setField(processor, "maxSharerQueue", 50);
     }
 
     @Test
@@ -236,6 +237,35 @@ class SlskdSearchResultProcessorTest {
         assertEquals("free", result.getFirst().peer().getUsername());
     }
 
+    @Test
+    void selectBestFiles_aSharerWithNoSlotAndALongQueue_goesLast_evenWithTheMajorityLength() {
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
+
+        // The measured profile of a sharer that never serves: no free slot, dozens already waiting.
+        SearchResponseItem overloaded = peer("overloaded", 9_000_000, false, 80, file("o/song.flac", 213));
+        SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
+        SearchResponseItem odd = peer("odd", 2_000_000, true, 0, file("odd/song.flac", 312));
+
+        var result = processor.selectBestFiles(state(overloaded, a, odd), "song").block();
+
+        assertEquals(List.of("a", "odd", "overloaded"),
+                result.stream().map(e -> e.peer().getUsername()).toList());
+    }
+
+    @Test
+    void selectBestFiles_aBusySharerUnderTheQueueThreshold_keepsItsDurationRank() {
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
+
+        SearchResponseItem busy = peer("busy", 9_000_000, false, 50, file("busy/song.flac", 213));
+        SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
+        SearchResponseItem odd = peer("odd", 2_000_000, true, 0, file("odd/song.flac", 312));
+
+        var result = processor.selectBestFiles(state(busy, a, odd), "song").block();
+
+        assertEquals(List.of("a", "busy", "odd"),
+                result.stream().map(e -> e.peer().getUsername()).toList());
+    }
+
     private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadsSlot, int queueLength, SearchFile file) {
         SearchResponseItem item = mock(SearchResponseItem.class);
         when(item.getUsername()).thenReturn(username);
@@ -264,5 +294,26 @@ class SlskdSearchResultProcessorTest {
         when(state.getResponses()).thenReturn(List.of(peers));
         when(state.getFileCount()).thenReturn(peers.length);
         return state;
+    }
+
+    @Test
+    void spreadAcrossSharers_noSharerGetsASecondFileBeforeEveryoneHasOne() {
+        SearchResponseItem a = mock(SearchResponseItem.class);
+        SearchResponseItem b = mock(SearchResponseItem.class);
+        SearchResponseItem c = mock(SearchResponseItem.class);
+        when(a.getUsername()).thenReturn("a");
+        when(b.getUsername()).thenReturn("b");
+        when(c.getUsername()).thenReturn("c");
+        SearchFile a1 = mock(SearchFile.class), a2 = mock(SearchFile.class), a3 = mock(SearchFile.class);
+        SearchFile b1 = mock(SearchFile.class), c1 = mock(SearchFile.class);
+        TrackMatchingService.Match exact = TrackMatchingService.Match.EXACT;
+        List<SlskdSearchResultProcessor.Pick> ranked = List.of(
+                new SlskdSearchResultProcessor.Pick(a, a1, exact), new SlskdSearchResultProcessor.Pick(a, a2, exact),
+                new SlskdSearchResultProcessor.Pick(a, a3, exact), new SlskdSearchResultProcessor.Pick(b, b1, exact),
+                new SlskdSearchResultProcessor.Pick(c, c1, exact));
+
+        List<SlskdSearchResultProcessor.Pick> spread = SlskdSearchResultProcessor.spreadAcrossSharers(ranked);
+
+        assertEquals(List.of(a1, b1, c1, a2, a3), spread.stream().map(SlskdSearchResultProcessor.Pick::file).toList());
     }
 }

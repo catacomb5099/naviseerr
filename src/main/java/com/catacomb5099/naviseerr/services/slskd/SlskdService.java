@@ -9,6 +9,7 @@ import com.catacomb5099.naviseerr.schema.slskd.UserTransfers;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -63,6 +64,21 @@ public class SlskdService {
                 .bodyValue(List.of(file))
                 .retrieve()
                 .bodyToMono(QueueDownloadResponse.class);
+    }
+
+    /**
+     * Cancels one of our downloads in slskd. Used when we give up on a sharer that queued us for
+     * too long, so the abandoned request no longer holds a place in that sharer's queue or clutters
+     * slskd's transfer list. A 404 means slskd already forgot it, which is the outcome we wanted.
+     */
+    public Mono<Void> cancelDownload(String username, String downloadId) {
+        return webClient
+                .delete()
+                .uri(TRANSFERS_ENDPOINT + "/" + username + "/" + downloadId)
+                .retrieve()
+                .toBodilessEntity()
+                .onErrorResume(WebClientResponseException.NotFound.class, gone -> Mono.empty())
+                .then();
     }
 
     public Mono<TransferedFile> getDownloadProgress(String username, String downloadId) {

@@ -24,6 +24,8 @@ public class SlskdSearchResultProcessor {
     int minBitRate;
     @Value("${slskd-service.max-files-per-download}")
     int maxFilesPerDownload;
+    @Value("${download-task.max-sharer-queue:50}")
+    int maxSharerQueue;
 
     /** One shared file that is the song, with how well it answers the request. */
     public record Pick(SearchResponseItem peer, SearchFile file, TrackMatchingService.Match grade) {}
@@ -66,6 +68,17 @@ public class SlskdSearchResultProcessor {
             // album re-records are the odd lengths out. Prefer the most shared length, then fall back
             // to who can serve the file fastest. Measured 80% -> 93% correct top pick on 718 songs.
             // Counted within a grade, so the other versions cannot outvote the exact ones.
+            //
+            // One exception sits in front of the duration vote (but behind the grade): a sharer with
+            // no free upload slot AND more than max-sharer-queue files already waiting goes to the
+            // back of its grade, whatever its file's length. The duration vote protects against the
+            // wrong version; this protects against a sharer that will not reach us inside
+            // queued-budget-ms at all (27-09-2026: two such sharers cost ten minutes per song, 58
+            // times). Putting the demotion inside each duration group instead would change nothing,
+            // because BY_AVAILABILITY already sorts busy sharers to the end of their group. The price
+            // is small: only when EVERY sharer of the majority length is that overloaded does an
+            // odd-length file get tried first, and the threshold is set high enough that "busy" alone
+            // never triggers it.
             Map<TrackMatchingService.Match, Map<Integer, Long>> countByLength = candidates.stream()
                     .filter(pick -> pick.file().getLength().isPresent())
                     .collect(Collectors.groupingBy(Pick::grade,
@@ -73,6 +86,7 @@ public class SlskdSearchResultProcessor {
             candidates = candidates.stream()
                     .sorted(Comparator
                             .comparing(Pick::grade)
+                            .thenComparing(pick -> isOverloaded(pick.peer()))
                             .thenComparingLong((Pick pick) -> -pick.file().getLength()
                                     .map(length -> countByLength.get(pick.grade()).get(length)).orElse(0L))
                             .thenComparing(Pick::peer, BY_AVAILABILITY))
@@ -81,8 +95,46 @@ public class SlskdSearchResultProcessor {
             long exact = candidates.stream().filter(pick -> pick.grade() == TrackMatchingService.Match.EXACT).count();
             log.info("Completed candidate selection for query='{}' - {} response(s), {} total files, {} relevant candidates ({} in the requested version, {} other versions); limiting to {} by maxFilesPerDownload",
                     query, responses.size(), state.getFileCount(), candidates.size(), exact, candidates.size() - exact, maxFilesPerDownload);
-            return candidates.stream().limit(maxFilesPerDownload).toList();
+            return spreadAcrossSharers(candidates).stream().limit(maxFilesPerDownload).toList();
         });
+    }
+
+    /**
+     * Same order, but no sharer gets a second file in the list until every other sharer has had
+     * its first, then a third until every one has had a second, and so on. A failover list made of
+     * one sharer's ten pressings of the same album is ten chances for the same "Queued, Remotely"
+     * (27-09-2026: songs with three to five files all from one stalling sharer waited 30-50 minutes
+     * before running out). Spreading the list means a sharer that stalls or throttles costs one
+     * candidate, not the whole list. Within a round the ranking above still decides who goes first.
+     * Done grade by grade, so every file in the requested version still comes before any other
+     * version: the spread never promotes a fallback above an exact match.
+     */
+    static List<Pick> spreadAcrossSharers(List<Pick> ranked) {
+        List<Pick> spread = new java.util.ArrayList<>(ranked.size());
+        for (TrackMatchingService.Match grade : TrackMatchingService.Match.values()) {
+            Map<String, java.util.ArrayDeque<Pick>> bySharer = new java.util.LinkedHashMap<>();
+            for (Pick pick : ranked) {
+                if (pick.grade() == grade) {
+                    bySharer.computeIfAbsent(pick.peer().getUsername(), k -> new java.util.ArrayDeque<>()).add(pick);
+                }
+            }
+            int remaining = bySharer.values().stream().mapToInt(java.util.ArrayDeque::size).sum();
+            while (remaining > 0) {
+                for (java.util.ArrayDeque<Pick> queue : bySharer.values()) {
+                    if (!queue.isEmpty()) {
+                        spread.add(queue.poll());
+                        remaining--;
+                    }
+                }
+            }
+        }
+        return spread;
+    }
+
+    /** No slot for us now and a long line ahead of us: the profile of a sharer that never serves. */
+    private boolean isOverloaded(SearchResponseItem sharer) {
+        return !Boolean.TRUE.equals(sharer.getHasFreeUploadsSlot())
+                && sharer.getQueueLength() > maxSharerQueue;
     }
 
     private boolean isFlacAndHighBitrate(SearchFile file) {
