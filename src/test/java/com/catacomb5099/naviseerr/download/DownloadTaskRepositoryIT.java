@@ -121,11 +121,24 @@ class DownloadTaskRepositoryIT {
 
         Long admitted = admit(id, "track one", "track two", "track three");
 
-        assertEquals(1L, admitted, "one download was admitted, whatever its song count");
+        assertEquals(3L, admitted, "one row per song was created");
         assertEquals(3L, countTaskRows());
         assertEquals("IN_PROGRESS", statusOf(id));
         assertEquals(NOW, admittedAtOf(id), "admission is the first lifecycle timestamp after the request");
         assertEquals(List.of("SEARCH_INIT", "SEARCH_INIT", "SEARCH_INIT"), phasesOf(id));
+    }
+
+    @Test
+    void createTasks_afterTheDownloadWasFailed_insertsNothing() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        // Admission selected the row, then the request was failed (or cancelled) before the song rows were written.
+        repository.failUnadmitted(id, DownloadFailureCode.METADATA_UNAVAILABLE, NOW).block();
+
+        Long created = admit(id, "a", "b", "c");
+
+        assertEquals(0L, created, "a download that is no longer pending must not get songs");
+        assertEquals(0L, countTaskRows());
+        assertEquals("FAILED", statusOf(id));
     }
 
     @Test

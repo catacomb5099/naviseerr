@@ -185,12 +185,12 @@ public class DownloadTaskRunner {
                                 if (admitted > 0) {
                                     log.info("Admitted download {} ({} '{}') as {} task(s)",
                                             download.getDownloadId(), download.getDownloadType(),
-                                            collection.name(), tasks.size());
+                                            collection.name(), admitted);
                                 } else {
                                     // The guards in CREATE_TASKS_SQL held, so something else had
                                     // already admitted this row. Nothing to fix, worth seeing.
-                                    log.debug("Download {} was already admitted; no tasks created",
-                                            download.getDownloadId());
+                                    log.debug("Download {} was already admitted or is no longer "
+                                            + "pending; no tasks created", download.getDownloadId());
                                 }
                             })
                             .then();
