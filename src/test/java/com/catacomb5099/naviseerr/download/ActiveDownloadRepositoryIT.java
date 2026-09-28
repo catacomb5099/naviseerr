@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -332,7 +333,7 @@ class ActiveDownloadRepositoryIT {
         UUID song = insertDownload("PENDING");
         admit(song, "just one");
 
-        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1).block();
+        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1, List.of()).block();
 
         assertEquals(2, page.downloads().size(), "five tracks and a single are two downloads");
         assertEquals(1, page.totalPages());
@@ -344,8 +345,8 @@ class ActiveDownloadRepositoryIT {
             admit(insertDownload("PENDING"), "song " + i);
         }
 
-        AllDownloadsResponse first = activeDownloadRepository.findAll(2, 1).block();
-        AllDownloadsResponse last = activeDownloadRepository.findAll(2, 3).block();
+        AllDownloadsResponse first = activeDownloadRepository.findAll(2, 1, List.of()).block();
+        AllDownloadsResponse last = activeDownloadRepository.findAll(2, 3, List.of()).block();
 
         assertEquals(2, first.downloads().size());
         assertEquals(3, first.totalPages(), "5 downloads at 2 per page");
@@ -356,7 +357,7 @@ class ActiveDownloadRepositoryIT {
     void findAll_pastTheEnd_reportsZeroPages_soTheClientGoesBackToPageOne() {
         admit(insertDownload("PENDING"), "song");
 
-        AllDownloadsResponse beyond = activeDownloadRepository.findAll(20, 5).block();
+        AllDownloadsResponse beyond = activeDownloadRepository.findAll(20, 5, List.of()).block();
 
         // No rows means the window function has nothing to report, so the true total is unknowable
         // from this query alone -- 0 is the agreed signal rather than a second round trip.
@@ -371,7 +372,7 @@ class ActiveDownloadRepositoryIT {
         finish(id, DownloadStatus.SUCCEEDED, null);
 
         // This is the history endpoint: unlike findActive it has no retention window at all.
-        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1).block();
+        AllDownloadsResponse page = activeDownloadRepository.findAll(10, 1, List.of()).block();
 
         assertEquals(1, page.downloads().size());
         assertEquals(DownloadStage.SUCCEEDED, page.downloads().getFirst().stage());
@@ -409,7 +410,7 @@ class ActiveDownloadRepositoryIT {
                 .findAll(10, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED)).block();
 
         assertEquals(Set.of(DownloadType.PLAYLIST, DownloadType.CURATED),
-                page.downloads().stream().map(ActiveDownloadView::downloadType).collect(java.util.stream.Collectors.toSet()));
+                page.downloads().stream().map(ActiveDownloadView::downloadType).collect(Collectors.toSet()));
         assertEquals(1, page.totalPages());
     }
 
@@ -419,13 +420,11 @@ class ActiveDownloadRepositoryIT {
         insertDownload("PENDING", "ALBUM");
         insertDownload("PENDING", "CURATED");
 
-        AllDownloadsResponse all = activeDownloadRepository.findAll(10, 1).block();
         AllDownloadsResponse empty = activeDownloadRepository.findAll(10, 1, List.of()).block();
         AllDownloadsResponse nul = activeDownloadRepository.findAll(10, 1, null).block();
 
-        assertEquals(3, all.downloads().size());
-        assertEquals(all.downloads(), empty.downloads());
-        assertEquals(all.downloads(), nul.downloads());
+        assertEquals(3, empty.downloads().size());
+        assertEquals(empty.downloads(), nul.downloads());
     }
 
     // ---- metadata: title, artists, artwork come from media_items ------------------------------

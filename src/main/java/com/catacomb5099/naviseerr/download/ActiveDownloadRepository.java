@@ -234,10 +234,6 @@ public class ActiveDownloadRepository {
                 .all();
     }
 
-    public Mono<AllDownloadsResponse> findAll(Integer pageSize, Integer pageNumber) {
-        return findAll(pageSize, pageNumber, List.of());
-    }
-
     /**
      * The history page restricted to {@code types}; empty or null means every download. The
      * filter is a list rather than one type because the client's "Playlists" pill means both a
