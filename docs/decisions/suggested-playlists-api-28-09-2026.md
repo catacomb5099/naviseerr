@@ -1,7 +1,7 @@
 # Suggested playlists: naviseerr hands the curator's weekly editions to the client
 
 **Date:** 28-09-2026
-**Status:** Accepted, implemented (two read endpoints; the "make this week's playlists now" action is a separate PR)
+**Status:** Accepted, implemented in two PRs (the two read endpoints; then the "make this week's playlists now" action)
 **Builds on:** `curator-weekly-trigger-27-09-2026.md` (the weekly refresh) and the playlist-curator's HTTP API
 
 ## Context
@@ -18,8 +18,10 @@ vocabulary when it already talks to naviseerr for everything else.
 
 ### naviseerr proxies the curator's editions, in the client's own vocabulary
 
-- `GET /suggested-playlists` answers `{enabled, playlists[{category, title, editionDate, trackCount}]}`: the
-  latest edition per category, from the curator's `GET /v1/editions`.
+- `GET /suggested-playlists` answers `{enabled, refreshDay, playlists[{category, title, editionDate, trackCount}]}`:
+  the latest edition per category, from the curator's `GET /v1/editions`. `refreshDay` ("MONDAY") is read off
+  `curator.cron` when it names one plain weekday, so the client can say "New edition every Monday" the way
+  every streaming service names its day; null otherwise.
 - `GET /suggested-playlists/{category}` answers the edition itself: `{category, title, filters, editionDate,
   trackCount, tracks[{id, name, artists, album, albumYear, popularity, tier, reason, iconURL, position}]}`.
   `id`, `name`, `artists` and `iconURL` are named as on the search contract, so the client's song rows,
@@ -48,6 +50,25 @@ The curator stores no pictures. Each song gets YouTube's predictable thumbnail U
 fallback playlist tracks already use, so the rows show album art rather than blanks. The playlist itself has
 no cover; the client draws one.
 
+### Refresh on demand: "make this week's playlists now"
+
+The weekly clock is the normal way editions appear. When none are ready (a fresh install, a curator that
+was down on Monday, a category added mid-week) the client can ask for them:
+
+- `POST /suggested-playlists/refresh` tells the curator to start and answers 202 at once with the run
+  (`{runId, status, requestedAt, startedAt, finishedAt, categories[{key, status, editionDate, trackCount,
+  message}], final}`, the curator's own run record; `final` is true once the run is over). Pressing during a run returns that run: the curator's trigger
+  is idempotent. Unlike the cron tick, the trigger is not retried; a person is waiting and can press again.
+- `GET /suggested-playlists/refresh` is the most recent run, whoever started it, so the client can follow
+  it: `queued`, `running`, then `succeeded`, `partial` or `failed` with one plain-language line per
+  category. 404 when the curator has never run. The literal path wins over `/{category}`, so a category
+  cannot be called `refresh`.
+- After the 202, naviseerr keeps following the run in the background exactly as after a cron tick
+  (`CuratorScheduler.refreshNow()`), so the log tells the same story either way. If the weekly refresh is
+  already following a run, the manual one is not followed twice.
+
+Both answer 503 when no curator is configured.
+
 ## Trade-offs
 
 - **A read costs a curator round trip.** Fine at this size and for one user's browser; if it ever matters,
@@ -56,10 +77,8 @@ no cover; the client draws one.
   for the weekly refresh: both `CURATOR_URL` and `CURATOR_TOKEN` are set. One rule, one place.
 - **No paging.** An edition is 30-50 songs by design.
 
-## Not in this PR
+## Not in these PRs
 
-- A "make this week's playlists now" action (`POST /suggested-playlists/refresh`) and a way for the client to
-  follow the run. `CuratorScheduler.refresh()` is public for exactly that; next PR.
 - Downloading a suggested playlist as one download. Today the client can download its songs one by one
   (they are ordinary YouTube ids). A `CURATED` download type that admits an edition as one collection is
   the follow-up the curator's discovery notes already name.

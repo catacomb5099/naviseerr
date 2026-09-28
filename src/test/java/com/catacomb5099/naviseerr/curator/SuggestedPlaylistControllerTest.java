@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.DayOfWeek;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +38,7 @@ class SuggestedPlaylistControllerTest {
         StepVerifier.create(controller.list())
                 .assertNext(view -> {
                     assertFalse(view.enabled());
+                    assertNull(view.refreshDay());
                     assertTrue(view.playlists().isEmpty());
                 })
                 .verifyComplete();
@@ -46,6 +48,7 @@ class SuggestedPlaylistControllerTest {
     @Test
     void list_mapsTheCuratorsEditions() {
         when(scheduler.isEnabled()).thenReturn(true);
+        when(scheduler.getRefreshDay()).thenReturn(DayOfWeek.MONDAY);
         when(client.getEditions()).thenReturn(Mono.just(List.of(
                 new CuratorEditionSummary("80s-indie-pop", "80s indie pop", "2026-09-27", 40),
                 new CuratorEditionSummary("current-pop", "Current pop", "2026-09-28", null))));
@@ -53,6 +56,7 @@ class SuggestedPlaylistControllerTest {
         StepVerifier.create(controller.list())
                 .assertNext(view -> {
                     assertTrue(view.enabled());
+                    assertEquals(DayOfWeek.MONDAY, view.refreshDay());
                     assertEquals(2, view.playlists().size());
                     SuggestedPlaylistsView.SuggestedPlaylistSummary first = view.playlists().getFirst();
                     assertEquals("80s-indie-pop", first.category());
@@ -131,6 +135,60 @@ class SuggestedPlaylistControllerTest {
                 .assertNext(response -> assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode()))
                 .verifyComplete();
         verifyNoInteractions(client, scheduler);
+    }
+
+    @Test
+    void refresh_asksTheSchedulerAndAnswers202WithTheRun() {
+        when(scheduler.isEnabled()).thenReturn(true);
+        CuratorRun queued = new CuratorRun("r1", "queued", "2026-09-28T10:14:39Z", null, null, List.of(
+                new CuratorCategoryResult("80s-indie-pop", "queued", null, null, null)));
+        when(scheduler.refreshNow()).thenReturn(Mono.just(queued));
+
+        StepVerifier.create(controller.refresh())
+                .assertNext(response -> {
+                    assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+                    assertEquals("r1", response.getBody().runId());
+                    assertEquals("queued", response.getBody().status());
+                })
+                .verifyComplete();
+        verify(client, never()).triggerRun();
+        verify(client, never()).triggerRunOnce();
+    }
+
+    @Test
+    void refresh_withNoCuratorConfigured_is503WithoutTriggering() {
+        when(scheduler.isEnabled()).thenReturn(false);
+
+        StepVerifier.create(controller.refresh())
+                .assertNext(response -> assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode()))
+                .verifyComplete();
+        verify(scheduler, never()).refreshNow();
+    }
+
+    @Test
+    void latestRun_readsTheCuratorsLatestRun() {
+        when(scheduler.isEnabled()).thenReturn(true);
+        when(client.getLatestRun()).thenReturn(Mono.just(new CuratorRun("r2", "partial", "2026-09-28T10:14:39Z",
+                "2026-09-28T10:14:40Z", "2026-09-28T10:17:28Z", List.of(
+                new CuratorCategoryResult("90s-grime", "no_albums", "2026-09-28", null, "Discogs returned no albums")))));
+
+        StepVerifier.create(controller.latestRun())
+                .assertNext(response -> {
+                    assertEquals(HttpStatus.OK, response.getStatusCode());
+                    assertEquals("partial", response.getBody().status());
+                    assertEquals("no_albums", response.getBody().categories().getFirst().status());
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void latestRun_withNoCuratorConfigured_is503() {
+        when(scheduler.isEnabled()).thenReturn(false);
+
+        StepVerifier.create(controller.latestRun())
+                .assertNext(response -> assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode()))
+                .verifyComplete();
+        verifyNoInteractions(client);
     }
 
     @Test
