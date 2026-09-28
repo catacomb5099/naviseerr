@@ -3,6 +3,7 @@ package com.catacomb5099.naviseerr.util;
 import me.xdrop.fuzzywuzzy.FuzzySearch;
 import org.springframework.stereotype.Service;
 
+import java.text.Normalizer;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -60,14 +61,75 @@ public class TrackMatchingService {
     /**
      * How well a shared file answers a request. {@code EXACT}: the song, by the artist, in the requested version.
      * {@code OTHER_VERSION}: the song by the artist, but a live take, remix, acoustic or studio version the request
-     * did not ask for; kept as a fallback because any version beats no song. {@code NONE}: not the song (DJ-pool
-     * edits, album siblings, other artists). Declared in ranking order.
+     * did not ask for; kept as a fallback because any version beats no song. {@code UNVERIFIED}: the song by
+     * name, but the search did not name the artist and the artist is nowhere in the file's path, so whose
+     * recording it is cannot be told; kept only when no file names the artist (a YouTube "artist" that is
+     * really a channel, "UPROXX Indie Mixtape", appears in no path at all). {@code NONE}: not the song
+     * (DJ-pool edits, album siblings, other artists). Declared in ranking order.
      */
-    public enum Match { EXACT, OTHER_VERSION, NONE }
+    public enum Match { EXACT, OTHER_VERSION, UNVERIFIED, NONE }
 
     /** {@link #grade} is {@code EXACT}. */
     public boolean isMatch(String cleanTitle, String torrentFilePath) {
         return grade(cleanTitle, torrentFilePath) == Match.EXACT;
+    }
+
+    /**
+     * {@link #grade(String, String)}, plus: when the search that found this file did not name the artist,
+     * the artist must appear somewhere in the file's path for the grade to stand; otherwise the file is
+     * {@code UNVERIFIED}. A search for the title alone ("Believe") returns every artist's "Believe", and the
+     * filename by itself cannot tell Cher's from the rest; the folder usually can. When the wording did name
+     * the artist, Soulseek has already matched it against the path, so this changes nothing for those
+     * results. "The" is not required ("Cars/..." is The Cars), accents are ignored ("Beyonce" is Beyoncé),
+     * a name run together ("LadyGaga") still counts, and a name with no Latin letters or digits
+     * ("米津玄師") cannot be checked either way, so it is taken as named.
+     */
+    public Match grade(String cleanTitle, String torrentFilePath, String searchWording) {
+        Match match = grade(cleanTitle, torrentFilePath);
+        if (match == Match.NONE || artistNamed(cleanTitle, searchWording)) {
+            return match;
+        }
+        return artistInPath(cleanTitle, torrentFilePath) ? match : Match.UNVERIFIED;
+    }
+
+    /**
+     * The artist as the request writes it: the last part of "title - artist", or for the three-part
+     * "artist - title - channel" the first part and the channel (an official channel echoes the artist).
+     */
+    private static List<String> artistNames(String request) {
+        String[] parts = request.split(" - ");
+        if (parts.length < 2) return List.of();
+        return parts.length == 2 ? List.of(parts[1]) : List.of(parts[0], parts[parts.length - 1]);
+    }
+
+    /**
+     * Every word of one of the request's artist names is in the wording, so Soulseek matched it already.
+     * True as well when there is no artist, or the name has no words this matcher can read.
+     */
+    private static boolean artistNamed(String request, String searchWording) {
+        List<String> names = artistNames(request);
+        if (names.isEmpty()) return true;
+        Set<String> wording = tokens(searchWording);
+        for (String name : names) {
+            Set<String> words = tokens(name);
+            if (words.isEmpty() || wording.containsAll(words)) return true;
+        }
+        return false;
+    }
+
+    private static boolean artistInPath(String request, String path) {
+        Set<String> pathTokens = tokens(path);
+        String squashedPath = squash(path);
+        for (String name : artistNames(request)) {
+            Set<String> words = tokens(name);
+            words.remove("the");
+            String squashed = squash(name);
+            if (!words.isEmpty() && pathTokens.containsAll(words)
+                    || squashed.length() >= 5 && squashedPath.contains(squashed)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -215,11 +277,21 @@ public class TrackMatchingService {
     private static Set<String> tokens(String text) {
         Set<String> out = new HashSet<>();
         if (text == null) return out;
-        Matcher m = TOKEN.matcher(text.toLowerCase(Locale.ROOT));
+        Matcher m = TOKEN.matcher(fold(text));
         while (m.find()) {
             out.add(m.group());
         }
         return out;
+    }
+
+    /** Lower case, accents gone: "Beyoncé" and "Beyonce" are the same name. */
+    private static String fold(String text) {
+        return Normalizer.normalize(text.toLowerCase(Locale.ROOT), Normalizer.Form.NFD).replaceAll("\\p{M}", "");
+    }
+
+    /** Letters and digits only, so "Lady Gaga" is found inside "LadyGaga" and "lady_gaga". */
+    private static String squash(String text) {
+        return fold(text).replaceAll("[^a-z0-9]", "");
     }
 
     private static Set<String> versionWords(String text) {
