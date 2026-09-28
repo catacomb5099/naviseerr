@@ -86,6 +86,11 @@ class ActiveDownloadRepositoryIT {
         taskRepository.concludeDownloads().block();
     }
 
+    /** Finishes one task row by id, without concluding its download -- for mixed-outcome setups. */
+    private void finishTask(UUID taskId, DownloadStatus status, DownloadFailureCode code) {
+        TaskFinishing.finish(template, downloadService, taskId, status, code, NOW);
+    }
+
     private List<UUID> taskIdsOf(UUID downloadId) {
         return template.getDatabaseClient()
                 .sql("SELECT task_id FROM download_tasks WHERE download_id = :id ORDER BY song_name")
@@ -320,6 +325,40 @@ class ActiveDownloadRepositoryIT {
         // collection would finish and then never be reported at all.
         assertEquals("NO_CANDIDATES", view.failureCode(),
                 "a collection reports a reason as soon as one of its songs has one");
+    }
+
+    @Test
+    void aCollection_countsCancelledSongsApartFromFailedOnes_andKeepsTheRealReason() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "one", "two", "three");
+        List<UUID> tasks = taskIdsOf(id);
+        finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null);
+        finishTask(tasks.get(1), DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES);
+        finishTask(tasks.get(2), DownloadStatus.FAILED, DownloadFailureCode.CANCELLED);
+        taskRepository.concludeDownloads().block();   // the loop's end-of-pass step
+
+        ActiveDownloadView view = active().stream().filter(v -> v.downloadId().equals(id)).findFirst().orElseThrow();
+
+        assertEquals(1, view.songsSucceeded());
+        assertEquals(1, view.songsFailed(), "the user's own cancel is not a failure");
+        assertEquals(1, view.songsCancelled());
+        assertEquals("NO_CANDIDATES", view.failureCode(), "a real failure outranks a cancellation");
+        assertEquals(DownloadStage.PARTIAL_SUCCESS, view.stage());
+    }
+
+    @Test
+    void anAllCancelledCollection_readsCancelled() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "one", "two");
+        taskIdsOf(id).forEach(t -> finishTask(t, DownloadStatus.FAILED, DownloadFailureCode.CANCELLED));
+        taskRepository.concludeDownloads().block();
+
+        ActiveDownloadView view = active().stream().filter(v -> v.downloadId().equals(id)).findFirst().orElseThrow();
+
+        assertEquals(0, view.songsFailed());
+        assertEquals(2, view.songsCancelled());
+        assertEquals("CANCELLED", view.failureCode());
+        assertEquals(DownloadStage.FAILED, view.stage());
     }
 
     // ---- the history endpoint ------------------------------------------------------------------

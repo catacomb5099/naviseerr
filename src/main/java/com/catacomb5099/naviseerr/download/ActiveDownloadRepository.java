@@ -36,9 +36,10 @@ public class ActiveDownloadRepository {
      * <p>Progress is the mean across songs, so a collection's bar tracks the collection rather than
      * whichever track happens to be transferring. {@code updated_at} is the most recent write, since
      * that is the feed's recency sort key and any song's write means the download moved.
-     * {@code failure_reason} is the first non-null: a collection reports a reason as soon as one
-     * song has one, without waiting for the rest. The three counts are what let a card say
-     * "7 of 12" without asking for the per-song view.
+     * {@code failure_reason} is the first non-null, preferring a real failure over the user's own
+     * cancel: a collection reports a reason as soon as one song has one, without waiting for the
+     * rest. The four counts are what let a card say "7 of 12 · 2 failed · 1 cancelled" without
+     * asking for the per-song view.
      */
     private static final String TASK_AGGREGATE = """
             SELECT t.download_id,
@@ -50,13 +51,18 @@ public class ActiveDownloadRepository {
                                         WHEN 'DOWNLOAD_POLL' THEN 4
                                         ELSE 5 END)]           AS phase,
                    AVG(t.progress_percent)                     AS progress_percent,
-                   MIN(t.failure_reason)                       AS failure_reason,
+                   -- A real failure outranks the user's own cancel: MIN alone would sort 'CANCELLED' first.
+                   COALESCE(MIN(t.failure_reason) FILTER (WHERE t.failure_reason <> 'CANCELLED'),
+                            MIN(t.failure_reason))              AS failure_reason,
                    MIN(t.phase_entered_at)                     AS phase_entered_at,
                    MAX(t.updated_at)                           AS updated_at,
                    MAX(t.finished_at)                          AS finished_at,
                    COUNT(*)                                    AS song_count,
-                   COUNT(*) FILTER (WHERE t.phase = 'SUCCEEDED') AS songs_succeeded,
-                   COUNT(*) FILTER (WHERE t.phase = 'FAILED')    AS songs_failed
+                   COUNT(*) FILTER (WHERE t.phase = 'SUCCEEDED')      AS songs_succeeded,
+                   COUNT(*) FILTER (WHERE t.phase = 'FAILED'
+                                      AND t.failure_reason IS DISTINCT FROM 'CANCELLED') AS songs_failed,
+                   COUNT(*) FILTER (WHERE t.phase = 'FAILED'
+                                      AND t.failure_reason = 'CANCELLED')                 AS songs_cancelled
               FROM download_tasks t
              %s
              GROUP BY t.download_id""";
@@ -87,6 +93,7 @@ public class ActiveDownloadRepository {
                    COALESCE(t.song_count, 0)                    AS song_count,
                    COALESCE(t.songs_succeeded, 0)               AS songs_succeeded,
                    COALESCE(t.songs_failed, 0)                  AS songs_failed,
+                   COALESCE(t.songs_cancelled, 0)               AS songs_cancelled,
                    COALESCE(t.phase_entered_at, d.created_at)   AS stage_entered_at,
                    COALESCE(t.updated_at, d.created_at)         AS updated_at""";
 
@@ -290,6 +297,7 @@ public class ActiveDownloadRepository {
                 row.get("song_count", Long.class).intValue(),
                 row.get("songs_succeeded", Long.class).intValue(),
                 row.get("songs_failed", Long.class).intValue(),
+                row.get("songs_cancelled", Long.class).intValue(),
                 row.get("created_at", Instant.class),
                 row.get("stage_entered_at", Instant.class),
                 row.get("updated_at", Instant.class),
