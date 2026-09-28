@@ -7,7 +7,7 @@ picker tells the right file from the wrong one. Never starts a transfer. Finding
 ## Run
 
 Needs `uv`, Python 3.12, and a `.env` at the repo root with `SLSKD_URL` and `SLSKD_API_KEY` (the key is never
-printed). On a machine behind Zscaler the scripts build a CA bundle into `raw/ca.pem` automatically.
+printed). Behind a TLS-intercepting proxy, run with `EXTRA_CA_CERT=/path/to/proxy-root.pem`; the scripts build a CA bundle into `raw/ca.pem` from it.
 
 ```bash
 uv run collect.py songs      # playlists -> raw/songs.jsonl (edit PLAYLISTS in collect.py)
