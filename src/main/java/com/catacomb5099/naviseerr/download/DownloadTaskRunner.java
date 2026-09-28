@@ -458,7 +458,23 @@ public class DownloadTaskRunner {
                             advance.next().candidates().size(), advance.next().searchQuery(),
                             advance.next().searchTier() + 1, SearchQueryTiers.of(task.songName()).size());
                 }
-                yield repository.save(advance.next(), instanceId).then();
+                yield repository.save(advance.next(), instanceId)
+                        // Zero rows means the row went terminal under us -- cancelled by the user while this
+                        // step was enqueueing. slskd now has a transfer nobody tracks; stop it. A crash before
+                        // this line still orphans one (accepted in the 13-08-2026 ADR).
+                        .flatMap(rows -> rows == 0
+                                && advance.next().phase() == DownloadPhase.DOWNLOAD_POLL
+                                && advance.next().slskdTransferId() != null
+                                ? slskdService.cancelDownload(advance.next().slskdUsername(), advance.next().slskdTransferId())
+                                        .doOnSuccess(v -> log.info("Cancelled transfer {} from '{}' that started after song {} was cancelled",
+                                                advance.next().slskdTransferId(), advance.next().slskdUsername(), task.taskId()))
+                                        .onErrorResume(error -> {
+                                            log.warn("Could not cancel orphaned transfer {} from '{}' for song {}",
+                                                    advance.next().slskdTransferId(), advance.next().slskdUsername(), task.taskId(), error);
+                                            return Mono.empty();
+                                        })
+                                : Mono.empty())
+                        .then();
             }
             case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {

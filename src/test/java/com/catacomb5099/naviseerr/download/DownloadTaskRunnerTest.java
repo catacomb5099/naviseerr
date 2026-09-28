@@ -425,6 +425,34 @@ class DownloadTaskRunnerTest {
         verify(repository).save(any(), any());
     }
 
+    @Test
+    void theSaveAfterDownloadInitIsRefused_cancelsTheOrphanedTransferInSlskd() {
+        DownloadTask task = downloadInit(candidates("alice"), 0, 0);
+        DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
+                .slskdUsername("alice").slskdTransferId("t-9").build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+        when(repository.save(any(), any())).thenReturn(Mono.just(0L));   // the row was cancelled meanwhile
+        when(slskdService.cancelDownload("alice", "t-9")).thenReturn(Mono.empty());
+
+        runner.pass().block();
+
+        verify(slskdService).cancelDownload("alice", "t-9");
+    }
+
+    @Test
+    void theSaveAfterDownloadInitIsAccepted_leavesTheTransferRunning() {
+        DownloadTask task = downloadInit(candidates("alice"), 0, 0);
+        DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
+                .slskdUsername("alice").slskdTransferId("t-9").build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+
+        runner.pass().block();
+
+        verify(slskdService, never()).cancelDownload(any(), any());
+    }
+
     // ---- metadata gathering --------------------------------------------------------------------
 
     @Test
