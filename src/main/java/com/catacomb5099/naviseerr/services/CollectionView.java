@@ -24,9 +24,13 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
                              String iconURL, Integer year, int trackCount,
                              List<CollectionTrackView> tracks) {
 
-    /** @param position 1-based track order, the same {@code position} the download's task rows get. */
+    /**
+     * @param position 1-based track order, the same {@code position} the download's task rows get.
+     * @param plays    YouTube's own wording ("28M plays") on an album's tracks; null on a playlist's,
+     *                 where YouTube gives none. Passed through unparsed for the client to show as-is.
+     */
     public record CollectionTrackView(String id, String name, List<String> artists, String iconURL,
-                                      Integer durationSeconds, int position) {
+                                      Integer durationSeconds, int position, String plays) {
     }
 
     static CollectionView from(YoutubeCollectionInfo info, DownloadType type, String requestedId) {
@@ -34,7 +38,7 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
         List<CollectionTrackView> tracks = IntStream.range(0, songs.size())
                 .mapToObj(i -> new CollectionTrackView(songs.get(i).id(), songs.get(i).name(),
                         songs.get(i).authorNames(), songs.get(i).imageUrl(),
-                        songs.get(i).durationSeconds(), i + 1))
+                        songs.get(i).durationSeconds(), i + 1, songs.get(i).plays()))
                 .toList();
         return new CollectionView(requestedId, type, info.name(), info.authorNames(), info.imageUrl(),
                 parseYear(info.year()), tracks.size(), tracks);

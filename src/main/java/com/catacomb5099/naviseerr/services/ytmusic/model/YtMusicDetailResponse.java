@@ -116,6 +116,11 @@ public final class YtMusicDetailResponse {
         private List<YtMusicSearchResponse.ArtistRef> artists;
         private Integer durationSeconds;
         /**
+         * YouTube's own wording ("28M plays"). Present on album tracks, null on playlist and top-song
+         * rows. Passed through, never parsed: the adapter warns the figure is lossy upstream.
+         */
+        private String views;
+        /**
          * Playlists can carry an unavailable track (region-blocked, deleted). Null on album
          * responses, so only an explicit {@code false} means "do not try this one".
          */

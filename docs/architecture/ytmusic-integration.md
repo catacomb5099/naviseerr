@@ -227,7 +227,9 @@ And by [CollectionController.java](../../src/main/java/com/catacomb5099/naviseer
 
 - `GET /collections/{id}?type=ALBUM|PLAYLIST` - one album or playlist as a
   [CollectionView](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionView.java):
-  header plus every available track with a 1-based `position`. Calls the same `getAlbumInfo` /
+  header plus every available track with a 1-based `position` and, on an album's tracks only,
+  YouTube's own `plays` wording ("28M plays", passed through unparsed; null on a playlist's, where
+  YouTube gives none). Calls the same `getAlbumInfo` /
   `getPlaylistInfo` as admission, so what the client sees is what a download of the same id would
   create task rows for. `type=SONG` is 400 (a track has no collection view); the adapter's 404 --
   which the client maps to `YtMusicBadRequestException`, see above -- becomes a 404 here, *not*
