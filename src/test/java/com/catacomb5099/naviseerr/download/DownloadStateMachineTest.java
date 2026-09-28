@@ -695,6 +695,93 @@ class DownloadStateMachineTest {
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
     }
 
+    // ---- 28-09-2026: a search that fails to START is retried by count, not by the wall clock ----
+
+    @Test
+    void callFailed_startingASearch_longAfterTheRowWasCreated_isRetried_notFailed() {
+        // The row waited 20 minutes for a search slot; the search budget (120 s from creation) is long
+        // spent, but no search is running yet, so the budget has nothing to say about this call.
+        Instant twentyMinutesLater = T0.plusSeconds(20 * 60);
+
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_INIT), SlskdFixtures.responseFailure(429), twentyMinutesLater);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, next.phase());
+        assertEquals(1, next.retryIndex());
+        assertEquals(twentyMinutesLater.plus(SEARCH_POLL), next.nextAttemptAt());
+        assertNotNull(next.lastError(), "the reason must be kept on the row for the next post-mortem");
+        assertTrue(next.lastError().contains("429"), next.lastError());
+    }
+
+    @Test
+    void callFailed_startingASearch_withATransportFailure_isRetriedTheSameWay() {
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_INIT), SlskdFixtures.transportFailure(), T0.plusSeconds(600));
+
+        assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().retryIndex());
+    }
+
+    @Test
+    void callFailed_startingASearch_onceTheRetriesAreUsedUp_andTheBudgetIsSpent_fails() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().retryIndex(RETRY_LIMIT).build();
+
+        DownloadDecision d = machine.onCallFailed(task, SlskdFixtures.transportFailure(), T0.plus(SEARCH_BUDGET).plusSeconds(1));
+
+        assertEquals(DownloadFailureCode.SEARCH_FAILED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void callFailed_startingASearch_withinTheBudget_keepsRetryingPastTheCount() {
+        // A fresh row keeps today's outage tolerance: slskd restarting for ten seconds must not fail it.
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().retryIndex(RETRY_LIMIT + 3).build();
+
+        DownloadDecision d = machine.onCallFailed(task, SlskdFixtures.transportFailure(), T0.plusSeconds(10));
+
+        assertEquals(RETRY_LIMIT + 4, assertInstanceOf(DownloadDecision.Continue.class, d).next().retryIndex());
+    }
+
+    @Test
+    void callFailed_startingASearch_withAnErrorThatHasNoMessage_recordsItsName() {
+        var silent = new org.springframework.web.reactive.function.client.WebClientRequestException(
+                new java.io.IOException(), org.springframework.http.HttpMethod.POST,
+                java.net.URI.create("https://slskd.example/api/v0/searches"), new org.springframework.http.HttpHeaders());
+
+        DownloadDecision d = machine.onCallFailed(at(DownloadPhase.SEARCH_INIT), silent, T0.plusSeconds(600));
+
+        assertEquals("WebClientRequestException", assertInstanceOf(DownloadDecision.Continue.class, d).next().lastError());
+    }
+
+    @Test
+    void callFailed_startingASearch_withKeptFiles_downloadsThemWhenTheRetriesRunOut() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().searchTier(1).retryIndex(RETRY_LIMIT)
+                .candidates(candidates("alice")).build();
+
+        DownloadDecision d = machine.onCallFailed(task, SlskdFixtures.transportFailure(), T0.plus(SEARCH_BUDGET).plusSeconds(1));
+
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, d).next().phase());
+    }
+
+    @Test
+    void callFailed_startingASearch_withUnrecognisedError_stillFailsAtOnce() {
+        DownloadDecision d = machine.onCallFailed(at(DownloadPhase.SEARCH_INIT), new RuntimeException("boom"), T0);
+
+        assertEquals(DownloadFailureCode.SEARCH_FAILED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void searchInit_succeeding_forgetsTheStartAttempts() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().retryIndex(2).lastError("429").build();
+
+        DownloadDecision d = machine.afterSearchInit(task, SlskdFixtures.searchState("s1", false, "InProgress"), T0);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(0, next.retryIndex(), "start attempts must not eat into the download retries");
+        assertNull(next.lastError());
+    }
+
     @Test
     void callFailed_inDownloadPhase_retriesOrMovesOn() {
         DownloadDecision d = machine.onCallFailed(
