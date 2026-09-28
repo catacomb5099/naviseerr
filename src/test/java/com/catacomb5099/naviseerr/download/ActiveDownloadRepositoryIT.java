@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.TestcontainersConfiguration;
+import com.catacomb5099.naviseerr.support.TaskFinishing;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -80,7 +81,7 @@ class ActiveDownloadRepositoryIT {
     /** Finishes a song and settles its download, which is what one runner pass does. */
     private void finish(UUID downloadId, DownloadStatus status, DownloadFailureCode code) {
         for (UUID taskId : taskIdsOf(downloadId)) {
-            downloadService.finishTask(taskId, status, code, NOW).block();
+            TaskFinishing.finish(template, downloadService, taskId, status, code, NOW);
         }
         taskRepository.concludeDownloads().block();
     }
@@ -307,9 +308,9 @@ class ActiveDownloadRepositoryIT {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "found", "missing");
         List<UUID> tasks = taskIdsOf(album);
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        TaskFinishing.finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        TaskFinishing.finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
         taskRepository.concludeDownloads().block();
 
         ActiveDownloadView view = active().getFirst();
@@ -466,9 +467,9 @@ class ActiveDownloadRepositoryIT {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "done", "gone", "running");
         List<UUID> tasks = taskIdsOf(album);  // ordered by song_name: done, gone, running
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        TaskFinishing.finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        TaskFinishing.finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
 
         ActiveDownloadView view = active().getFirst();
 
@@ -537,9 +538,9 @@ class ActiveDownloadRepositoryIT {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "found", "missing");
         List<UUID> tasks = taskIdsOf(album);
-        downloadService.finishTask(tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(tasks.get(1), DownloadStatus.FAILED,
-                DownloadFailureCode.NO_CANDIDATES, NOW).block();
+        TaskFinishing.finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        TaskFinishing.finish(template, downloadService, tasks.get(1), DownloadStatus.FAILED,
+                DownloadFailureCode.NO_CANDIDATES, NOW);
         taskRepository.concludeDownloads().block();
 
         List<DownloadSongView> songs = activeDownloadRepository.findSongs(album).collectList().block();

@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static com.catacomb5099.naviseerr.support.TaskFinishing.finish;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -124,9 +125,9 @@ class DownloadRecoveryIT {
         admit(id);
         UUID taskId = taskIdOf(id);
 
-        downloadService.finishTask(taskId, DownloadStatus.SUCCEEDED, null, NOW).block();
-        downloadService.finishTask(taskId, DownloadStatus.FAILED,
-                DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
+        finish(template, downloadService, taskId, DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, taskId, DownloadStatus.FAILED,
+                DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
         repository.concludeDownloads().block();
 
         assertEquals("SUCCEEDED", statusOf(id));
@@ -145,7 +146,7 @@ class DownloadRecoveryIT {
     void aFinishedDownloadIsNeverSteppedAgain() {
         UUID id = insert("PENDING");
         admit(id);
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         // Far in the future, so next_attempt_at is long past. Only the terminal-phase filter and
         // the partial index stop this row coming back.

@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static com.catacomb5099.naviseerr.support.TaskFinishing.finish;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -107,7 +108,7 @@ class DownloadTaskProgressIT {
         admit(id);
         DownloadTask claimed = repository.claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
                 .blockFirst();
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW, "a").block();
 
         Long rowsUpdated = repository.save(claimed.withProgress(new BigDecimal("50.00")), "a").block();
 
@@ -123,7 +124,7 @@ class DownloadTaskProgressIT {
                 .blockFirst();
         repository.save(claimed.withProgress(new BigDecimal("87.00")), "a").block();
 
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
 
         assertEquals(0, progressOf(id).compareTo(new BigDecimal("100.00")),
                 "a succeeded download reads 100%, regardless of the last observed transfer percentage");
@@ -137,7 +138,7 @@ class DownloadTaskProgressIT {
                 .blockFirst();
         repository.save(claimed.withProgress(new BigDecimal("62.00")), "a").block();
 
-        downloadService.finishTask(taskIdOf(id), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW).block();
+        finish(template, downloadService, taskIdOf(id), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
 
         assertEquals(0, progressOf(id).compareTo(new BigDecimal("62.00")),
                 "unsettled per the ADR: FAILED is deliberately not forced to 100");
