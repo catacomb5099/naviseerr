@@ -188,7 +188,7 @@ public class YtMusicService {
                                         ? collection.getThumbnailUrl()
                                         : track.getVideoId() == null ? null
                                         : fallbackThumbnail(track.getVideoId()),
-                                track.getDurationSeconds()))
+                                track.getDurationSeconds(), track.getViews()))
                         .toList();
         return new YoutubeCollectionInfo(id, songs,
                 collection.getYear() == null ? null : String.valueOf(collection.getYear()),

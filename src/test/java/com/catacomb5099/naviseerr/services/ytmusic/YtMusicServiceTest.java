@@ -375,7 +375,7 @@ class YtMusicServiceTest {
               "tracks": [
                 {"videoId": "v1", "title": "Rock 'n' Roll Star",
                  "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 1,
-                 "durationSeconds": 322},
+                 "durationSeconds": 322, "views": "28M plays"},
                 {"videoId": "v2", "title": "Shakermaker",
                  "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 2}
               ]
@@ -392,7 +392,7 @@ class YtMusicServiceTest {
               "thumbnailUrl": "https://example.com/playlist.jpg",
               "tracks": [
                 {"videoId": "v1", "title": "Wonderwall",
-                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "isAvailable": true},
+                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "isAvailable": true, "views": null},
                 {"videoId": "v2", "title": "Common People",
                  "artists": [{"name": "Pulp", "channelId": "UC3"}], "isAvailable": null},
                 {"videoId": "v3", "title": "Taken Down",
@@ -467,6 +467,10 @@ class YtMusicServiceTest {
                     // back to a letterboxed video frame.
                     assertEquals("https://example.com/album.jpg", album.songs().getFirst().imageUrl());
                     assertEquals(322, album.songs().getFirst().durationSeconds());
+                    // YouTube's wording, passed through: the adapter says the figure is lossy, so
+                    // nobody downstream may turn "28M plays" into a number.
+                    assertEquals("28M plays", album.songs().getFirst().plays());
+                    assertNull(album.songs().get(1).plays(), "absent on the wire is null, not an error");
                 })
                 .verifyComplete();
 
@@ -490,6 +494,8 @@ class YtMusicServiceTest {
                     // WRONG picture for them; each gets YouTube's own thumbnail for its videoId.
                     assertEquals("https://i.ytimg.com/vi/v1/hqdefault.jpg",
                             playlist.songs().getFirst().imageUrl());
+                    assertNull(playlist.songs().getFirst().plays(),
+                            "YouTube hands out play counts on album tracks only");
                 })
                 .verifyComplete();
 
