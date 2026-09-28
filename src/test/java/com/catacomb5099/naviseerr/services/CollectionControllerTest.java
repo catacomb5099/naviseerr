@@ -155,6 +155,14 @@ class CollectionControllerTest {
     }
 
     @Test
+    void curated_isRejected_becauseSuggestedPlaylistsHaveTheirOwnRoute() {
+        StepVerifier.create(controller.collection("80s-indie-pop", DownloadType.CURATED))
+                .assertNext(response -> assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode()))
+                .verifyComplete();
+        verifyNoInteractions(ytMusicService);
+    }
+
+    @Test
     void blankId_isRejectedWith400() {
         StepVerifier.create(controller.collection(" ", DownloadType.ALBUM))
                 .assertNext(response -> assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode()))

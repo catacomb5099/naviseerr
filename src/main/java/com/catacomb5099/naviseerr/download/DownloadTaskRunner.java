@@ -1,5 +1,8 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.curator.CuratorClient;
+import com.catacomb5099.naviseerr.curator.CuratorEdition;
+import com.catacomb5099.naviseerr.curator.CuratorException;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
@@ -36,6 +39,7 @@ public class DownloadTaskRunner {
     private final DownloadService downloadService;
     private final SlskdService slskdService;
     private final YtMusicService ytMusicService;
+    private final CuratorClient curatorClient;
     private final LibraryOrganiser organiser;
     private final Clock clock;
     private final Duration loopInterval;
@@ -54,6 +58,7 @@ public class DownloadTaskRunner {
             DownloadService downloadService,
             SlskdService slskdService,
             YtMusicService ytMusicService,
+            CuratorClient curatorClient,
             LibraryOrganiser organiser,
             Clock clock,
             @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
@@ -67,6 +72,7 @@ public class DownloadTaskRunner {
         this.downloadService = downloadService;
         this.slskdService = slskdService;
         this.ytMusicService = ytMusicService;
+        this.curatorClient = curatorClient;
         this.organiser = organiser;
         this.clock = clock;
         this.loopInterval = loopInterval;
@@ -195,6 +201,15 @@ public class DownloadTaskRunner {
                             download.getYoutubeId(), error.getMessage());
                     return fail(download, DownloadFailureCode.METADATA_UNAVAILABLE);
                 })
+                // The curator's own 4xx: no edition for that category, an unknown key, or a wrong token.
+                // Asking again cannot change the answer, so the download fails now; a curator that is
+                // merely down (retryable) falls through and leaves the row PENDING like an adapter outage.
+                .onErrorResume(error -> error instanceof CuratorException ce && !ce.isRetryable(), error -> {
+                    log.warn("Download {} asks for a suggested playlist the curator cannot give ({} {}); "
+                            + "failing it: {}", download.getDownloadId(), download.getDownloadType(),
+                            download.getYoutubeId(), error.getMessage());
+                    return fail(download, DownloadFailureCode.METADATA_UNAVAILABLE);
+                })
                 .onErrorResume(error -> {
                     log.warn("Could not gather metadata for download {} ({} {}); leaving it PENDING "
                             + "for the next pass", download.getDownloadId(),
@@ -217,8 +232,9 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * One shape for all three types, so {@link #gatherMetadata} has no branch of its own. A song is
-     * a collection of one -- which is exactly what it becomes in {@code download_tasks} anyway.
+     * One shape for all four types, so {@link #gatherMetadata} has no branch of its own. A song is
+     * a collection of one -- which is exactly what it becomes in {@code download_tasks} anyway -- and
+     * a curated edition is a collection whose track list comes from the curator instead of YouTube.
      */
     private Mono<YoutubeCollectionInfo> metadataFor(Download download) {
         String id = download.getYoutubeId();
@@ -228,7 +244,23 @@ public class DownloadTaskRunner {
                             song.name(), song.authorNames(), song.imageUrl()));
             case ALBUM -> ytMusicService.getAlbumInfo(id);
             case PLAYLIST -> ytMusicService.getPlaylistInfo(id);
+            case CURATED -> curatorClient.getEdition(id).map(edition -> curatedCollection(id, edition));
         };
+    }
+
+    /**
+     * An edition of a suggested playlist in the shape every other collection arrives in. The curator
+     * stores no artwork, so every song gets YouTube's predictable thumbnail and the playlist borrows
+     * its first song's; the author line says who made the list.
+     */
+    static YoutubeCollectionInfo curatedCollection(String category, CuratorEdition edition) {
+        List<YoutubeSongInfo> songs = edition.tracks().stream()
+                .filter(track -> track.videoId() != null)
+                .map(track -> new YoutubeSongInfo(track.videoId(), track.artists(), track.title(),
+                        YtMusicService.fallbackThumbnail(track.videoId()), null))
+                .toList();
+        String image = songs.isEmpty() ? null : songs.getFirst().imageUrl();
+        return new YoutubeCollectionInfo(category, songs, null, edition.title(), List.of("Naviseerr"), image);
     }
 
     /**
@@ -266,7 +298,7 @@ public class DownloadTaskRunner {
 
     /** A playlist gets its .m3u8; a song or an album needs nothing more than its files in place. */
     private Mono<Void> finalise(LibraryOrganiser.Collection collection) {
-        if (collection.type() != DownloadType.PLAYLIST) {
+        if (!collection.type().isPlaylist()) {
             return Mono.empty();
         }
         return repository.playlistEntries(collection.downloadId())

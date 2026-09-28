@@ -1,5 +1,9 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.curator.CuratorClient;
+import com.catacomb5099.naviseerr.curator.CuratorEdition;
+import com.catacomb5099.naviseerr.curator.CuratorException;
+import com.catacomb5099.naviseerr.curator.CuratorTrack;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
@@ -19,6 +23,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
@@ -38,6 +43,7 @@ class DownloadTaskRunnerTest {
     private SlskdService slskdService;
     private YtMusicService ytMusicService;
     private LibraryOrganiser organiser;
+    private CuratorClient curatorClient;
     private DownloadTaskRunner runner;
 
     @BeforeEach
@@ -48,6 +54,7 @@ class DownloadTaskRunnerTest {
         slskdService = mock(SlskdService.class);
         ytMusicService = mock(YtMusicService.class);
         organiser = mock(LibraryOrganiser.class);
+        curatorClient = mock(CuratorClient.class);
         when(organiser.isEnabled()).thenReturn(false);
         when(organiser.deletePartials(any())).thenReturn(Mono.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.empty());
@@ -67,7 +74,7 @@ class DownloadTaskRunnerTest {
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                ytMusicService, organiser, Clock.fixed(T0, ZoneOffset.UTC),
+                ytMusicService, curatorClient, organiser, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
     }
 
@@ -441,6 +448,91 @@ class DownloadTaskRunnerTest {
                         && m.title().equals("Never Gonna Give You Up")
                         && m.imageUrl().equals("https://img/rick.jpg")
                         && m.artists().equals(List.of("Rick Astley")))));
+    }
+
+    @Test
+    void aCuratedRequest_becomesOneTaskPerSongFromTheCuratorsEdition() {
+        Download request = pendingRequest(DownloadType.CURATED, "80s-indie-pop");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(curatorClient.getEdition("80s-indie-pop")).thenReturn(Mono.just(new CuratorEdition(
+                "80s indie pop", Map.of("year", "1980-1989"), "2026-09-28", 1L, List.of(
+                new CuratorTrack("kkxixKRfEnk", "Cico Buff", List.of("Cocteau Twins"), "Blue Bell Knoll", null,
+                        1988, 6_100_000L, "top", "#23 of 1036 by plays"),
+                new CuratorTrack(null, "Unplayable", List.of("Nobody"), "Nothing", null, null, 0L, "random", ""),
+                new CuratorTrack("ewnLtRyqAzo", "Decomposing Trees", List.of("Galaxie 500"), "On Fire", null,
+                        1988, 180_000L, "random", "random pick")))));
+
+        runner.pass().block();
+
+        verify(curatorClient).getEdition("80s-indie-pop");
+        verifyNoInteractions(ytMusicService);
+        // Two searchable rows: the song without a videoId is dropped, as it is for an album.
+        verify(repository).createTasks(eq(request.getDownloadId()),
+                argThat(tasks -> tasks.size() == 2
+                        && tasks.getFirst().youtubeId().equals("kkxixKRfEnk")
+                        && tasks.getFirst().songName().equals("Cico Buff - Cocteau Twins")
+                        && tasks.get(1).youtubeId().equals("ewnLtRyqAzo")),
+                eq(T0));
+        // The playlist's own media row is keyed by the category the REQUEST carried, named after the
+        // edition, credited to Naviseerr and pictured with its first song; every song gets YouTube's
+        // predictable thumbnail because the curator stores none.
+        verify(repository).upsertMedia(argThat(items -> items.size() == 3
+                && items.stream().anyMatch(m -> m.youtubeId().equals("80s-indie-pop")
+                        && m.title().equals("80s indie pop")
+                        && m.artists().equals(List.of("Naviseerr"))
+                        && m.trackCount() == 2
+                        && m.imageUrl().equals("https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg"))
+                && items.stream().anyMatch(m -> m.youtubeId().equals("ewnLtRyqAzo")
+                        && m.title().equals("Decomposing Trees")
+                        && m.artists().equals(List.of("Galaxie 500"))
+                        && m.imageUrl().equals("https://i.ytimg.com/vi/ewnLtRyqAzo/hqdefault.jpg"))));
+    }
+
+    @Test
+    void aCuratedRequestTheCuratorHasNoEditionFor_isFailedNotRetried() {
+        Download request = pendingRequest(DownloadType.CURATED, "90s-grime");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(curatorClient.getEdition("90s-grime")).thenReturn(Mono.error(
+                new CuratorException("curator returned 404: no edition for 90s-grime", false, 404)));
+
+        runner.pass().block();
+
+        verify(repository).failUnadmitted(request.getDownloadId(), DownloadFailureCode.METADATA_UNAVAILABLE, T0);
+        verify(repository, never()).createTasks(any(), any(), any());
+    }
+
+    @Test
+    void aCuratedRequestWhileTheCuratorIsDown_staysPendingForTheNextPass() {
+        Download request = pendingRequest(DownloadType.CURATED, "80s-indie-pop");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(curatorClient.getEdition("80s-indie-pop")).thenReturn(Mono.error(
+                new CuratorException("curator edition of 80s-indie-pop failed: Connection refused", true)));
+
+        runner.pass().block();
+
+        verify(repository, never()).failUnadmitted(any(), any(), any());
+        verify(repository, never()).createTasks(any(), any(), any());
+    }
+
+    @Test
+    void aFinishedCuratedPlaylist_getsItsPlaylistFileWritten_likeAYouTubePlaylist() {
+        UUID downloadId = UUID.randomUUID();
+        LibraryOrganiser.Collection curated = new LibraryOrganiser.Collection(downloadId,
+                DownloadType.CURATED, "80s indie pop");
+        LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(curated));
+        when(repository.playlistEntries(downloadId)).thenReturn(Flux.just(entry));
+        when(organiser.writePlaylist("80s indie pop", List.of(entry)))
+                .thenReturn(Mono.just(java.nio.file.Path.of("/music/Playlists/80s indie pop.m3u8")));
+        when(repository.setOrganisedAt(downloadId, T0)).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(organiser).writePlaylist("80s indie pop", List.of(entry));
+        verify(repository).setOrganisedAt(downloadId, T0);
     }
 
     @Test
