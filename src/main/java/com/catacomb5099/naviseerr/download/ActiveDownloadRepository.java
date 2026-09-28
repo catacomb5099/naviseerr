@@ -328,13 +328,13 @@ public class ActiveDownloadRepository {
     }
 
     /**
-     * The stored '' (YouTube named an artist but gave no channel) goes on the wire as null, so the
-     * client tests one thing -- "is there an id here" -- rather than two.
+     * The stored '' (YouTube named an artist but gave no channel), or a hand-edited NULL, goes on
+     * the wire as null, so the client tests one thing -- "is there an id here" -- rather than two.
      */
     private static List<String> artistIds(Row row) {
         String[] ids = row.get("artist_ids", String[].class);
         return ids == null ? List.of()
-                : java.util.Arrays.stream(ids).map(id -> id.isEmpty() ? null : id).toList();
+                : java.util.Arrays.stream(ids).map(id -> id == null || id.isEmpty() ? null : id).toList();
     }
 
     /**
