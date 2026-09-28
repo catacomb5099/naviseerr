@@ -57,15 +57,31 @@ public class TrackMatchingService {
     private static final Pattern BRACKETED = Pattern.compile("[\\(\\[]([^\\)\\]]*)[\\)\\]]");
     private static final Pattern CREDIT_BRACKET = Pattern.compile("\\s*(feat|ft|with|dir|prod)\\b", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * How well a shared file answers a request. {@code EXACT}: the song, by the artist, in the requested version.
+     * {@code OTHER_VERSION}: the song by the artist, but a live take, remix, acoustic or studio version the request
+     * did not ask for; kept as a fallback because any version beats no song. {@code NONE}: not the song (DJ-pool
+     * edits, album siblings, other artists). Declared in ranking order.
+     */
+    public enum Match { EXACT, OTHER_VERSION, NONE }
+
+    /** {@link #grade} is {@code EXACT}. */
     public boolean isMatch(String cleanTitle, String torrentFilePath) {
+        return grade(cleanTitle, torrentFilePath) == Match.EXACT;
+    }
+
+    /**
+     * Everything but the version decides whether this is the song at all; the version rules then decide only
+     * between {@code EXACT} and {@code OTHER_VERSION}, in either direction: a file carrying a version word the
+     * request did not ask for, or a request asking for a version the file does not name. "Remastered" is never a
+     * version: it is neither in {@link #VERSION_WORDS} nor demanded by {@link #hasRequestedVersionWord}.
+     */
+    public Match grade(String cleanTitle, String torrentFilePath) {
         // Extract just the filename from the path
         String filename = extractFilename(torrentFilePath);
 
-        if (DJ_POOL.matcher(filename).find() || hasUnrequestedVersionWord(cleanTitle, filename)) {
-            return false;
-        }
-        if (!hasRequestedVersionWord(cleanTitle, filename) || !titleInLastSegment(cleanTitle, filename)) {
-            return false;
+        if (DJ_POOL.matcher(filename).find() || !titleInLastSegment(cleanTitle, filename)) {
+            return Match.NONE;
         }
 
         // Normalize both strings
@@ -87,10 +103,12 @@ public class TrackMatchingService {
                 .count();
         boolean containsBothParts = partsPresent >= 2;
 
-        // Combine scoring logic
-        return tokenScore >= MIN_TOKEN_SCORE ||
-                partialScore >= MIN_PARTIAL_SCORE ||
-                containsBothParts;
+        if (tokenScore < MIN_TOKEN_SCORE && partialScore < MIN_PARTIAL_SCORE && !containsBothParts) {
+            return Match.NONE;
+        }
+        boolean requestedVersion = !hasUnrequestedVersionWord(cleanTitle, filename)
+                && hasRequestedVersionWord(cleanTitle, filename);
+        return requestedVersion ? Match.EXACT : Match.OTHER_VERSION;
     }
 
     /** True when the filename names a version (live, remix, ...) that the request did not ask for. */

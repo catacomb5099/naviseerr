@@ -192,6 +192,45 @@ The 24 still failing, and why:
 
 So of the 49, 25 are recovered, 22 cannot be recovered by any wording or rule, and 2 are known limits.
 
+### The search is version-blind, the picker is version-aware (follow-up, same day)
+
+Owner's decision: when a request names a version (acoustic, stripped, live, remix...) and no such file is
+shared, any version of the song is better than no song; and a request for the original should still fall
+back to a live or remixed take once every exact option has been tried. Remastered is never a version.
+
+Two halves:
+
+- **No search wording ever carries a version word.** Whether it sat in brackets ("(Live)"), in its own dash
+  segment ("Wonderwall - Remastered - Oasis", "Kiss Me - Radio Edit - X") or inline at the end of the title
+  ("Wonderwall Live at Wembley", "Remastered 2009", "'95 Version"), it comes out, and the wordings collapse and
+  de-duplicate ("Wonderwall - Oasis", "Wonderwall"). Soulseek matches every word, so a version word in the
+  search could only ever lose files. `pickerName` keeps every one of those qualifiers, in brackets, because
+  the picker needs them.
+- **The picker grades instead of accepting or rejecting.** `TrackMatchingService.grade` returns `EXACT` (the
+  song, by the artist, in the requested version), `OTHER_VERSION` (the song by the artist but a different
+  version, in either direction) or `NONE` (not the song: DJ-pool edits, album siblings, other artists; those
+  rules are unchanged). `SlskdSearchResultProcessor` keeps `OTHER_VERSION` files and ranks every `EXACT` file
+  ahead of every `OTHER_VERSION` one; within a grade the order is as before (the length most files share, then
+  free slot, queue, speed; the length vote is counted within the grade so other versions cannot outvote the
+  exact ones). Because the candidate list is walked in order, a live take is only downloaded once every exact
+  option has failed, with no change to the state machine. The cap of ten candidates is unchanged: other
+  versions take whatever places the exact ones leave, so a song with ten exact copies never falls back, and a
+  song with none gets ten fallbacks. Each stored candidate now carries its grade (`grade` in the JSON, null on
+  older rows), and a song that succeeds from an `OTHER_VERSION` candidate says so in the log.
+
+Measured on the labelled fixture: an `EXACT` file is the right song by the right artist 97.7% of the time, an
+`OTHER_VERSION` file 91.7% (5,994 files). Requiring the artist's name in the file path for the fallback grade
+would have raised that only to 91.9% while dropping a tenth of the good fallbacks, so it was not added. The
+per-file precision and recall floors and the top-pick figure are unchanged by this change (0.866 / 0.891 /
+672 of 695), because `isMatch` is `EXACT` only and `EXACT` still ranks first.
+
+Replay of the saved 28-09 results for the 49 names: 25 songs with an exact candidate (as before), **28 with a
+candidate of any grade**. The three that moved: "Asleep Talking (Acoustic)" and "bloodstream (stripped)" now
+fall back to the studio take, as intended; "Me/You - Tove Styrke" is a false positive (a title-only search
+for two common words, no file names Styrke), the known weakness of title-only searches from the 26-09 lab,
+now no longer masked by the version rule. "She's Gonna Break My Heart" stays out: its only good files are
+DJ-pool "(Radio)" edits, and that rule still runs first.
+
 ### Known limits left in
 
 - `Metric-Black Sheep` (a dash with no spaces) is not split; see above.

@@ -7,6 +7,7 @@ import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
+import com.catacomb5099.naviseerr.util.TrackMatchingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -121,7 +122,7 @@ class DownloadStepExecutorTest {
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
         when(searchProcessor.selectBestFiles(eq(full), any()))
-                .thenReturn(Mono.just(List.of(Map.entry(peer, file))));
+                .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor
                 .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
@@ -159,7 +160,7 @@ class DownloadStepExecutorTest {
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
         when(searchProcessor.selectBestFiles(eq(full), any()))
-                .thenReturn(Mono.just(List.of(Map.entry(peer, file))));
+                .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor
                 .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();

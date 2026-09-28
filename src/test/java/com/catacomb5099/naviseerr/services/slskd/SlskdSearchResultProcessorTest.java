@@ -4,6 +4,7 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.util.TrackMatchingService;
+import com.catacomb5099.naviseerr.util.TrackMatchingService.Match;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -58,15 +59,15 @@ class SlskdSearchResultProcessorTest {
         when(fileA.getExtension()).thenReturn("mp3");
         when(fileB.getExtension()).thenReturn("mp3");
 
-        when(trackMatchingService.isMatch(eq("track"), eq("match.mp3"))).thenReturn(true);
-        when(trackMatchingService.isMatch(eq("track"), eq("nope.mp3"))).thenReturn(false);
+        when(trackMatchingService.grade(eq("track"), eq("match.mp3"))).thenReturn(Match.EXACT);
+        when(trackMatchingService.grade(eq("track"), eq("nope.mp3"))).thenReturn(Match.NONE);
 
         SearchState state = mock(SearchState.class);
         when(state.getResponses()).thenReturn(List.of(itemA, itemB));
         when(state.getFileCount()).thenReturn(2);
 
         StepVerifier.create(processor.selectBestFiles(state, "track"))
-                .expectNextMatches(list -> list.size() == 1 && list.getFirst().getValue().getFilename().equals("match.mp3"))
+                .expectNextMatches(list -> list.size() == 1 && list.getFirst().file().getFilename().equals("match.mp3"))
                 .verifyComplete();
     }
 
@@ -98,7 +99,7 @@ class SlskdSearchResultProcessorTest {
         when(fileBelow.getExtension()).thenReturn("mp3");
         when(fileFlac.getExtension()).thenReturn("flac");
 
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         SearchState state = mock(SearchState.class);
         when(state.getResponses()).thenReturn(List.of(above, below, flacItem));
@@ -106,9 +107,9 @@ class SlskdSearchResultProcessorTest {
 
         StepVerifier.create(processor.selectBestFiles(state, "track"))
                 .expectNextMatches(list -> list.size() == 2
-                        && list.stream().anyMatch(e -> e.getValue().getFilename().equals("a.mp3"))
-                        && list.stream().anyMatch(e -> e.getValue().getFilename().equals("c.flac"))
-                        && list.stream().noneMatch(e -> e.getValue().getFilename().equals("b.mp3")))
+                        && list.stream().anyMatch(e -> e.file().getFilename().equals("a.mp3"))
+                        && list.stream().anyMatch(e -> e.file().getFilename().equals("c.flac"))
+                        && list.stream().noneMatch(e -> e.file().getFilename().equals("b.mp3")))
                 .verifyComplete();
     }
 
@@ -143,7 +144,7 @@ class SlskdSearchResultProcessorTest {
         when(medFile.getExtension()).thenReturn("mp3");
         when(slowFile.getExtension()).thenReturn("mp3");
 
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         SearchState state = mock(SearchState.class);
         when(state.getResponses()).thenReturn(List.of(fast, med, slow));
@@ -152,15 +153,15 @@ class SlskdSearchResultProcessorTest {
         StepVerifier.create(processor.selectBestFiles(state, "track"))
                 .expectNextMatches(list ->
                         list.size() == 3 &&
-                                list.getFirst().getKey().getUploadSpeed() == 300 &&
-                                list.get(1).getKey().getUploadSpeed() == 200 &&
-                                list.get(2).getKey().getUploadSpeed() == 100)
+                                list.getFirst().peer().getUploadSpeed() == 300 &&
+                                list.get(1).peer().getUploadSpeed() == 200 &&
+                                list.get(2).peer().getUploadSpeed() == 100)
                 .verifyComplete();
     }
 
     @Test
     void selectBestFiles_prefersAFreeSlotOverAFasterBusyPeer() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         // fast, but 40 people ahead of you
         SearchResponseItem busy = peer("busy", 10_000_000, false, 40, file("busy/song.flac"));
@@ -169,36 +170,36 @@ class SlskdSearchResultProcessorTest {
 
         var result = processor.selectBestFiles(state(busy, free), "song").block();
 
-        assertEquals("free", result.getFirst().getKey().getUsername());
+        assertEquals("free", result.getFirst().peer().getUsername());
     }
 
     @Test
     void selectBestFiles_amongFreePeers_prefersTheShorterQueue() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         SearchResponseItem longer = peer("longer", 9_000_000, true, 5, file("longer/song.flac"));
         SearchResponseItem shorter = peer("shorter", 8_000_000, true, 1, file("shorter/song.flac"));
 
         var result = processor.selectBestFiles(state(longer, shorter), "song").block();
 
-        assertEquals("shorter", result.getFirst().getKey().getUsername());
+        assertEquals("shorter", result.getFirst().peer().getUsername());
     }
 
     @Test
     void selectBestFiles_allElseEqual_stillPrefersTheFasterPeer() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         SearchResponseItem slow = peer("slow", 1_000_000, true, 0, file("slow/song.flac"));
         SearchResponseItem fast = peer("fast", 9_000_000, true, 0, file("fast/song.flac"));
 
         var result = processor.selectBestFiles(state(slow, fast), "song").block();
 
-        assertEquals("fast", result.getFirst().getKey().getUsername());
+        assertEquals("fast", result.getFirst().peer().getUsername());
     }
 
     @Test
     void selectBestFiles_prefersTheLengthMostCandidatesShare_overAFreeSlot() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         // the remix is the only one that can start right now, but two peers agree on 213s
         SearchResponseItem remix = peer("remix", 9_000_000, true, 0, file("remix/song.flac", 312));
@@ -207,12 +208,12 @@ class SlskdSearchResultProcessorTest {
 
         var result = processor.selectBestFiles(state(remix, a, b), "song").block();
 
-        assertEquals(List.of("a", "b", "remix"), result.stream().map(e -> e.getKey().getUsername()).toList());
+        assertEquals(List.of("a", "b", "remix"), result.stream().map(e -> e.peer().getUsername()).toList());
     }
 
     @Test
     void selectBestFiles_unknownLength_ranksAfterASharedLength() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         SearchResponseItem unknown = peer("unknown", 9_000_000, true, 0, file("unknown/song.flac", null));
         SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
@@ -221,24 +222,24 @@ class SlskdSearchResultProcessorTest {
         var result = processor.selectBestFiles(state(unknown, a, b), "song").block();
 
         assertEquals(3, result.size());
-        assertEquals("unknown", result.getLast().getKey().getUsername());
+        assertEquals("unknown", result.getLast().peer().getUsername());
     }
 
     @Test
     void selectBestFiles_lengthTie_fallsBackToAvailability() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         SearchResponseItem busy = peer("busy", 9_000_000, false, 40, file("busy/song.flac", 213));
         SearchResponseItem free = peer("free", 1_000_000, true, 0, file("free/song.flac", 213));
 
         var result = processor.selectBestFiles(state(busy, free), "song").block();
 
-        assertEquals("free", result.getFirst().getKey().getUsername());
+        assertEquals("free", result.getFirst().peer().getUsername());
     }
 
     @Test
     void selectBestFiles_aSharerWithNoSlotAndALongQueue_goesLast_evenWithTheMajorityLength() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         // The measured profile of a sharer that never serves: no free slot, dozens already waiting.
         SearchResponseItem overloaded = peer("overloaded", 9_000_000, false, 80, file("o/song.flac", 213));
@@ -248,12 +249,12 @@ class SlskdSearchResultProcessorTest {
         var result = processor.selectBestFiles(state(overloaded, a, odd), "song").block();
 
         assertEquals(List.of("a", "odd", "overloaded"),
-                result.stream().map(e -> e.getKey().getUsername()).toList());
+                result.stream().map(e -> e.peer().getUsername()).toList());
     }
 
     @Test
     void selectBestFiles_aBusySharerUnderTheQueueThreshold_keepsItsDurationRank() {
-        when(trackMatchingService.isMatch(anyString(), anyString())).thenReturn(true);
+        when(trackMatchingService.grade(anyString(), anyString())).thenReturn(Match.EXACT);
 
         SearchResponseItem busy = peer("busy", 9_000_000, false, 50, file("busy/song.flac", 213));
         SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
@@ -262,7 +263,7 @@ class SlskdSearchResultProcessorTest {
         var result = processor.selectBestFiles(state(busy, a, odd), "song").block();
 
         assertEquals(List.of("a", "busy", "odd"),
-                result.stream().map(e -> e.getKey().getUsername()).toList());
+                result.stream().map(e -> e.peer().getUsername()).toList());
     }
 
     private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadsSlot, int queueLength, SearchFile file) {
@@ -305,13 +306,14 @@ class SlskdSearchResultProcessorTest {
         when(c.getUsername()).thenReturn("c");
         SearchFile a1 = mock(SearchFile.class), a2 = mock(SearchFile.class), a3 = mock(SearchFile.class);
         SearchFile b1 = mock(SearchFile.class), c1 = mock(SearchFile.class);
-        List<java.util.Map.Entry<SearchResponseItem, SearchFile>> ranked = List.of(
-                java.util.Map.entry(a, a1), java.util.Map.entry(a, a2), java.util.Map.entry(a, a3),
-                java.util.Map.entry(b, b1), java.util.Map.entry(c, c1));
+        TrackMatchingService.Match exact = TrackMatchingService.Match.EXACT;
+        List<SlskdSearchResultProcessor.Pick> ranked = List.of(
+                new SlskdSearchResultProcessor.Pick(a, a1, exact), new SlskdSearchResultProcessor.Pick(a, a2, exact),
+                new SlskdSearchResultProcessor.Pick(a, a3, exact), new SlskdSearchResultProcessor.Pick(b, b1, exact),
+                new SlskdSearchResultProcessor.Pick(c, c1, exact));
 
-        List<java.util.Map.Entry<SearchResponseItem, SearchFile>> spread =
-                SlskdSearchResultProcessor.spreadAcrossSharers(ranked);
+        List<SlskdSearchResultProcessor.Pick> spread = SlskdSearchResultProcessor.spreadAcrossSharers(ranked);
 
-        assertEquals(List.of(a1, b1, c1, a2, a3), spread.stream().map(java.util.Map.Entry::getValue).toList());
+        assertEquals(List.of(a1, b1, c1, a2, a3), spread.stream().map(SlskdSearchResultProcessor.Pick::file).toList());
     }
 }
