@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.util;
 
+import com.catacomb5099.naviseerr.download.SearchQueryTiers;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +42,7 @@ class PickerLabelledTest {
             Map<Integer, Integer> lengthCount = new HashMap<>();
             for (JsonNode r : rows) {
                 boolean hq = "flac".equals(r.get("ext").asText()) || r.get("bitRate").asInt(0) >= 320;
-                if (hq && matcher.isMatch(r.get("request").asText(), r.get("path").asText())) {
+                if (hq && matcher.isMatch(SearchQueryTiers.pickerName(r.get("request").asText()), r.get("path").asText())) {
                     accepted.add(r);
                     lengthCount.merge(r.get("length").asInt(0), 1, Integer::sum);
                 }

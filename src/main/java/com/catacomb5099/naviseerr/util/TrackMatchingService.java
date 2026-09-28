@@ -1,10 +1,9 @@
 package com.catacomb5099.naviseerr.util;
 
-import lombok.AllArgsConstructor;
-import lombok.Getter;
 import me.xdrop.fuzzywuzzy.FuzzySearch;
 import org.springframework.stereotype.Service;
 
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -73,19 +72,20 @@ public class TrackMatchingService {
         String normalizedClean = normalize(cleanTitle);
         String normalizedTorrent = normalize(filename);
 
-        // Extract artist and title from clean title
-        TitleParts cleanParts = extractParts(cleanTitle);
-
         // Use FuzzyWuzzy token sort (handles word order)
         int tokenScore = FuzzySearch.tokenSortRatio(normalizedClean, normalizedTorrent);
 
         // Use partial ratio (handles extra metadata in torrents)
         int partialScore = FuzzySearch.partialRatio(normalizedClean, normalizedTorrent);
 
-        // Check if both artist and title appear in the torrent filename
-        boolean containsBothParts = cleanParts.artist != null && cleanParts.title != null &&
-                normalizedTorrent.contains(normalize(cleanParts.artist)) &&
-                normalizedTorrent.contains(normalize(cleanParts.title));
+        // At least two of the request's dash-separated parts appear in the filename: title and artist
+        // for "Polish Girl - Neon Indian"; any two of artist, title and channel for
+        // "Neon Indian - Polish Girl - toomainstream", so the uploading channel is never required.
+        long partsPresent = Arrays.stream(cleanTitle.split(" - "))
+                .map(this::normalize)
+                .filter(part -> !part.isEmpty() && normalizedTorrent.contains(part))
+                .count();
+        boolean containsBothParts = partsPresent >= 2;
 
         // Combine scoring logic
         return tokenScore >= MIN_TOKEN_SCORE ||
@@ -133,8 +133,10 @@ public class TrackMatchingService {
     }
 
     /**
-     * Words the request title adds in brackets or after a dash ("('95 version)", "[Slowed]", "- Live at X") that
-     * are not noise, not the artist, longer than two letters and not a bare number.
+     * Words the request title adds in brackets ("('95 version)", "[Slowed]", "(Live at X)") that are not noise,
+     * not the artist, longer than two letters and not a bare number. Only brackets: SearchQueryTiers.pickerName
+     * puts a version-naming dash segment ("- Radio Edit -") in brackets before the picker sees it, and any other
+     * dash segment is an artist or a title, never a qualifier.
      */
     private static Set<String> qualifierTokens(String title, String artist) {
         Set<String> qualifiers = new HashSet<>();
@@ -144,10 +146,6 @@ public class TrackMatchingService {
                 qualifiers.addAll(tokens(m.group(1)));
             }
         }
-        String[] parts = title.split(" - ");
-        for (int i = 1; i < parts.length; i++) {
-            qualifiers.addAll(tokens(parts[i]));
-        }
         qualifiers.removeAll(QUALIFIER_NOISE);
         qualifiers.removeAll(tokens(artist));
         qualifiers.removeIf(w -> w.length() <= 2 || w.chars().allMatch(Character::isDigit));
@@ -156,7 +154,10 @@ public class TrackMatchingService {
 
     /**
      * Every word of the plain title must sit in the last dash-separated segment of the filename, so album siblings
-     * ("Red Hot Chili Peppers - Californication - 09 - Emit Remmus.flac") no longer match on the album name.
+     * ("Red Hot Chili Peppers - Californication - 09 - Emit Remmus.flac") no longer match on the album name. A
+     * request with more than one part before the artist ("Neon Indian - Polish Girl - toomainstream") does not say
+     * which part is the title, so any of them will do; the last part, the channel, is never required. A file named
+     * the other way round ("6 FEET UNDER - Ruby Waters.mp3", the artist last) is judged on its whole name instead.
      */
     private static boolean titleInLastSegment(String request, String filename) {
         String stem = filename.replaceFirst("(?i)\\.[a-z0-9]+$", "");
@@ -168,8 +169,18 @@ public class TrackMatchingService {
         if (last == null) {
             return false;
         }
-        String plainTitle = requestTitle(request).split("\\(")[0].split(" - ")[0];
-        return tokens(last).containsAll(tokens(plainTitle));
+        Set<String> lastTokens = tokens(last);
+        Set<String> artist = tokens(requestArtist(request));
+        if (!artist.isEmpty() && lastTokens.containsAll(artist) && segments.length > 1) {
+            lastTokens = tokens(stem);
+        }
+        for (String part : requestTitle(request).split(" - ")) {
+            Set<String> plain = tokens(part.split("\\(")[0]);
+            if (!plain.isEmpty() && lastTokens.containsAll(plain)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The request is "title - artist"; the artist is what follows the last " - ". */
@@ -246,49 +257,5 @@ public class TrackMatchingService {
                 // Normalize whitespace
                 .replaceAll("\\s+", " ")
                 .trim();
-    }
-
-    /**
-     * Extract artist and title from formats like:
-     * "Riptide - Vance Joy"
-     * "Vance Joy - Riptide"
-     */
-    // TODO: makes the assumption that title and artist is separated by -, adjust with lastFM responses
-    private TitleParts extractParts(String cleanTitle) {
-        if (cleanTitle == null || !cleanTitle.contains("-")) {
-            return new TitleParts(null, cleanTitle);
-        }
-
-        String[] parts = cleanTitle.split("-", 2);
-        if (parts.length != 2) {
-            return new TitleParts(null, cleanTitle);
-        }
-
-        String part1 = parts[0].trim();
-        String part2 = parts[1].trim();
-
-        // Try to determine which is artist vs title
-        // Common pattern: "Title - Artist" or "Artist - Title"
-        // We'll store both and check for both in the matching
-        return new TitleParts(part1, part2);
-    }
-
-    // Helper classes
-    private static class TitleParts {
-        String artist;
-        String title;
-
-        TitleParts(String artist, String title) {
-            this.artist = artist;
-            this.title = title;
-        }
-    }
-
-    @Getter
-    @AllArgsConstructor
-    public static class MatchResult {
-        private String matchedPath;
-        private int score;
-        private boolean isMatch;
     }
 }
