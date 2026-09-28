@@ -221,8 +221,11 @@ Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/s
 
 - `GET /search/{query}` - mixed (one unfiltered adapter call; see above). Fills all four lists,
   `playlists` included -- the mixed page always carried `playlist` items, the mapper used to drop them.
-- `GET /search/{query}/tracks` | `/albums` | `/artists` | `/playlists` - typed (one filtered adapter
-  call each)
+- `GET /search/{query}/tracks` | `/albums` | `/artists` - typed (one filtered adapter call each)
+- `GET /search/{query}/playlists` - two filtered adapter calls at once (`playlists` = fan-made,
+  `featured_playlists` = YouTube Music's own), merged by `SearchService.mix`: top two of each pinned
+  in YouTube's order (featured first), the rest of both shuffled. A failing featured call degrades
+  to fan-made only; the fan-made call keeps the usual error handling.
 
 And by [SongInfoController.java](../../src/main/java/com/catacomb5099/naviseerr/services/SongInfoController.java):
 
