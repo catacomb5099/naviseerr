@@ -16,10 +16,16 @@ import java.util.List;
 public record SuggestedPlaylistsView(boolean enabled, DayOfWeek refreshDay,
                                      List<SuggestedPlaylistSummary> playlists) {
 
-    /** @param editionDate {@code YYYY-MM-DD}; the client turns it into "Updated Monday". */
-    public record SuggestedPlaylistSummary(String category, String title, String editionDate, int trackCount) {
+    /**
+     * @param year        the category's year range as the curator has it ("1980-1989"; "1950-2026" for an
+     *                    all-time list), so the client can shelve the playlists by decade; null when the
+     *                    curator did not say.
+     * @param editionDate {@code YYYY-MM-DD}; the client turns it into "Updated Monday".
+     */
+    public record SuggestedPlaylistSummary(String category, String title, String year, String editionDate,
+                                           int trackCount) {
         static SuggestedPlaylistSummary from(CuratorEditionSummary s) {
-            return new SuggestedPlaylistSummary(s.category(), s.title(), s.editionDate(),
+            return new SuggestedPlaylistSummary(s.category(), s.title(), s.year(), s.editionDate(),
                     s.trackCount() == null ? 0 : s.trackCount());
         }
     }

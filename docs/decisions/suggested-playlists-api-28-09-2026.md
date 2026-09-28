@@ -18,8 +18,11 @@ vocabulary when it already talks to naviseerr for everything else.
 
 ### naviseerr proxies the curator's editions, in the client's own vocabulary
 
-- `GET /suggested-playlists` answers `{enabled, refreshDay, playlists[{category, title, editionDate, trackCount}]}`:
-  the latest edition per category, from the curator's `GET /v1/editions`. `refreshDay` ("MONDAY") is read off
+- `GET /suggested-playlists` answers `{enabled, refreshDay, playlists[{category, title, year, editionDate,
+  trackCount}]}`: the latest edition per category, from the curator's `GET /v1/editions`. `year` is the
+  category's Discogs range as the curator has it ("1980-1989"; "1950-2026" for an all-time list; null from an
+  older curator), passed through so the client can shelve the playlists by decade without naviseerr knowing
+  the categories. `refreshDay` ("MONDAY") is read off
   `curator.cron` when it names one plain weekday, so the client can say "New edition every Monday" the way
   every streaming service names its day; null otherwise.
 - `GET /suggested-playlists/{category}` answers the edition itself: `{category, title, filters, editionDate,

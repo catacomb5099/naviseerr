@@ -164,7 +164,7 @@ class CuratorClientTest {
     @Test
     void getEditions_parsesTheListAndSendsTheToken() throws InterruptedException {
         server.enqueue(json(200, """
-                [{"category": "80s-indie-pop", "title": "80s indie pop", "editionDate": "2026-09-27", "trackCount": 40, "new": 1},
+                [{"category": "80s-indie-pop", "title": "80s indie pop", "year": "1980-1989", "editionDate": "2026-09-27", "trackCount": 40, "new": 1},
                  {"category": "current-pop", "title": "Current pop", "editionDate": "2026-09-28", "trackCount": 38}]
                 """));
 
@@ -173,9 +173,11 @@ class CuratorClientTest {
                     assertEquals(2, editions.size());
                     assertEquals("80s-indie-pop", editions.getFirst().category());
                     assertEquals("80s indie pop", editions.getFirst().title());
+                    assertEquals("1980-1989", editions.getFirst().year());
                     assertEquals("2026-09-27", editions.getFirst().editionDate());
                     assertEquals(40, editions.getFirst().trackCount());
                     assertEquals(38, editions.get(1).trackCount());
+                    assertNull(editions.get(1).year(), "an older curator sends no year range");
                 })
                 .verifyComplete();
 
