@@ -294,4 +294,24 @@ class SlskdSearchResultProcessorTest {
         when(state.getFileCount()).thenReturn(peers.length);
         return state;
     }
+
+    @Test
+    void spreadAcrossSharers_noSharerGetsASecondFileBeforeEveryoneHasOne() {
+        SearchResponseItem a = mock(SearchResponseItem.class);
+        SearchResponseItem b = mock(SearchResponseItem.class);
+        SearchResponseItem c = mock(SearchResponseItem.class);
+        when(a.getUsername()).thenReturn("a");
+        when(b.getUsername()).thenReturn("b");
+        when(c.getUsername()).thenReturn("c");
+        SearchFile a1 = mock(SearchFile.class), a2 = mock(SearchFile.class), a3 = mock(SearchFile.class);
+        SearchFile b1 = mock(SearchFile.class), c1 = mock(SearchFile.class);
+        List<java.util.Map.Entry<SearchResponseItem, SearchFile>> ranked = List.of(
+                java.util.Map.entry(a, a1), java.util.Map.entry(a, a2), java.util.Map.entry(a, a3),
+                java.util.Map.entry(b, b1), java.util.Map.entry(c, c1));
+
+        List<java.util.Map.Entry<SearchResponseItem, SearchFile>> spread =
+                SlskdSearchResultProcessor.spreadAcrossSharers(ranked);
+
+        assertEquals(List.of(a1, b1, c1, a2, a3), spread.stream().map(java.util.Map.Entry::getValue).toList());
+    }
 }

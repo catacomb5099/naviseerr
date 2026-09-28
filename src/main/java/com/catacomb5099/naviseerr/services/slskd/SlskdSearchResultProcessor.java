@@ -82,8 +82,34 @@ public class SlskdSearchResultProcessor {
                     .toList();
 
             log.info("Completed candidate selection for query='{}' - {} response(s), {} total files, {} relevant candidates; limiting to {} by maxFilesPerDownload", query, responses.size(), state.getFileCount(), candidates.size(), maxFilesPerDownload);
-            return candidates.stream().limit(maxFilesPerDownload).toList();
+            return spreadAcrossSharers(candidates).stream().limit(maxFilesPerDownload).toList();
         });
+    }
+
+    /**
+     * Same order, but no sharer gets a second file in the list until every other sharer has had
+     * its first, then a third until every one has had a second, and so on. A failover list made of
+     * one sharer's ten pressings of the same album is ten chances for the same "Queued, Remotely"
+     * (27-09-2026: songs with three to five files all from one stalling sharer waited 30-50 minutes
+     * before running out). Spreading the list means a sharer that stalls or throttles costs one
+     * candidate, not the whole list. Within a round the ranking above still decides who goes first.
+     */
+    static List<Map.Entry<SearchResponseItem, SearchFile>> spreadAcrossSharers(
+            List<Map.Entry<SearchResponseItem, SearchFile>> ranked) {
+        Map<String, java.util.ArrayDeque<Map.Entry<SearchResponseItem, SearchFile>>> bySharer =
+                new java.util.LinkedHashMap<>();
+        for (Map.Entry<SearchResponseItem, SearchFile> entry : ranked) {
+            bySharer.computeIfAbsent(entry.getKey().getUsername(), k -> new java.util.ArrayDeque<>()).add(entry);
+        }
+        List<Map.Entry<SearchResponseItem, SearchFile>> spread = new java.util.ArrayList<>(ranked.size());
+        while (spread.size() < ranked.size()) {
+            for (java.util.ArrayDeque<Map.Entry<SearchResponseItem, SearchFile>> queue : bySharer.values()) {
+                if (!queue.isEmpty()) {
+                    spread.add(queue.poll());
+                }
+            }
+        }
+        return spread;
     }
 
     /** No slot for us now and a long line ahead of us: the profile of a sharer that never serves. */

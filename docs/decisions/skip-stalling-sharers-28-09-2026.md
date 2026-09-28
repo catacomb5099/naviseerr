@@ -54,6 +54,15 @@ transfers). A per-pass cap in the runner would be toothless -- the next pass two
 more -- and a real cap needs a per-sharer count of running transfers in the claim query. Left for a
 follow-up if it recurs.
 
+
+### Spread the candidate list across sharers
+
+Owner's ask (28-09-2026): a song's list of sources must not be ten files from the same sharer. The
+ranked list is now dealt out round-robin: every sharer gets one file before any sharer gets a second,
+and the ranking above still decides the order within each round. A sharer that stalls or throttles
+then costs one candidate instead of the whole list. Songs whose three to five candidates were all one
+stalling sharer's pressings waited 30-50 minutes last night before running out of sources.
+
 ## Trade-offs
 
 **The stalling list is in memory.** It is lost on a restart and each naviseerr process keeps its own.
