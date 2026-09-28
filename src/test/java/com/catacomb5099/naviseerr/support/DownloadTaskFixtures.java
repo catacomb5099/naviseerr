@@ -19,7 +19,7 @@ public final class DownloadTaskFixtures {
 
     public static DownloadCandidate candidate(String username) {
         return new DownloadCandidate(username, "music/" + username + "/song.flac", "flac",
-                1411, 1000L, 42L, false);
+                1411, 1000L, 42L, false, true, 0, 1_000_000);
     }
 
     public static List<DownloadCandidate> candidates(String... usernames) {

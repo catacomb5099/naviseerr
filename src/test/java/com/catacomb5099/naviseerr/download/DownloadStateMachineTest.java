@@ -20,9 +20,10 @@ class DownloadStateMachineTest {
     private static final Duration QUEUED_BUDGET = Duration.ofMinutes(10);
     private static final int RETRY_LIMIT = 2;
 
+    private final StallingSharers stallingSharers = new StallingSharers(Duration.ofHours(6));
     private final DownloadStateMachine machine = new DownloadStateMachine(
             SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, QUEUED_BUDGET, MISSING_GRACE,
-            RETRY_LIMIT);
+            RETRY_LIMIT, stallingSharers);
 
     @Test
     void searchInit_recordsSearchId_andAdvancesToSearchPoll() {
@@ -387,6 +388,87 @@ class DownloadStateMachineTest {
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
                 T0.plus(QUEUED_BUDGET).plusSeconds(1));
+
+        assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    // ---- a sharer that stalled one song is skipped by every other song ---------------------------
+
+    @Test
+    void downloadPoll_aSharerThatStalledOneSong_isSkippedByTheNextSong_whileAnotherSharerRemains() {
+        // Song 1 burns its ten minutes on alice.
+        machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
+                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+
+        // Song 2's search finishes with alice ranked first: it must start on carol instead.
+        DownloadDecision d = machine.afterSearchPoll(searchPolling("s2"),
+                SlskdFixtures.searchState("s2", true, "Completed"),
+                candidates("alice", "carol"), T0.plus(QUEUED_BUDGET).plusSeconds(2));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(1, next.candidateIndex(), "alice is stalling, so carol goes first");
+    }
+
+    @Test
+    void downloadPoll_failingOver_skipsAStallingSharer_inFavourOfTheOneAfterIt() {
+        stallingSharers.markStalled("bob", T0);
+
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob", "carol"), 0, 2, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Completed, Errored"), T0.plusSeconds(30));
+
+        assertEquals(2, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
+    }
+
+    @Test
+    void downloadPoll_whenEveryRemainingSharerIsStalling_theyAreStillTried_ratherThanFailing() {
+        stallingSharers.markStalled("bob", T0);
+        stallingSharers.markStalled("carol", T0);
+
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob", "carol"), 0, 2, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Completed, Errored"), T0.plusSeconds(30));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(1, next.candidateIndex(), "a slow success beats SOURCES_EXHAUSTED");
+    }
+
+    @Test
+    void downloadPoll_aStallingSharer_isForgivenOnceItsCooldownHasPassed() {
+        stallingSharers.markStalled("alice", T0);
+
+        DownloadDecision d = machine.afterSearchPoll(searchPolling("s2"),
+                SlskdFixtures.searchState("s2", true, "Completed"),
+                candidates("alice", "bob"), T0.plus(Duration.ofHours(6)));
+
+        assertEquals(0, assertInstanceOf(DownloadDecision.Advance.class, d).next().candidateIndex());
+    }
+
+    // ---- a sharer that says no ---------------------------------------------------------------
+
+    @Test
+    void downloadPoll_rejected_goesStraightToTheNextCandidate_notASameFileRetry() {
+        // "Transfer rejected: File not shared." -- the sharer's share index is stale; asking for the
+        // same file again gets the same answer. Measured 27-09-2026: 8 such retries, all for nothing.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), T0.plusSeconds(3));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(1, next.candidateIndex(), "next sharer, even though retries on alice remained");
+        assertEquals(0, next.retryIndex());
+    }
+
+    @Test
+    void downloadPoll_rejectedOnTheLastCandidate_exhaustsSources() {
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), T0.plusSeconds(3));
 
         assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
