@@ -72,7 +72,7 @@ class DownloadStepExecutorTest {
     }
 
     @Test
-    void searchPoll_complete_selectsAgainstTheFullSongName_notTheLooseQuery() {
+    void searchPoll_complete_selectsAgainstTheCleanedSongName_notTheLooseQuery() {
         // The search is loose on purpose; the picker needs the qualifier and the artist from the name.
         DownloadTask task = searchPolling("s1").toBuilder()
                 .songName("Hello (Official Lyric Video) - Oasis").build();
@@ -83,7 +83,8 @@ class DownloadStepExecutorTest {
 
         executor.execute(task, Map.of("s1", summary), Map.of()).block();
 
-        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello (Official Lyric Video) - Oasis"));
+        // the picker sees the cleaned name, not the raw YouTube one
+        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"));
     }
 
     @Test
