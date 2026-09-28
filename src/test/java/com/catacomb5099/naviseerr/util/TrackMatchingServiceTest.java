@@ -94,6 +94,45 @@ class TrackMatchingServiceTest {
         assertFalse(matches("Kiss Me - Radio Edit - Sixpence None The Richer", "Sixpence None The Richer - Breathe Your Name (Radio Edit).mp3"));
     }
 
+    // ---- a search that did not name the artist: the artist must be in the path ----
+
+    @Test
+    void whenTheSearchDidNotNameTheArtist_aFileWithoutTheArtistInItsPath_isUnverified() {
+        // "Believe" alone returns every artist's Believe; the filename by itself cannot tell Cher's apart.
+        assertEquals(Match.UNVERIFIED, matcher.grade("Believe - Cher", "Imagine Dragons/Evolve/03 - Believe.flac", "Believe"));
+        assertEquals(Match.UNVERIFIED, matcher.grade("Believe - Cher", "Top 1000 Hits/0421 - Believe.mp3", "Believe"));
+        // not the song at all stays NONE, whatever the wording
+        assertEquals(Match.NONE, matcher.grade("Believe - Cher", "Cher/Believe/05 - Strong Enough.flac", "Believe"));
+        assertEquals(Match.EXACT, matcher.grade("Believe - Cher", "Cher/Believe (1998)/01 - Believe.flac", "Believe"));
+        assertEquals(Match.EXACT, matcher.grade("Believe - Cher", "Cher - Believe.mp3", "Believe"));
+        // spelt without the space, without the accent, without "The": still the artist
+        assertEquals(Match.EXACT, matcher.grade("Bad Romance - Lady Gaga", "LadyGaga/The Fame Monster/01 Bad Romance.mp3", "Bad Romance"));
+        assertEquals(Match.EXACT, matcher.grade("Halo - Beyoncé", "Beyonce/I Am... Sasha Fierce/01 - Halo.flac", "Halo"));
+        assertEquals(Match.EXACT, matcher.grade("Just What I Needed - The Cars", "Cars - Just What I Needed.mp3", "Just What I Needed"));
+        // a wording missing a word of the artist (the one that gets past a blocked phrase) counts as not naming it
+        assertEquals(Match.UNVERIFIED, matcher.grade("Bad Romance - Lady Gaga", "Various/Pop Hits/Bad Romance.mp3", "Romance Gaga"));
+        assertEquals(Match.EXACT, matcher.grade("Bad Romance - Lady Gaga", "Lady Gaga/The Fame Monster/01 Bad Romance.mp3", "Romance Gaga"));
+        // "Artist - Title - channel": the artist is the first part
+        assertEquals(Match.EXACT, matcher.grade("Neon Indian - Polish Girl - toomainstream", "Neon Indian/Era Extraña/03 - Polish Girl.flac", "Polish Girl"));
+        assertEquals(Match.UNVERIFIED, matcher.grade("Neon Indian - Polish Girl - toomainstream", "Somebody/Mix/03 - Polish Girl.flac", "Polish Girl"));
+    }
+
+    @Test
+    void anArtistWithNoLatinLettersOrDigits_cannotBeCheckedEitherWay_soTheGradeStands() {
+        assertEquals(Match.EXACT, matcher.grade("Lemon - 米津玄師", "米津玄師/STRAY SHEEP/03 Lemon.flac", "Lemon - 米津玄師"));
+        assertEquals(Match.EXACT, matcher.grade("Lemon - 米津玄師", "J-Pop/03 Lemon.flac", "Lemon"));
+        assertEquals(Match.EXACT, matcher.grade("Dynamite - 방탄소년단", "K-Pop/BTS/01 Dynamite.flac", "Dynamite"));
+    }
+
+    @Test
+    void whenTheSearchNamedTheArtist_soulseekAlreadyMatchedIt_nothingChanges() {
+        assertEquals(Match.EXACT, matcher.grade("Believe - Cher", "Compilations/Now 42/03 - Believe.flac", "Believe - Cher"));
+        assertEquals(Match.EXACT, matcher.grade("Neon Indian - Polish Girl - toomainstream", "Somebody/Mix/03 - Polish Girl.flac", "Neon Indian Polish Girl"));
+        // the version and title rules still apply
+        assertEquals(Match.OTHER_VERSION, matcher.grade("Believe - Cher", "Cher/Live/03 - Believe (Live).flac", "Believe - Cher"));
+        assertEquals(Match.NONE, matcher.grade("Believe - Cher", "Cher/Believe/05 - Strong Enough.flac", "Believe - Cher"));
+    }
+
     // ---- graded verdict: any version of the song beats no song ----
 
     private Match grade(String youtubeName, String file) {
