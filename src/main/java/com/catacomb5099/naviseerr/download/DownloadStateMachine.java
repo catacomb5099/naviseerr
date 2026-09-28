@@ -65,7 +65,7 @@ public class DownloadStateMachine {
         }
         DownloadTask next = task.withPhase(DownloadPhase.SEARCH_POLL, now);
         return new DownloadDecision.Advance(next.toBuilder()
-                .searchId(started.getId())
+                .searchId(started.getId()).retryIndex(0)
                 .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
                 .progressPercent(BigDecimal.ZERO)
                 .build());
@@ -236,21 +236,43 @@ public class DownloadStateMachine {
 
     /**
      * A failed slskd call during search is retried in place -- same phase, no candidate/progress
-     * reset -- rather than failing the download outright, as long as the {@code searchBudget} isn't
-     * already spent. This covers both a dropped/timed-out connection ({@link WebClientRequestException})
-     * and slskd itself erroring the call ({@link WebClientResponseException}, 4xx or 5xx alike: a
-     * rejected search is retried the same as a dropped one, on the theory that a transient rejection
-     * recovering is worth more than a genuinely bad one failing sooner -- the budget already bounds
-     * the cost either way). Anything else is an error shape this code doesn't recognise, so it fails
-     * fast rather than guess.
+     * reset -- rather than failing the download outright. In {@code SEARCH_POLL} a search is running
+     * and the {@code searchBudget} measures it, so retries stop once the budget is spent. In
+     * {@code SEARCH_INIT} no search exists yet, and the budget's clock started when the row was
+     * created: a song in a large playlist waits minutes for one of the two search slots before its
+     * first {@code POST /searches} (28-09-2026: four songs failed on their very first, unretried
+     * attempt, 7-21 minutes after creation). So a failed start is retried while the budget lasts, as
+     * before, and at least {@code retryLimit} times whatever the wall clock says, {@code
+     * searchPollInterval} apart, with the reason kept on the row ({@code lastError}) for the next
+     * post-mortem to read. Both cover a dropped or timed-out connection ({@link
+     * WebClientRequestException}) and slskd itself erroring the call ({@link
+     * WebClientResponseException}, 4xx or 5xx alike: a rejected search is retried the same as a
+     * dropped one, on the theory that a transient rejection recovering is worth more than a genuinely
+     * bad one failing sooner -- the bounds already limit the cost either way). Anything else is an
+     * error shape this code doesn't recognise, so it gives up at once rather than guess.
      */
     private DownloadDecision onSearchCallFailed(DownloadTask task, Throwable error, Instant now) {
         boolean retryable = error instanceof WebClientRequestException
                 || error instanceof WebClientResponseException;
-        if (retryable && !task.isPastBudget(now, searchBudget)) {
+        if (!retryable) {
+            return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
+        }
+        if (task.phase() == DownloadPhase.SEARCH_INIT) {
+            if (task.retryIndex() < retryLimit || !task.isPastBudget(now, searchBudget)) {
+                return new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)).toBuilder()
+                        .retryIndex(task.retryIndex() + 1).lastError(describe(error)).build());
+            }
+            return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
+        }
+        if (!task.isPastBudget(now, searchBudget)) {
             return new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
         }
         return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
+    }
+
+    /** The exception's message, or its class name when it carries none (a Netty read timeout does not). */
+    private static String describe(Throwable error) {
+        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
     private DownloadDecision retryOrAdvanceCandidate(DownloadTask task, Instant now) {
