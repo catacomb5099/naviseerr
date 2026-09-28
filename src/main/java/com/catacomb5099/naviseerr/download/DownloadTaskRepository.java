@@ -53,40 +53,41 @@ public class DownloadTaskRepository {
             """;
 
     /**
-     * Creates every task row for one download and admits it, in one statement. One row per song:
-     * one for a song request, N for an album or playlist.
+     * Creates every task row for one download and admits it, in one statement. One row per song.
+     *
+     * <p>The status flip comes FIRST and the insert depends on it. The {@code UPDATE} takes the row
+     * lock, so a cancel (or admission failure) that lands in the gap between selecting the download
+     * and running this statement wins or loses cleanly: under READ COMMITTED an {@code UPDATE} that
+     * waited on the row re-checks {@code status = 'PENDING'} against the committed version, finds it
+     * false, and the insert then has nothing to depend on. The old order (insert first, then flip)
+     * left a finished download with live song rows the loop would search for.
      *
      * <p>{@code unnest} of two parallel arrays rather than a multi-row VALUES list, because the song
-     * count is only known at runtime and a statement whose text depends on it cannot be a constant,
-     * cannot be prepared once, and puts string building on the write path.
+     * count is only known at runtime. {@code WITH ORDINALITY} numbers the songs in the provider's order.
+     * {@code song_name} is the Soulseek query wording, not a display title; see V6.
      *
-     * <p>The guards make it a no-op rather than a duplicator if it somehow runs twice for the same
-     * download: {@code status = 'PENDING'} has already been consumed by the first run, and the
-     * {@code NOT EXISTS} stops the insert itself.
-     *
-     * <p>{@code WITH ORDINALITY} numbers the songs in the order the provider listed them, which is
-     * the collection's track order — the only order a per-song view should ever show an album in.
-     * {@code song_name} here is the Soulseek query wording, not a display title; see V6.
+     * @return task rows created: N for an admitted N-song download, 0 when it was no longer PENDING
+     *         or already had songs
      */
     private static final String CREATE_TASKS_SQL = """
-            WITH created AS (
-                INSERT INTO download_tasks
-                    (task_id, download_id, youtube_id, song_name, position, phase,
-                     phase_entered_at, next_attempt_at)
-                SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, s.position,
-                       'SEARCH_INIT', :now, :now
-                  FROM unnest(:youtubeIds::text[], :songNames::text[])
-                       WITH ORDINALITY AS s(youtube_id, song_name, position)
-                 WHERE NOT EXISTS (SELECT 1 FROM download_tasks t
+            WITH admitted AS (
+                UPDATE downloads
+                   SET status = 'IN_PROGRESS',
+                       admitted_at = :now
+                 WHERE download_id = :downloadId
+                   AND status = 'PENDING'
+                   AND NOT EXISTS (SELECT 1 FROM download_tasks t
                                     WHERE t.download_id = :downloadId)
                 RETURNING download_id
             )
-            UPDATE downloads
-               SET status = 'IN_PROGRESS',
-                   admitted_at = :now
-             WHERE download_id = :downloadId
-               AND status = 'PENDING'
-               AND EXISTS (SELECT 1 FROM created)
+            INSERT INTO download_tasks
+                (task_id, download_id, youtube_id, song_name, position, phase,
+                 phase_entered_at, next_attempt_at)
+            SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, s.position,
+                   'SEARCH_INIT', :now, :now
+              FROM unnest(:youtubeIds::text[], :songNames::text[])
+                   WITH ORDINALITY AS s(youtube_id, song_name, position)
+             WHERE EXISTS (SELECT 1 FROM admitted)
             """;
 
     /**
@@ -356,7 +357,8 @@ public class DownloadTaskRepository {
 
     /**
      * @param tasks in the collection's track order; their index becomes {@code position}
-     * @return rows updated: 1 when the download was admitted, 0 when it had already been
+     * @return task rows created: N for an admitted N-song download, 0 when the download was no
+     *         longer PENDING or already had songs
      */
     public Mono<Long> createTasks(UUID downloadId, List<DownloadTask> tasks, Instant now) {
         if (tasks.isEmpty()) {
