@@ -16,7 +16,10 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -109,14 +112,28 @@ class SearchServiceTest {
         verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ARTISTS);
     }
 
+    private static Playlist playlist(String id, String name) {
+        return new Playlist(id, "https://example.com/p.jpg", name, List.of("someone"), 0);
+    }
+
+    private static SearchResponse playlistsOnly(Playlist... playlists) {
+        return new SearchResponse(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), List.of(playlists));
+    }
+
+    private static List<String> ids(List<Playlist> playlists) {
+        return playlists.stream().map(Playlist::getId).toList();
+    }
+
     @Test
-    void searchPlaylists_delegatesToYtMusicServiceWithPlaylistsType_andPopulatesOnlyPlaylists() {
-        SearchResponse playlistsOnly = new SearchResponse(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), List.of(playlist()));
-        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlistsOnly));
+    void searchPlaylists_asksForFanMadeAndFeaturedPlaylists_andReturnsBoth() {
+        Playlist fanMade = playlist("PL1", "Britpop Bangers");
+        Playlist featured = playlist("RDCLAK5uy_1", "Cool Britannia");
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(fanMade)));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(featured)));
 
         StepVerifier.create(searchService.searchPlaylists("Britpop"))
                 .assertNext(response -> {
-                    assertTrue(response.getPlaylists().size() == 1);
+                    assertEquals(List.of("RDCLAK5uy_1", "PL1"), ids(response.getPlaylists()));
                     assertTrue(response.getTracks().isEmpty());
                     assertTrue(response.getAlbums().isEmpty());
                     assertTrue(response.getArtists().isEmpty());
@@ -124,6 +141,61 @@ class SearchServiceTest {
                 .verifyComplete();
 
         verify(ytMusicService).getResults("Britpop", YtMusicSearchType.PLAYLISTS);
+        verify(ytMusicService).getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS);
+    }
+
+    @Test
+    void searchPlaylists_featuredSearchFailing_stillReturnsFanMadePlaylists() {
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(playlist("PL1", "Britpop Bangers"))));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.error(new YtMusicUnavailableException("no such route")));
+
+        StepVerifier.create(searchService.searchPlaylists("Britpop"))
+                .assertNext(response -> assertEquals(List.of("PL1"), ids(response.getPlaylists())))
+                .verifyComplete();
+    }
+
+    @Test
+    void searchPlaylists_fanMadeSearchFailing_isStillAnError() {
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.error(new YtMusicUnavailableException("down")));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(playlist("RDCLAK5uy_1", "Cool Britannia"))));
+
+        StepVerifier.create(searchService.searchPlaylists("Britpop"))
+                .expectError(YtMusicUnavailableException.class)
+                .verify();
+    }
+
+    @Test
+    void mix_pinsTopTwoOfEachSourceInOrder_thenShufflesTheRestOfBoth() {
+        List<Playlist> featured = List.of(playlist("F1", "f1"), playlist("F2", "f2"), playlist("F3", "f3"), playlist("F4", "f4"));
+        List<Playlist> fanMade = List.of(playlist("M1", "m1"), playlist("M2", "m2"), playlist("M3", "m3"), playlist("M4", "m4"));
+
+        List<String> mixed = ids(SearchService.mix(featured, fanMade, new Random(7)));
+
+        assertEquals(List.of("F1", "F2", "M1", "M2"), mixed.subList(0, 4));
+        assertEquals(Set.of("F3", "F4", "M3", "M4"), new HashSet<>(mixed.subList(4, 8)));
+        assertEquals(8, mixed.size());
+    }
+
+    @Test
+    void mix_shufflesTheTailDifferentlyForDifferentSeeds_butNeverTheHead() {
+        List<Playlist> featured = List.of(playlist("F1", "f1"), playlist("F2", "f2"), playlist("F3", "f3"), playlist("F4", "f4"), playlist("F5", "f5"));
+        List<Playlist> fanMade = List.of(playlist("M1", "m1"), playlist("M2", "m2"), playlist("M3", "m3"), playlist("M4", "m4"), playlist("M5", "m5"));
+
+        Set<List<String>> tails = new HashSet<>();
+        for (int seed = 0; seed < 20; seed++) {
+            List<String> mixed = ids(SearchService.mix(featured, fanMade, new Random(seed)));
+            assertEquals(List.of("F1", "F2", "M1", "M2"), mixed.subList(0, 4));
+            tails.add(mixed.subList(4, mixed.size()));
+        }
+        assertTrue(tails.size() > 1, "the tail should not come out in the same order every time");
+        assertTrue(tails.stream().anyMatch(tail -> tail.get(0).startsWith("M")), "fan-made playlists should sometimes lead the tail: both pools are shuffled together, not one after the other");
+    }
+
+    @Test
+    void mix_shortLists_takeWhatThereIs() {
+        assertEquals(List.of("F1"), ids(SearchService.mix(List.of(playlist("F1", "f1")), List.of(), new Random(1))));
+        assertEquals(List.of("M1"), ids(SearchService.mix(List.of(), List.of(playlist("M1", "m1")), new Random(1))));
+        assertEquals(List.of(), ids(SearchService.mix(List.of(), List.of(), new Random(1))));
     }
 
     @Test
