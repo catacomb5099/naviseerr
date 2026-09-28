@@ -42,11 +42,13 @@ this codebase.
 
 [YtMusicService.java](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java):
 
-- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists|playlists}` (the adapter's typed sugar
-  routes; `type` is [YtMusicSearchType](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicSearchType.java),
+- `getResults(query, type)` - `GET /v1/search/{songs|albums|artists|playlists|featured_playlists}`
+  (the adapter's typed sugar routes; `type` is [YtMusicSearchType](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicSearchType.java),
   the LastFM-era `LastFMAPIMethod`'s replacement), passing `yt-music-service.search-result-limit`
-  (`10`) as `limit`. The response is mapped through `YtMusicSearchResponseMapper`, which yields a
-  `SearchResponse` with only that one list populated (the adapter already filtered server-side).
+  (`10`) as `limit`. `getResults(query, type, limit)` is the same call with a caller-chosen page
+  size, for the artist page's featured-playlist search, which filters the answer afterwards. The
+  response is mapped through `YtMusicSearchResponseMapper`, which yields a `SearchResponse` with
+  only that one list populated (the adapter already filtered server-side).
 - `getResults(query)` - **one** unfiltered `GET /v1/search` call, passing
   `yt-music-service.mixed-search-limit` (`100`) as `limit`. `YtMusicSearchResponseMapper` partitions
   the mixed response into all four lists in a single pass. This used to fan out the three typed
@@ -241,13 +243,25 @@ And by [ArtistController.java](../../src/main/java/com/catacomb5099/naviseerr/se
 - `GET /artists/{channelId}` - one artist page as an
   [ArtistView](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistView.java): header
   (name, picture, description, subscribers) plus top songs, albums, singles, playlists and similar
-  artists, each capped at 10 and expressed in the search DTOs so the client reuses its cards. Two
-  adapter calls in sequence: `getArtistInfo`, then a playlist search for the artist's *name* (there is
-  no "playlists featuring this artist" route). The search is best-effort - if it fails the page still
-  loads with an empty `playlists` shelf. Errors map exactly as `/collections/{id}`: the adapter's 404
-  (and the 400/422/500 folded into the same exception) is 404, `YtMusicUnavailableException` is 502.
+  artists, each capped at 10 and expressed in the search DTOs so the client reuses its cards. Up to
+  fourteen adapter calls: `getArtistInfo`, then a `featured_playlists` search for the artist's
+  *name* with `limit=20` (there is no "playlists featuring this artist" route; this is YouTube
+  Music's own editorial playlists its search links to the name), then up to 12 `getPlaylistInfo`
+  lookups. Playlists whose title contains the artist's name or a related artist's name ("Presenting
+  Oasis", "Presenting The Kooks") are dropped, comparing lowercased letters and digits with accents
+  stripped; the first 12 survivors are then opened (four at a time, YouTube's order kept) and only
+  those whose track list credits the artist - whole folded name, so "Pixies Tribute Band" is not
+  Pixies - stay, because the search links a playlist to a name for reasons other than membership
+  (for Oasis: "Summer House", 131 tracks, no Oasis). The lookup reads the adapter's default
+  `/v1/playlists/{id}` page of 100 tracks, so an artist buried deeper in a very long playlist is
+  missed; a playlist that fails to open is dropped. `ArtistView` caps the result at 10. The whole
+  step is best-effort - if it fails (including an adapter that does not know the
+  `featured_playlists` type yet) the page still loads with an empty `playlists` shelf. Errors map
+  exactly as `/collections/{id}`: the adapter's 404 (and the 400/422/500 folded into the same
+  exception) is 404, `YtMusicUnavailableException` is 502.
 
-`Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`), falling back to the
+`Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`, or `RDCLAK5uy_...` for a
+featured playlist; `/v1/playlists/{id}` accepts both), falling back to the
 `VL`-prefixed `browseId` only when the bare id is absent. The adapter's detail route accepts either,
 but the backend keys `media_items` by whatever id the client posts, so the client must pass the id
 it was given through to both `/collections/{id}` and `/download/collection/{id}` unchanged.

@@ -60,11 +60,19 @@ public class YtMusicService {
     }
 
     public Mono<SearchResponse> getResults(String query, YtMusicSearchType type) {
+        return getResults(query, type, searchResultLimit);
+    }
+
+    /**
+     * Same typed search with a caller-chosen page size, for the one caller that filters the answer
+     * down afterwards and so needs more than a page's worth to have anything left.
+     */
+    public Mono<SearchResponse> getResults(String query, YtMusicSearchType type, int limit) {
         return executeSearch(
                 uriBuilder -> uriBuilder
                         .path(SEARCH_PATH_PREFIX + type.getPathSegment())
                         .queryParam(QUERY_PARAM, query)
-                        .queryParam(LIMIT_PARAM, searchResultLimit)
+                        .queryParam(LIMIT_PARAM, limit)
                         .build(),
                 type.getPathSegment(),
                 query);
