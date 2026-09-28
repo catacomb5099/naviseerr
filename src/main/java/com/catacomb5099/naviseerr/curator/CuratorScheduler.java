@@ -7,8 +7,11 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -26,21 +29,28 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 public class CuratorScheduler {
 
+    private static final Map<String, DayOfWeek> CRON_DAYS = Map.of(
+            "MON", DayOfWeek.MONDAY, "TUE", DayOfWeek.TUESDAY, "WED", DayOfWeek.WEDNESDAY,
+            "THU", DayOfWeek.THURSDAY, "FRI", DayOfWeek.FRIDAY, "SAT", DayOfWeek.SATURDAY, "SUN", DayOfWeek.SUNDAY);
+
     private final CuratorClient client;
     private final Duration pollInterval;
     private final Duration runBudget;
     private final boolean enabled;
+    private final DayOfWeek refreshDay;
     private final AtomicBoolean running = new AtomicBoolean();
 
     public CuratorScheduler(CuratorClient client,
                             @Value("${curator.url:}") String url,
                             @Value("${curator.token:}") String token,
+                            @Value("${curator.cron:}") String cron,
                             @Value("${curator.poll-interval-ms}") Duration pollInterval,
                             @Value("${curator.run-budget-ms}") Duration runBudget) {
         this.client = client;
         this.pollInterval = pollInterval;
         this.runBudget = runBudget;
         this.enabled = !url.isBlank() && !token.isBlank();
+        this.refreshDay = refreshDay(cron);
         if (!enabled) {
             log.info("Weekly curator refresh OFF: suggested playlists are not refreshed. Set CURATOR_URL "
                     + "and CURATOR_TOKEN (the same token the playlist-curator is started with) to turn it on.");
@@ -49,6 +59,28 @@ public class CuratorScheduler {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    /**
+     * The weekday the cron fires on, when it is a plain weekly cron ("0 0 3 * * MON", or a digit 0-7 in
+     * the last field); null for anything fancier ("MON-FRI", "*", two days), because then there is no one
+     * day to tell the user. The client says "New edition every Monday" from this.
+     */
+    public DayOfWeek getRefreshDay() {
+        return refreshDay;
+    }
+
+    static DayOfWeek refreshDay(String cron) {
+        String[] fields = cron == null ? new String[0] : cron.trim().split("\\s+");
+        if (fields.length != 6) {
+            return null;
+        }
+        String day = fields[5].toUpperCase(Locale.ROOT);
+        if (day.matches("[0-7]")) {
+            int n = Integer.parseInt(day);
+            return n == 0 || n == 7 ? DayOfWeek.SUNDAY : DayOfWeek.of(n);
+        }
+        return CRON_DAYS.get(day);
     }
 
     /** The cron entry point. Never throws: refresh() swallows its own errors into a log line. */
@@ -61,8 +93,8 @@ public class CuratorScheduler {
     }
 
     /**
-     * One full refresh: trigger, poll to a final state or the budget, log the outcome. Public so a
-     * manual "refresh now" can be wired to it later. Overlapping calls are skipped, not queued.
+     * One full refresh: trigger, poll to a final state or the budget, log the outcome. Overlapping
+     * calls are skipped, not queued. The manual path is {@link #refreshNow()}.
      */
     public Mono<Void> refresh() {
         return Mono.defer(() -> {
@@ -83,6 +115,34 @@ public class CuratorScheduler {
                     })
                     .doFinally(signal -> running.set(false));
         });
+    }
+
+    /**
+     * A person's "make this week's playlists now": trigger the curator and hand the run back at once,
+     * then keep following it in the background so the log tells the same story as after a cron tick.
+     * The trigger is not retried (the person is waiting and can press again), and a run the weekly
+     * refresh is already following is not followed twice. The curator's POST is idempotent, so pressing
+     * the button during a run simply returns that run.
+     */
+    public Mono<CuratorRun> refreshNow() {
+        return client.triggerRunOnce().doOnNext(this::followInBackground);
+    }
+
+    private void followInBackground(CuratorRun run) {
+        log.info("Curator run {} {} requested by hand ({} categories)", run.runId(), run.status(),
+                run.categories().size());
+        if (run.isFinal() || !running.compareAndSet(false, true)) {
+            return;
+        }
+        Instant started = Instant.now();
+        poll(run)
+                .doOnNext(finished -> logOutcome(finished, started))
+                .onErrorResume(error -> {
+                    log.error("Curator refresh failed: {}", error.getMessage());
+                    return Mono.empty();
+                })
+                .doFinally(signal -> running.set(false))
+                .subscribe();
     }
 
     private Mono<CuratorRun> poll(CuratorRun triggered) {

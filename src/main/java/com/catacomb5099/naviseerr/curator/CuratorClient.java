@@ -50,7 +50,7 @@ public class CuratorClient {
 
     /** POST /v1/runs with no body: refresh every category. 202 for a new run, 200 for one already going. */
     public Mono<CuratorRun> triggerRun() {
-        return execute(webClient.post().uri(RUNS_PATH), "trigger", CuratorRun.class)
+        return triggerRunOnce()
                 .retryWhen(ReactivePoller.defaultBackoff(firstBackOff, retryCount)
                         .filter(error -> error instanceof CuratorException ce && ce.isRetryable())
                         .doBeforeRetry(signal -> log.warn("Retrying curator trigger (attempt {}) after: {}",
@@ -58,8 +58,21 @@ public class CuratorClient {
                         .onRetryExhaustedThrow((spec, signal) -> signal.failure()));
     }
 
+    /**
+     * The same trigger with no retry: for a person pressing "make this week's playlists now", who is
+     * waiting for the answer and can press again, unlike the cron tick that must not lose the week.
+     */
+    public Mono<CuratorRun> triggerRunOnce() {
+        return execute(webClient.post().uri(RUNS_PATH), "trigger", CuratorRun.class);
+    }
+
     public Mono<CuratorRun> getRun(String runId) {
         return execute(webClient.get().uri(RUNS_PATH + "/{id}", runId), "poll of run " + runId, CuratorRun.class);
+    }
+
+    /** GET /v1/runs/latest: the most recently requested run, whatever its state. 404 when the curator never ran. */
+    public Mono<CuratorRun> getLatestRun() {
+        return execute(webClient.get().uri(RUNS_PATH + "/latest"), "latest run", CuratorRun.class);
     }
 
     /** GET /v1/editions: the latest edition per category, oldest category first as the curator lists them. */

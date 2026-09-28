@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
@@ -33,7 +34,7 @@ public class SuggestedPlaylistController {
         if (!scheduler.isEnabled()) {
             return Mono.just(SuggestedPlaylistsView.off());
         }
-        return client.getEditions().map(SuggestedPlaylistsView::of);
+        return client.getEditions().map(editions -> SuggestedPlaylistsView.of(scheduler.getRefreshDay(), editions));
     }
 
     /** One category's latest edition with every song. 404 when the curator has none for it yet. */
@@ -55,7 +56,34 @@ public class SuggestedPlaylistController {
     }
 
     /**
-     * The curator's 404 ("no edition for that category") is a 404 to the client too. Anything else the
+     * "Make this week's playlists now." Answers 202 with the run the moment the curator has accepted it;
+     * the work takes minutes and the client follows it on {@code GET /suggested-playlists/refresh}.
+     * Pressing during a run returns that run (the curator's trigger is idempotent). 503 with no curator.
+     */
+    @PostMapping("/suggested-playlists/refresh")
+    Mono<ResponseEntity<CuratorRun>> refresh() {
+        if (!scheduler.isEnabled()) {
+            return Mono.just(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build());
+        }
+        return scheduler.refreshNow()
+                .map(run -> ResponseEntity.status(HttpStatus.ACCEPTED).body(run));
+    }
+
+    /**
+     * How the most recent run is going, whether a person or the weekly clock started it: queued, running,
+     * or finished with one line per category. 404 when the curator has never run. The literal path wins
+     * over {@code /{category}}, so a category cannot be called "refresh".
+     */
+    @GetMapping("/suggested-playlists/refresh")
+    Mono<ResponseEntity<CuratorRun>> latestRun() {
+        if (!scheduler.isEnabled()) {
+            return Mono.just(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build());
+        }
+        return client.getLatestRun().map(ResponseEntity::ok);
+    }
+
+    /**
+     * The curator's 404 ("no edition for that category", "no run yet") is a 404 to the client too. Anything else the
      * curator said or failed to say -- it is down, the token is wrong, it answered 500 -- is a 502: the
      * problem is behind naviseerr, and the log line says which.
      */

@@ -120,6 +120,31 @@ class CuratorClientTest {
     }
 
     @Test
+    void triggerRunOnce_5xx_isNotRetried() {
+        server.enqueue(json(503, "{\"error\":{\"code\":\"BUSY\",\"message\":\"restarting\"}}"));
+
+        StepVerifier.create(client.triggerRunOnce())
+                .expectErrorSatisfies(error -> assertTrue(((CuratorException) error).isRetryable()))
+                .verify();
+        assertEquals(1, server.getRequestCount());
+    }
+
+    @Test
+    void getLatestRun_readsTheRun_and404IsNotFound() throws InterruptedException {
+        server.enqueue(json(200, QUEUED_BODY.replace("\"queued\"", "\"running\"")));
+        server.enqueue(json(404, "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no run yet\"}}"));
+
+        StepVerifier.create(client.getLatestRun())
+                .assertNext(run -> assertEquals("running", run.status()))
+                .verifyComplete();
+        assertEquals("/v1/runs/latest", server.takeRequest().getPath());
+
+        StepVerifier.create(client.getLatestRun())
+                .expectErrorSatisfies(error -> assertTrue(((CuratorException) error).isNotFound()))
+                .verify();
+    }
+
+    @Test
     void getRun_readsFinalState() throws InterruptedException {
         server.enqueue(json(200, """
                 {"runId": "r1", "status": "succeeded", "categories": [

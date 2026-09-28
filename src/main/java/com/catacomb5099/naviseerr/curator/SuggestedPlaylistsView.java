@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.curator;
 
+import java.time.DayOfWeek;
 import java.util.List;
 
 /**
@@ -7,9 +8,13 @@ import java.util.List;
  * configured (no {@code CURATOR_TOKEN}), so the client can hide the section entirely rather than show
  * an empty one; with a curator and no editions yet the list is empty and {@code enabled} is true.
  *
- * @param playlists the latest edition per category, as the curator lists them.
+ * @param refreshDay the weekday the weekly refresh runs ("MONDAY"), so the client can say "New edition
+ *                   every Monday" the way the streaming services name the day; null when the cron is
+ *                   not a plain weekly one or the curator is off.
+ * @param playlists  the latest edition per category, as the curator lists them.
  */
-public record SuggestedPlaylistsView(boolean enabled, List<SuggestedPlaylistSummary> playlists) {
+public record SuggestedPlaylistsView(boolean enabled, DayOfWeek refreshDay,
+                                     List<SuggestedPlaylistSummary> playlists) {
 
     /** @param editionDate {@code YYYY-MM-DD}; the client turns it into "Updated Monday". */
     public record SuggestedPlaylistSummary(String category, String title, String editionDate, int trackCount) {
@@ -20,10 +25,11 @@ public record SuggestedPlaylistsView(boolean enabled, List<SuggestedPlaylistSumm
     }
 
     static SuggestedPlaylistsView off() {
-        return new SuggestedPlaylistsView(false, List.of());
+        return new SuggestedPlaylistsView(false, null, List.of());
     }
 
-    static SuggestedPlaylistsView of(List<CuratorEditionSummary> editions) {
-        return new SuggestedPlaylistsView(true, editions.stream().map(SuggestedPlaylistSummary::from).toList());
+    static SuggestedPlaylistsView of(DayOfWeek refreshDay, List<CuratorEditionSummary> editions) {
+        return new SuggestedPlaylistsView(true, refreshDay,
+                editions.stream().map(SuggestedPlaylistSummary::from).toList());
     }
 }
