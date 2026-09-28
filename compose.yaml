@@ -30,6 +30,35 @@ services:
       - "${YTMUSIC_ADAPTER_PORT:-8000}:8000"
     # healthcheck is inherited from the image's own HEALTHCHECK (see ../ytmusic-adapter/Dockerfile)
 
+  # Builds the weekly "suggested playlists" editions. naviseerr triggers it once a week and polls the
+  # result (see application.yaml `curator:`). Same relative-build rule as the adapter above. Opt-in:
+  # start it with `docker compose --profile curator up -d` so an install without a curator is not asked
+  # for a token. The token is REQUIRED once you do: the curator refuses to start (and says why in its
+  # logs) when CURATOR_TOKEN is empty, and the same value must be in naviseerr's environment
+  # (CURATOR_TOKEN in .env covers both).
+  playlist-curator:
+    profiles: ["curator"]
+    build: ../playlist-curator
+    container_name: naviseerr-playlist-curator
+    restart: unless-stopped
+    environment:
+      CURATOR_TOKEN: ${CURATOR_TOKEN:-}
+    ports:
+      - "${CURATOR_PORT:-8010}:8010"
+    # The curator image keeps categories.yaml and its state folders (output/, history/, runs/) under
+    # /app. One named volume per state folder -- not one at /app, which would hide categories.yaml --
+    # so editions and run history survive a container rebuild.
+    volumes:
+      - naviseerr-curator-output:/app/output
+      - naviseerr-curator-history:/app/history
+      - naviseerr-curator-runs:/app/runs
+
 volumes:
   naviseerr-postgres-data:
     name: naviseerr-postgres-data
+  naviseerr-curator-output:
+    name: naviseerr-curator-output
+  naviseerr-curator-history:
+    name: naviseerr-curator-history
+  naviseerr-curator-runs:
+    name: naviseerr-curator-runs

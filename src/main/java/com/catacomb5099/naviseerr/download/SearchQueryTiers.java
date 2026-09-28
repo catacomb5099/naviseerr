@@ -256,6 +256,12 @@ public final class SearchQueryTiers {
                 segments.set(i, uncredited);
             }
         }
+        for (int i = 0; i < segments.size() - 1; i++) {
+            String uncredited = CREDIT.matcher(segments.get(i)).replaceFirst("");
+            if (!uncredited.isBlank()) {
+                segments.set(i, uncredited);
+            }
+        }
         String artist = collapse(CHANNEL_SUFFIX.matcher(segments.getLast()).replaceFirst(""));
         if (artist.isEmpty()) {
             artist = segments.getLast();
