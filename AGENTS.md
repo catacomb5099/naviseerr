@@ -118,6 +118,8 @@ Current endpoints:
 - `GET /downloads?ids=a,b,c` — the same shape for specific ids, ignoring both the terminal filter and the retention window (max 100 ids). Lets a client reconcile cards it held across a restart; absent ids are omitted, not 404'd
 - `GET /downloads/all?pageSize=&pageNumber=` — the same shape, paginated over every download ever, newest first; the history table
 - `GET /downloads/{id}` — one download as `{download, songs[]}`: the feed card plus every song in track order as `{taskId, youtubeId, position, title, artists, imageUrl, durationSeconds, stage, progressPercent, failureCode, stageEnteredAt, updatedAt, finishedAt, candidateCount, candidateIndex, retryIndex, slskdUsername, slskdFilename, lastError}`. 404 for an unknown id; `songs` is empty, not absent, for a download not yet admitted
+- `GET /suggested-playlists` — the playlist curator's latest edition per category as `{enabled, playlists[{category, title, editionDate, trackCount}]}`; `enabled` is false (and the list empty) on an install with no curator configured, so the client can hide the section. Read through to the curator's `GET /v1/editions` on every call; curator down is 502
+- `GET /suggested-playlists/{category}` — one edition as `{category, title, filters, editionDate, trackCount, tracks[{id, name, artists, album, albumYear, popularity, tier, reason, iconURL, position}]}`, field names as on the search contract so the client's song rows work unchanged. `tier`/`reason` are the curator's explanation of each pick; `iconURL` is YouTube's predictable thumbnail (the curator stores no artwork). 404 when the curator has no edition for the category; 503 when no curator is configured; 502 when it is unreachable. See `docs/decisions/suggested-playlists-api-28-09-2026.md`
 
 ## Deeper Context (docs/architecture)
 
@@ -189,9 +191,11 @@ The current authoritative design lives in `docs/superpowers/specs/2026-08-13-dur
 `com.catacomb5099.naviseerr.curator` is the only cron job in the project. Once a week it triggers the
 separate playlist-curator service (`POST /v1/runs`), polls the run until it finishes or a 30-minute budget
 runs out, and logs the outcome per category. It is off unless `CURATOR_URL` and `CURATOR_TOKEN` are both
-set, touches no table and adds no endpoint. The outbound client follows the `YtMusicService` pattern
-(timeout, typed error, retry of transient failures only). See
-`docs/decisions/curator-weekly-trigger-27-09-2026.md`.
+set and touches no table. The outbound client (`CuratorClient`) follows the `YtMusicService` pattern
+(timeout, typed error, retry of transient failures only) and also reads the curator's editions for
+`SuggestedPlaylistController` (`GET /suggested-playlists[/{category}]`), which is how the client shows them.
+See `docs/decisions/curator-weekly-trigger-27-09-2026.md` and
+`docs/decisions/suggested-playlists-api-28-09-2026.md`.
 
 ## Domain Model Direction
 
