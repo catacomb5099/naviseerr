@@ -6,6 +6,8 @@ import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicSearchType;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
+import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicDetailResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -14,6 +16,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -59,10 +63,24 @@ class ArtistControllerTest {
         return playlists.stream().map(Playlist::getId).toList();
     }
 
+    /** A playlist's track list as the adapter answers it: one song per given artist name. */
+    private static YoutubeCollectionInfo tracksBy(String id, String... artists) {
+        return new YoutubeCollectionInfo(id, Arrays.stream(artists)
+                .map(artist -> new YoutubeSongInfo("v-" + artist, List.of(artist), "Song by " + artist, null, null))
+                .toList(), null, "Playlist " + id, List.of("YouTube Music"), null);
+    }
+
+    /** Every playlist opened has a track by {@code artist}, so the track-list check keeps them all. */
+    private void everyTrackListNames(String artist) {
+        when(ytMusicService.getPlaylistInfo(anyString()))
+                .thenAnswer(call -> Mono.just(tracksBy(call.getArgument(0), "Someone Else", artist)));
+    }
+
     @Test
     void realAdapterShape_mapsOntoTheSearchDtos_withTheContractsKeyNames() {
         when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
         when(ytMusicService.getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20)).thenReturn(Mono.just(playlists(12)));
+        everyTrackListNames("Pixies");
 
         client.get().uri("/artists/{id}", PIXIES).exchange()
                 .expectStatus().isOk()
@@ -122,6 +140,7 @@ class ArtistControllerTest {
                         playlist("keep2", "Indie Sing-Alongs"),
                         playlist("related2", "presenting frank black"),
                         playlist("keep3", "College Rock Classics")))));
+        everyTrackListNames("Pixies");
 
         client.get().uri("/artists/{id}", PIXIES).exchange()
                 .expectStatus().isOk()
@@ -130,16 +149,21 @@ class ArtistControllerTest {
                 .jsonPath("$.playlists[0].id").isEqualTo("keep1")
                 .jsonPath("$.playlists[1].id").isEqualTo("keep2")
                 .jsonPath("$.playlists[2].id").isEqualTo("keep3");
+
+        // the title filter runs first, so a "Presenting Pixies" never costs an adapter call
+        verify(ytMusicService, never()).getPlaylistInfo("own");
+        verify(ytMusicService, never()).getPlaylistInfo("related");
     }
 
     @Test
-    void theShelfCapsAtTen_afterFiltering_notBefore() {
+    void theShelfCapsAtTen_afterFiltering_andOnlyTheFirstTwelveCandidatesAreOpened() {
         when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
         List<Playlist> twenty = new java.util.ArrayList<>();
         IntStream.range(0, 5).forEach(i -> twenty.add(playlist("own" + i, "Pixies Mix " + i)));
         IntStream.range(0, 15).forEach(i -> twenty.add(playlist("keep" + i, "Mixtape " + i)));
         when(ytMusicService.getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20))
                 .thenReturn(Mono.just(new SearchResponse(List.of(), List.of(), List.of(), twenty)));
+        everyTrackListNames("Pixies");
 
         client.get().uri("/artists/{id}", PIXIES).exchange()
                 .expectStatus().isOk()
@@ -147,6 +171,57 @@ class ArtistControllerTest {
                 .jsonPath("$.playlists.length()").isEqualTo(10)
                 .jsonPath("$.playlists[0].id").isEqualTo("keep0")
                 .jsonPath("$.playlists[9].id").isEqualTo("keep9");
+
+        verify(ytMusicService, times(12)).getPlaylistInfo(anyString());
+        verify(ytMusicService).getPlaylistInfo("keep11");
+        verify(ytMusicService, never()).getPlaylistInfo("keep12");
+    }
+
+    /**
+     * The real answer for Oasis: "Summer House" (131 tracks, no Oasis) and "'70s Lite Hits" pass the
+     * title filter but the artist is not in them; "Supersonic Sing-Along" really is. The match is the
+     * whole folded name — "Pixies Tribute Band" is not Pixies, but "pixies" and "PIXIES" are — and
+     * the slow first lookup must not let a faster one overtake it.
+     */
+    @Test
+    void aCandidateWhoseTrackListNeverNamesTheArtist_isDropped_theRestKeepYouTubesOrder() {
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
+        when(ytMusicService.getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20)).thenReturn(Mono.just(
+                new SearchResponse(List.of(), List.of(), List.of(), List.of(
+                        playlist("summer", "Summer House"),
+                        playlist("sing", "Supersonic Sing-Along"),
+                        playlist("lite", "'70s Lite Hits"),
+                        playlist("indie", "Indie Mix")))));
+        when(ytMusicService.getPlaylistInfo("summer")).thenReturn(Mono.just(tracksBy("summer", "Kygo", "Pixies Tribute Band")));
+        when(ytMusicService.getPlaylistInfo("sing")).thenReturn(Mono.just(tracksBy("sing", "Blur", "pixies")).delayElement(Duration.ofMillis(200)));
+        when(ytMusicService.getPlaylistInfo("lite")).thenReturn(Mono.just(tracksBy("lite", "ABBA", "Carpenters")));
+        when(ytMusicService.getPlaylistInfo("indie")).thenReturn(Mono.just(tracksBy("indie", "PIXIES")));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.playlists.length()").isEqualTo(2)
+                .jsonPath("$.playlists[0].id").isEqualTo("sing")
+                .jsonPath("$.playlists[1].id").isEqualTo("indie");
+    }
+
+    @Test
+    void aCandidateThatFailsToOpen_isDropped_theOthersSurvive() {
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
+        when(ytMusicService.getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20)).thenReturn(Mono.just(
+                new SearchResponse(List.of(), List.of(), List.of(), List.of(
+                        playlist("a", "Mixtape A"),
+                        playlist("gone", "Mixtape Gone"),
+                        playlist("c", "Mixtape C")))));
+        everyTrackListNames("Pixies");
+        when(ytMusicService.getPlaylistInfo("gone")).thenReturn(Mono.error(new YtMusicBadRequestException("No playlist found")));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.playlists.length()").isEqualTo(2)
+                .jsonPath("$.playlists[0].id").isEqualTo("a")
+                .jsonPath("$.playlists[1].id").isEqualTo("c");
     }
 
     @Test

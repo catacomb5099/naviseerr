@@ -243,16 +243,22 @@ And by [ArtistController.java](../../src/main/java/com/catacomb5099/naviseerr/se
 - `GET /artists/{channelId}` - one artist page as an
   [ArtistView](../../src/main/java/com/catacomb5099/naviseerr/services/ArtistView.java): header
   (name, picture, description, subscribers) plus top songs, albums, singles, playlists and similar
-  artists, each capped at 10 and expressed in the search DTOs so the client reuses its cards. Two
-  adapter calls in sequence: `getArtistInfo`, then a `featured_playlists` search for the artist's
+  artists, each capped at 10 and expressed in the search DTOs so the client reuses its cards. Up to
+  fourteen adapter calls: `getArtistInfo`, then a `featured_playlists` search for the artist's
   *name* with `limit=20` (there is no "playlists featuring this artist" route; this is YouTube
-  Music's own editorial playlists its search links to the name). Playlists whose title contains the
-  artist's name or a related artist's name ("Presenting Oasis", "Presenting The Kooks") are dropped,
-  comparing lowercased letters and digits with accents stripped; the rest keep YouTube's order and
-  `ArtistView` caps them at 10. The search is best-effort - if it fails (including an adapter that
-  does not know the `featured_playlists` type yet) the page still loads with an empty `playlists`
-  shelf. Errors map exactly as `/collections/{id}`: the adapter's 404 (and the 400/422/500 folded
-  into the same exception) is 404, `YtMusicUnavailableException` is 502.
+  Music's own editorial playlists its search links to the name), then up to 12 `getPlaylistInfo`
+  lookups. Playlists whose title contains the artist's name or a related artist's name ("Presenting
+  Oasis", "Presenting The Kooks") are dropped, comparing lowercased letters and digits with accents
+  stripped; the first 12 survivors are then opened (four at a time, YouTube's order kept) and only
+  those whose track list credits the artist - whole folded name, so "Pixies Tribute Band" is not
+  Pixies - stay, because the search links a playlist to a name for reasons other than membership
+  (for Oasis: "Summer House", 131 tracks, no Oasis). The lookup reads the adapter's default
+  `/v1/playlists/{id}` page of 100 tracks, so an artist buried deeper in a very long playlist is
+  missed; a playlist that fails to open is dropped. `ArtistView` caps the result at 10. The whole
+  step is best-effort - if it fails (including an adapter that does not know the
+  `featured_playlists` type yet) the page still loads with an empty `playlists` shelf. Errors map
+  exactly as `/collections/{id}`: the adapter's 404 (and the 400/422/500 folded into the same
+  exception) is 404, `YtMusicUnavailableException` is 502.
 
 `Playlist.id` on the search side is the adapter's bare `playlistId` (`PL...`, or `RDCLAK5uy_...` for a
 featured playlist; `/v1/playlists/{id}` accepts both), falling back to the

@@ -27,8 +27,10 @@ import java.util.Objects;
  * @param albums         {@code artists} is {@code [this artist's name]}: the shelf lists only the
  *                       artist's own releases and the adapter gives no per-album artists.
  * @param playlists      YouTube Music's own featured playlists that its search links to this artist,
- *                       minus those titled after the artist or a related artist; YouTube Music exposes
- *                       no exact "featured on" list, so this is the closest thing there is.
+ *                       minus those titled after the artist or a related artist, kept only when the
+ *                       playlist's track list (its first 100 tracks) credits the artist by name.
+ *                       YouTube Music exposes no exact "featured on" list, so this is the closest
+ *                       thing there is.
  * @param similarArtists {@code iconUrl} is the related artist's thumbnail from the same adapter answer
  *                       (no extra call); {@code ""} when the adapter sends none.
  */
