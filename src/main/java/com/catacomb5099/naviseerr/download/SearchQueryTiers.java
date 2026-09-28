@@ -31,6 +31,13 @@ import java.util.regex.Pattern;
  * After those come the same wordings with a shortened title, so the search stays general and the
  * picker does the discriminating; see {@link #of}.
  *
+ * <p><b>The search is version-blind, the picker is version-aware.</b> No wording ever carries a
+ * version word -- "(Live)", "- Remastered -", "Live at Wembley", "Radio Edit", "'95 version" -- whether
+ * it sat in brackets, in its own dash segment or inline at the end of the title. Soulseek matches every
+ * word, so a version word in the search only ever loses files. {@link #pickerName} keeps every one of
+ * those qualifiers, in brackets, because the picker grades each file by them: the requested version
+ * first, any other version as a fallback (see {@code TrackMatchingService.grade}).
+ *
  * <p>Pure and re-derived on every call, never stored: {@code download_tasks} keeps only the index of
  * the tier in use (see {@link DownloadTask#searchTier}), so these rules can change without a data
  * migration. A fallback identical to an earlier query is dropped.
@@ -85,6 +92,20 @@ public final class SearchQueryTiers {
             Pattern.CASE_INSENSITIVE);
 
     /**
+     * A version phrase written inline at the end of a title, no punctuation: "Wonderwall Live at
+     * Wembley", "Wonderwall Remastered 2009", "Kiss Me Radio Edit", "Song '95 Version". Peeled off the
+     * end repeatedly ("Wonderwall Acoustic Live"). A title that is nothing but such a word ("Live")
+     * is left alone.
+     */
+    private static final Pattern INLINE_VERSION = Pattern.compile(
+            "\\s+(?:live\\s+(?:at|from|in)\\s+.+"
+                    + "|(?:'?\\d{2,4}\\s+)?"
+                    + "(?:(?:radio|club|single|album|extended|original|dub|vocal|acoustic|live|stripped|piano|slowed|full)\\s+)?"
+                    + "(?:remaster(?:ed)?|version|remix|rmx|mix|edit|acoustic|unplugged|stripped|demo|instrumental"
+                    + "|karaoke|session|live)(?:\\s+'?\\d{2,4})?)$",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
      * YouTube channel dressing on an artist name: "BlondieVEVO", "Blondie - Topic", "Oasis Official".
      * The lab found "Maria - BlondieVEVO" returning 8,092 files for the title and none for Blondie.
      */
@@ -127,7 +148,8 @@ public final class SearchQueryTiers {
      */
     public static List<String> of(String songName) {
         String raw = songName == null ? "" : songName;
-        List<String> parts = parts(raw);
+        Cleaned cleaned = clean(raw);
+        List<String> parts = cleaned.parts();
         if (parts.isEmpty()) {
             return List.of(raw);
         }
@@ -136,7 +158,7 @@ public final class SearchQueryTiers {
         List<String> leading = parts.subList(0, parts.size() - 1);
         if (leading.isEmpty()) {
             tiers.add(artist);
-        } else if (isArtistTitleChannel(parts)) {
+        } else if (cleaned.artistTitleChannel()) {
             // The channel wording found nothing in all 41 tries of the 27-09-2026 playlists.
             String artistTitle = String.join(" ", leading);
             String title = String.join(" ", leading.subList(1, leading.size()));
@@ -147,8 +169,6 @@ public final class SearchQueryTiers {
             tiers.add(shortTitle);
             tiers.add(artistTitle + " - " + artist);
         } else {
-            // ponytail: what is left is joined, never picked from. Picking one segment turned
-            // "Wonderwall - Remastered - Oasis" into "Remastered - Oasis", a different Oasis song.
             String title = String.join(" ", leading);
             String shortTitle = shortTitle(leading.getFirst());
             tiers.add(title + " - " + artist);
@@ -175,40 +195,41 @@ public final class SearchQueryTiers {
      */
     public static String pickerName(String songName) {
         String raw = songName == null ? "" : songName;
-        List<String> parts = parts(raw);
+        Cleaned cleaned = clean(raw);
+        List<String> parts = cleaned.parts();
         if (parts.isEmpty()) {
             return raw;
         }
-        List<String> qualifiers = new ArrayList<>();
-        withoutGroups(raw.replace("\"", ""), qualifiers);
+        String qualifiers = String.join(" ", cleaned.qualifiers());
         String artist = parts.getLast();
-        List<String> leading = new ArrayList<>(parts.subList(0, parts.size() - 1));
+        List<String> leading = parts.subList(0, parts.size() - 1);
         if (leading.isEmpty()) {
-            return String.join(" ", artist, String.join(" ", qualifiers)).strip();
+            return String.join(" ", artist, qualifiers).strip();
         }
-        if (!isArtistTitleChannel(parts)) {
-            qualifiers.addAll(0, leading.subList(1, leading.size()).stream().map(q -> "(" + q + ")").toList());
-            leading = leading.subList(0, 1);
-        }
-        String title = String.join(" ", String.join(" - ", leading), String.join(" ", qualifiers)).strip();
-        return title + " - " + artist;
-    }
-
-    /** True for "Artist - Title - channel": three or more parts, none of the middle ones a version. */
-    private static boolean isArtistTitleChannel(List<String> parts) {
-        return parts.size() >= 3
-                && parts.subList(1, parts.size() - 1).stream().noneMatch(p -> QUALIFIER.matcher(p).find());
+        return String.join(" ", String.join(" - ", leading), qualifiers).strip() + " - " + artist;
     }
 
     /**
-     * The name taken apart, last part the artist, with every bracket gone, straight quotes gone (they
-     * kill a Soulseek search outright), noise-only middle parts gone, a trailing "Lyrics" gone, a
-     * "by Artist" credit made the artist, a "ft. Guest" credit gone from the title, the artist's
-     * channel suffix gone and the artist's echo removed from the title. One part when there is no artist; empty when nothing survives.
+     * The name taken apart. {@code parts}: last the artist, the rest the title (or artist and title
+     * for the channel shape), with no version word anywhere -- what the searches are built from.
+     * {@code qualifiers}: every version or other qualifier that was taken out, each as "(text)", in
+     * the order found -- what the picker adds back. {@code artistTitleChannel}: how a three-part name
+     * was read.
      */
-    static List<String> parts(String name) {
+    private record Cleaned(List<String> parts, List<String> qualifiers, boolean artistTitleChannel) {}
+
+    /**
+     * Every bracket gone (kept as qualifiers when more than platform noise), straight quotes gone
+     * (they kill a Soulseek search outright), noise-only middle parts gone, a trailing "Lyrics" gone,
+     * a "by Artist" credit made the artist, a "ft. Guest" credit gone from the title, the artist's
+     * channel suffix gone, the artist's echo removed from the title, and every version phrase moved
+     * out of the title into the qualifiers. One part when there is no artist; empty when nothing
+     * survives.
+     */
+    private static Cleaned clean(String name) {
+        List<String> qualifiers = new ArrayList<>();
         String stripped = TOPIC_SUFFIX.matcher(name.replace("\"", "")).replaceFirst("");
-        stripped = withoutGroups(stripped, null);
+        stripped = withoutGroups(stripped, qualifiers);
 
         List<String> segments = new ArrayList<>(Arrays.stream(SEGMENT.split(stripped))
                 .map(SearchQueryTiers::collapse)
@@ -227,7 +248,7 @@ public final class SearchQueryTiers {
             }
         }
         if (segments.size() < 2) {
-            return segments;
+            return new Cleaned(withoutInlineVersions(segments, qualifiers), qualifiers, false);
         }
         for (int i = 0; i < segments.size() - 1; i++) {
             String uncredited = CREDIT.matcher(segments.get(i)).replaceFirst("");
@@ -248,8 +269,33 @@ public final class SearchQueryTiers {
         if (titles.isEmpty()) {
             titles.add(segments.getFirst());
         }
+        boolean artistTitleChannel = titles.size() >= 2
+                && titles.subList(1, titles.size()).stream().noneMatch(p -> QUALIFIER.matcher(p).find());
+        if (titles.size() >= 2 && !artistTitleChannel) {
+            // "Kiss Me - Radio Edit - Sixpence None The Richer": the middle names a version, so it is
+            // a qualifier for the picker and nothing for the search. Never picked from: picking one
+            // segment once turned "Wonderwall - Remastered - Oasis" into "Remastered - Oasis".
+            titles.subList(1, titles.size()).forEach(q -> qualifiers.add("(" + q + ")"));
+            titles = new ArrayList<>(titles.subList(0, 1));
+        }
+        titles = withoutInlineVersions(titles, qualifiers);
         titles.add(artist);
-        return titles;
+        return new Cleaned(titles, qualifiers, artistTitleChannel);
+    }
+
+    /** Peels "Live at Wembley", "Remastered 2009", "Radio Edit" off the end of each title part. */
+    private static List<String> withoutInlineVersions(List<String> titles, List<String> qualifiers) {
+        List<String> out = new ArrayList<>();
+        for (String title : titles) {
+            Matcher m = INLINE_VERSION.matcher(title);
+            while (m.find() && m.start() > 0) {
+                qualifiers.add("(" + title.substring(m.start()).strip() + ")");
+                title = title.substring(0, m.start()).strip();
+                m = INLINE_VERSION.matcher(title);
+            }
+            out.add(title);
+        }
+        return out;
     }
 
     /**

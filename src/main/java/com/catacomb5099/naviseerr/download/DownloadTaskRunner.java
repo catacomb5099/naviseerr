@@ -428,6 +428,13 @@ public class DownloadTaskRunner {
                 log.info("Song '{}' of download {} finished as {}{}", task.songName(),
                         task.downloadId(), terminal.status(),
                         terminal.failureCode() == null ? "" : " (" + terminal.failureCode() + ")");
+                if (terminal.status() == DownloadStatus.SUCCEEDED && task.candidates() != null
+                        && task.candidateIndex() < task.candidates().size()
+                        && "OTHER_VERSION".equals(task.currentCandidate().grade())) {
+                    log.info("Song '{}' of download {} was fetched as another version of the song ('{}') "
+                            + "because nobody shared the requested one", task.songName(), task.downloadId(),
+                            task.currentCandidate().filename());
+                }
                 // Only this SONG. The download's own status is settled by concludeDownloads() at the
                 // end of the pass, once every one of its songs is terminal.
                 yield downloadService.finishTask(task.taskId(), terminal.status(),

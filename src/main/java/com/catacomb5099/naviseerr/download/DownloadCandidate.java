@@ -1,9 +1,8 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
-import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
+import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor.Pick;
 
-import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -18,18 +17,25 @@ public record DownloadCandidate(
         Integer bitRate,
         long size,
         long code,
-        Boolean isLocked) {
+        Boolean isLocked,
+        /**
+         * {@code TrackMatchingService.Match} name: "EXACT" or "OTHER_VERSION", so the database shows
+         * when a song was fetched as a live take or remix because the requested version was not shared.
+         * Null on rows written before 28-09-2026.
+         */
+        String grade) {
 
-    public static DownloadCandidate from(Map.Entry<SearchResponseItem, SearchFile> entry) {
-        SearchFile file = entry.getValue();
+    public static DownloadCandidate from(Pick pick) {
+        SearchFile file = pick.file();
         return new DownloadCandidate(
-                entry.getKey().getUsername(),
+                pick.peer().getUsername(),
                 file.getFilename(),
                 file.getExtension(),
                 file.getBitRate().orElse(null),
                 file.getSize(),
                 file.getCode(),
-                file.getIsLocked());
+                file.getIsLocked(),
+                pick.grade().name());
     }
 
     public SearchFile toSearchFile() {

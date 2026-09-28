@@ -67,12 +67,37 @@ class SearchQueryTiersTest {
     }
 
     @Test
-    void extraSegments_stayInTheTitle_neverPickedFrom_thenTheQualifierIsDropped() {
-        // Picking one segment searched "Remastered - Oasis" and downloaded a different Oasis song.
-        // The qualifier-free wordings come after, so the picker (which still sees "(Remastered)")
-        // gets to choose among plain files when the qualifier wording finds nothing.
-        assertEquals(List.of("Wonderwall Remastered - Oasis", "Wonderwall Remastered", "Wonderwall - Oasis", "Wonderwall"),
-                SearchQueryTiers.of("Wonderwall - Remastered - Oasis"));
+    void aVersionInItsOwnSegment_isNotSearched_andNeverPickedFrom() {
+        // Picking one segment once searched "Remastered - Oasis" and downloaded a different Oasis song.
+        // Now the segment is a qualifier for the picker and nothing for the search.
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"), SearchQueryTiers.of("Wonderwall - Remastered - Oasis"));
+        assertEquals("Wonderwall (Remastered) - Oasis", SearchQueryTiers.pickerName("Wonderwall - Remastered - Oasis"));
+    }
+
+    // ---- the search is version-blind, the picker is version-aware ----
+
+    @Test
+    void versionWords_neverReachTheSearch_inAnyOfTheThreeShapes() {
+        // in brackets
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"), SearchQueryTiers.of("Wonderwall (Live) - Oasis"));
+        assertEquals("Wonderwall (Live) - Oasis", SearchQueryTiers.pickerName("Wonderwall (Live) - Oasis"));
+        // in a dash segment
+        assertEquals(List.of("Kiss Me - Sixpence None The Richer", "Kiss Me"),
+                SearchQueryTiers.of("Kiss Me - Radio Edit - Sixpence None The Richer"));
+        // inline, no punctuation
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"), SearchQueryTiers.of("Wonderwall Live at Wembley - Oasis"));
+        assertEquals("Wonderwall (Live at Wembley) - Oasis", SearchQueryTiers.pickerName("Wonderwall Live at Wembley - Oasis"));
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"), SearchQueryTiers.of("Wonderwall Remastered 2009 - Oasis"));
+        assertEquals(List.of("Bloodstream - Alyssa Grace", "Bloodstream"), SearchQueryTiers.of("Bloodstream Acoustic Version - Alyssa Grace"));
+        assertEquals("Bloodstream (Acoustic Version) - Alyssa Grace", SearchQueryTiers.pickerName("Bloodstream Acoustic Version - Alyssa Grace"));
+        assertEquals(List.of("Song - Artist", "Song"), SearchQueryTiers.of("Song '95 Version - Artist"));
+        // stripping collapses the wordings into one deduplicated list
+        assertEquals(List.of("Wonderwall - Oasis", "Wonderwall"),
+                SearchQueryTiers.of("Wonderwall - Remastered (Live at Wembley) [Official Video] - Oasis"));
+        assertEquals("Wonderwall (Live at Wembley) (Remastered) - Oasis",
+                SearchQueryTiers.pickerName("Wonderwall - Remastered (Live at Wembley) [Official Video] - Oasis"));
+        // a title that is nothing but a version word keeps it
+        assertEquals(List.of("Live - Artist", "Live"), SearchQueryTiers.of("Live - Artist"));
     }
 
     @Test
@@ -112,9 +137,8 @@ class SearchQueryTiersTest {
     }
 
     @Test
-    void aVersionInTheMiddle_stillReadsAsTitleQualifierArtist_thenTheQualifierGoes() {
-        assertEquals(List.of("Kiss Me Radio Edit - Sixpence None The Richer", "Kiss Me Radio Edit",
-                        "Kiss Me - Sixpence None The Richer", "Kiss Me"),
+    void aVersionInTheMiddle_stillReadsAsTitleQualifierArtist_notAsArtistTitleChannel() {
+        assertEquals(List.of("Kiss Me - Sixpence None The Richer", "Kiss Me"),
                 SearchQueryTiers.of("Kiss Me - Radio Edit - Sixpence None The Richer"));
     }
 

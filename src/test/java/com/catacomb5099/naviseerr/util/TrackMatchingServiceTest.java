@@ -1,8 +1,10 @@
 package com.catacomb5099.naviseerr.util;
 
 import com.catacomb5099.naviseerr.download.SearchQueryTiers;
+import com.catacomb5099.naviseerr.util.TrackMatchingService.Match;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -90,5 +92,39 @@ class TrackMatchingServiceTest {
         assertFalse(matches("Wonderwall (Official Video) - Oasis", "Oasis - Wonderwall (Live).mp3"));
         assertTrue(matches("Kiss Me - Radio Edit - Sixpence None The Richer", "Sixpence None The Richer - Kiss Me (Radio Edit).mp3"));
         assertFalse(matches("Kiss Me - Radio Edit - Sixpence None The Richer", "Sixpence None The Richer - Breathe Your Name (Radio Edit).mp3"));
+    }
+
+    // ---- graded verdict: any version of the song beats no song ----
+
+    private Match grade(String youtubeName, String file) {
+        return matcher.grade(SearchQueryTiers.pickerName(youtubeName), file);
+    }
+
+    @Test
+    void acousticRequested_onlyTheStudioTakeShared_isAnotherVersion_notNothing() {
+        assertEquals(Match.OTHER_VERSION, grade("Asleep Talking (Acoustic) - Magnus Ferrell", "Magnus Ferrell - Asleep Talking.mp3"));
+        assertEquals(Match.EXACT, grade("Asleep Talking (Acoustic) - Magnus Ferrell", "Magnus Ferrell - Asleep Talking (Acoustic).mp3"));
+        assertEquals(Match.OTHER_VERSION, grade("bloodstream (stripped) - Alyssa Grace", "Alyssa Grace - bloodstream.flac"));
+    }
+
+    @Test
+    void originalRequested_onlyALiveTakeShared_isAnotherVersion_notNothing() {
+        assertEquals(Match.OTHER_VERSION, grade("Wonderwall - Oasis", "Oasis/Familiar to Millions/12 - Wonderwall (Live).mp3"));
+        assertEquals(Match.OTHER_VERSION, grade("Wonderwall - Oasis", "Oasis - Wonderwall (Radio Remix).mp3"));
+        assertEquals(Match.EXACT, grade("Wonderwall - Oasis", "Oasis - Wonderwall.flac"));
+    }
+
+    @Test
+    void notTheSong_isNone_whateverTheVersion() {
+        assertEquals(Match.NONE, grade("Wonderwall - Oasis", "Oasis - Champagne Supernova (Live).mp3"));
+        assertEquals(Match.NONE, grade("Dai Dai - Shakira", "Shakira & Burna Boy - Dai Dai (Clean) 116.mp3"));
+        assertEquals(Match.NONE, grade("Californication - Red Hot Chili Peppers", "Red Hot Chili Peppers - Californication - 09 - Emit Remmus.flac"));
+    }
+
+    @Test
+    void remastered_isNeverAVersion_inEitherDirection() {
+        assertEquals(Match.EXACT, grade("Wonderwall - Oasis", "Oasis - Wonderwall (Remastered 2014).flac"));
+        assertEquals(Match.EXACT, grade("Wonderwall - Remastered - Oasis", "Oasis - Wonderwall.flac"));
+        assertEquals(Match.EXACT, grade("Wonderwall Remastered 2009 - Oasis", "Oasis - Wonderwall (Remastered).flac"));
     }
 }
