@@ -34,7 +34,8 @@ public record DownloadTask(
         String searchId,
         /**
          * Which tier of {@link SearchQueryTiers#of} this song is currently searching on; 0 is the
-         * bare "title - artist", 1 the title alone (the Soulseek server drops some artist names). Only the index is stored,
+         * title alone, 1 the bare "title - artist" (tried when the title alone found too few files
+         * the picker accepts, or the artist wording is needed because the title is common). Only the index is stored,
          * never the derived queries -- they are recomputed from {@link #songName} on every read, so
          * the cleaning rules can change without a data migration.
          */

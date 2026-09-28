@@ -27,9 +27,10 @@ public record DownloadCandidate(
         Integer queueLength,
         Integer uploadSpeed,
         /**
-         * {@code TrackMatchingService.Match} name: "EXACT" or "OTHER_VERSION", so the database shows
-         * when a song was fetched as a live take or remix because the requested version was not shared.
-         * Null on rows written before 28-09-2026.
+         * {@code TrackMatchingService.Match} name: "EXACT", "OTHER_VERSION" or "UNVERIFIED", so the
+         * database shows when a song was fetched as a live take or remix because the requested version
+         * was not shared, or from a file whose path never named the artist because nothing better was
+         * found. Null on rows written before 28-09-2026.
          */
         String grade) {
 

@@ -60,11 +60,19 @@ public class YtMusicService {
     }
 
     public Mono<SearchResponse> getResults(String query, YtMusicSearchType type) {
+        return getResults(query, type, searchResultLimit);
+    }
+
+    /**
+     * Same typed search with a caller-chosen page size, for the one caller that filters the answer
+     * down afterwards and so needs more than a page's worth to have anything left.
+     */
+    public Mono<SearchResponse> getResults(String query, YtMusicSearchType type, int limit) {
         return executeSearch(
                 uriBuilder -> uriBuilder
                         .path(SEARCH_PATH_PREFIX + type.getPathSegment())
                         .queryParam(QUERY_PARAM, query)
-                        .queryParam(LIMIT_PARAM, searchResultLimit)
+                        .queryParam(LIMIT_PARAM, limit)
                         .build(),
                 type.getPathSegment(),
                 query);
@@ -102,9 +110,11 @@ public class YtMusicService {
                         // getSong()'s `author` is one string, not a list -- flattened here so callers
                         // never have to know which of the two provider shapes a song came from.
                         song.getAuthor() == null ? List.of() : List.of(song.getAuthor()),
+                        song.getAuthor() == null ? List.of()
+                                : List.of(song.getChannelId() == null ? "" : song.getChannelId()),
                         song.getTitle(),
                         song.getThumbnailUrl() == null ? fallbackThumbnail(id) : song.getThumbnailUrl(),
-                        song.getLengthSeconds()));
+                        song.getLengthSeconds(), null));
     }
 
     /**
@@ -175,30 +185,38 @@ public class YtMusicService {
                                                    String requestedId) {
         String id = collection.getBrowseId() != null ? collection.getBrowseId()
                 : collection.getId() != null ? collection.getId() : requestedId;
-        List<String> authors = collection.getArtists() != null
-                ? names(collection.getArtists())
-                : collection.getAuthor() == null ? List.of() : names(List.of(collection.getAuthor()));
+        List<YtMusicSearchResponse.ArtistRef> authors = collection.getArtists() != null
+                ? collection.getArtists()
+                : collection.getAuthor() == null ? List.of() : List.of(collection.getAuthor());
         boolean isAlbum = collection.getBrowseId() != null;
         List<YoutubeSongInfo> songs = collection.getTracks() == null ? List.of()
                 : collection.getTracks().stream()
                         .filter(track -> !Boolean.FALSE.equals(track.getIsAvailable()))
                         .map(track -> new YoutubeSongInfo(track.getVideoId(),
-                                names(track.getArtists()), track.getTitle(),
+                                names(track.getArtists()), ids(track.getArtists()), track.getTitle(),
                                 isAlbum && collection.getThumbnailUrl() != null
                                         ? collection.getThumbnailUrl()
                                         : track.getVideoId() == null ? null
                                         : fallbackThumbnail(track.getVideoId()),
-                                track.getDurationSeconds()))
+                                track.getDurationSeconds(), track.getViews()))
                         .toList();
         return new YoutubeCollectionInfo(id, songs,
                 collection.getYear() == null ? null : String.valueOf(collection.getYear()),
-                collection.getTitle(), authors, collection.getThumbnailUrl());
+                collection.getTitle(), names(authors), ids(authors), collection.getThumbnailUrl());
     }
 
     private static List<String> names(List<YtMusicSearchResponse.ArtistRef> artists) {
         return artists == null ? List.of() : artists.stream()
                 .map(YtMusicSearchResponse.ArtistRef::getName)
                 .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    /** Same filter as {@link #names}, so the two lists line up entry for entry; "" where YouTube gave no channel. */
+    private static List<String> ids(List<YtMusicSearchResponse.ArtistRef> artists) {
+        return artists == null ? List.of() : artists.stream()
+                .filter(artist -> artist.getName() != null)
+                .map(artist -> artist.getChannelId() == null ? "" : artist.getChannelId())
                 .toList();
     }
 
@@ -256,24 +274,34 @@ public class YtMusicService {
         int statusCode = response.statusCode().value();
         return response.bodyToMono(JsonNode.class)
                 .defaultIfEmpty(JsonNodeFactory.instance.objectNode())
-                .<YtMusicException>map(body -> buildException(statusCode, extractMessage(body, statusCode)))
+                .<YtMusicException>map(body -> buildException(statusCode, body))
                 .doOnNext(ex -> log.warn("ytmusic-adapter returned {}: {}", statusCode, ex.getMessage()))
                 .onErrorReturn(new YtMusicUnavailableException(
                         "ytmusic-adapter returned " + statusCode + " with an unreadable error body"));
     }
 
-    private YtMusicException buildException(int statusCode, String message) {
+    private YtMusicException buildException(int statusCode, JsonNode body) {
+        String message = extractMessage(body, statusCode);
         // 400/422: we sent a bad request. 500: the adapter's own internal_auth_misuse case --
         // an adapter bug, not a transient failure. Neither is worth retrying.
         if (statusCode == 400 || statusCode == 422 || statusCode == 500) {
             return new YtMusicBadRequestException(message);
         }
-        // 404: the adapter looked and YouTube Music has no such video/album/playlist. Non-retryable
-        // in the same sense as a 400 -- retrying cannot make the id exist, and the metadata calls
-        // above lean on that distinction to tell "fail this download now" from "try again next
-        // pass". Without it, one mistyped id is re-requested every loop interval, forever.
         if (statusCode == 404) {
-            return new YtMusicBadRequestException(message);
+            // The adapter's own envelope: it looked, and YouTube Music has no such video/album/
+            // playlist. Non-retryable in the same sense as a 400 -- retrying cannot make the id
+            // exist, and the metadata calls above lean on that distinction to tell "fail this
+            // download now" from "try again next pass". Without it, one mistyped id is
+            // re-requested every loop interval, forever.
+            if (body.hasNonNull("error")) {
+                return new YtMusicBadRequestException(message);
+            }
+            // No envelope means the adapter's handler never ran: FastAPI answered
+            // {"detail":"Not Found"} because the route does not exist in the image we are talking
+            // to. That is our deployment being stale, not the id being wrong -- on 28-09-2026 an
+            // old image made every song "unknown" in the client until someone read the raw body.
+            return new YtMusicUnavailableException(
+                    "ytmusic-adapter has no route for this request; is the sidecar image up to date?");
         }
         // 429/502/504 and any other unlisted status: provider failed or is unreachable.
         return new YtMusicUnavailableException(message);

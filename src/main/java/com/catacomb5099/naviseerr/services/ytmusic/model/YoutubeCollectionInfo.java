@@ -13,10 +13,20 @@ import java.util.List;
  *
  * @param year     null for a playlist — the adapter's {@code PlaylistDetail} has no year, only albums
  *                 do. Carried because it costs nothing and identifies a specific pressing.
+ * @param authorIds never null; the channel id behind each {@code authorNames} entry, {@code ""}
+ *                 where unknown, index-aligned like {@link YoutubeSongInfo#authorIds()}. For a
+ *                 playlist this is its author's channel, which need not be an artist at all.
  * @param imageUrl nullable; the collection's own artwork.
  * @param songs    never null; may be empty, which the caller must treat as "nothing to download"
  *                 rather than as a failure.
  */
 public record YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
-                                    String name, List<String> authorNames, String imageUrl) {
+                                    String name, List<String> authorNames, List<String> authorIds,
+                                    String imageUrl) {
+
+    /** Names without ids, for a caller that has none to give. */
+    public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
+                                 String name, List<String> authorNames, String imageUrl) {
+        this(id, songs, year, name, authorNames, List.of(), imageUrl);
+    }
 }

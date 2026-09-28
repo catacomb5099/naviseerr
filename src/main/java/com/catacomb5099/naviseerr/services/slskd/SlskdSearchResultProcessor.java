@@ -49,8 +49,17 @@ public class SlskdSearchResultProcessor {
      * downloaded once every exact option has failed), then within each grade the length most files share,
      * then who can serve fastest. Capped at {@code maxFilesPerDownload}: other versions take whatever
      * places the exact ones leave, which is all of them when none is exact and none when ten are.
+     *
+     * <p>A file whose path does not name the artist, found by a wording that did not name it either
+     * ({@code UNVERIFIED}, see {@link TrackMatchingService#grade(String, String, String)}), is the song by
+     * name only. It is kept as the last resort -- a YouTube "artist" that is really a channel name appears
+     * in no path at all, and a song shared only under a collaborator's folder has no other copy -- but never
+     * beside a file that does name the artist.
+     *
+     * @param query   the cleaned song name the files are judged against ({@code SearchQueryTiers.pickerName})
+     * @param wording what was actually searched
      */
-    public Mono<List<Pick>> selectBestFiles(SearchState state, String query) {
+    public Mono<List<Pick>> selectBestFiles(SearchState state, String query, String wording) {
         return Mono.fromCallable(() -> {
             // Null rather than empty when the caller handed us a search fetched without
             // includeResponses. Degrade to "no candidates" instead of an NPE, so the failure reads as
@@ -60,9 +69,13 @@ public class SlskdSearchResultProcessor {
             List<Pick> candidates = responses.stream()
                     .flatMap(item -> item.getFiles().stream()
                             .filter(this::isFlacAndHighBitrate)
-                            .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename()))))
+                            .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename(), wording))))
                     .filter(pick -> pick.grade() != TrackMatchingService.Match.NONE)
                     .toList();
+            long unverified = candidates.stream().filter(pick -> pick.grade() == TrackMatchingService.Match.UNVERIFIED).count();
+            if (unverified < candidates.size()) {
+                candidates = candidates.stream().filter(pick -> pick.grade() != TrackMatchingService.Match.UNVERIFIED).toList();
+            }
 
             // Most candidates share the duration of the mainstream release; remixes, live takes and
             // album re-records are the odd lengths out. Prefer the most shared length, then fall back
@@ -93,8 +106,10 @@ public class SlskdSearchResultProcessor {
                     .toList();
 
             long exact = candidates.stream().filter(pick -> pick.grade() == TrackMatchingService.Match.EXACT).count();
-            log.info("Completed candidate selection for query='{}' - {} response(s), {} total files, {} relevant candidates ({} in the requested version, {} other versions); limiting to {} by maxFilesPerDownload",
-                    query, responses.size(), state.getFileCount(), candidates.size(), exact, candidates.size() - exact, maxFilesPerDownload);
+            log.info("Completed candidate selection for query='{}' (searched '{}') - {} response(s), {} total files, {} relevant candidates ({} in the requested version, {} other versions, {} unverified artist{}); limiting to {} by maxFilesPerDownload",
+                    query, wording, responses.size(), state.getFileCount(), candidates.size(), exact,
+                    candidates.size() - exact - Math.min(unverified, candidates.size()), Math.min(unverified, candidates.size()),
+                    unverified < candidates.size() || unverified == 0 ? "" : ", no file names the artist", maxFilesPerDownload);
             return spreadAcrossSharers(candidates).stream().limit(maxFilesPerDownload).toList();
         });
     }

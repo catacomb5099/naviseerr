@@ -39,7 +39,7 @@ class DownloadStepExecutorTest {
         DownloadStateMachine machine = new DownloadStateMachine(
                 Duration.ofSeconds(2), Duration.ofSeconds(5),
                 Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofMinutes(10),
-                Duration.ofSeconds(60), 2, new StallingSharers(Duration.ofHours(6)));
+                Duration.ofSeconds(60), 2, 3, new StallingSharers(Duration.ofHours(6)));
         executor = new DownloadStepExecutor(slskdService, searchProcessor, machine,
                 Clock.fixed(T0, ZoneOffset.UTC));
     }
@@ -59,16 +59,16 @@ class DownloadStepExecutorTest {
 
     @Test
     void searchInit_searchesTheNameWithoutVideoNoise_neverTheRawName() {
-        // The very FIRST search: the noise never reaches slskd, there is no tier on which it would.
+        // The very FIRST search is the title alone: the noise never reaches slskd, there is no tier on which it would.
         DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder()
                 .songName("Hello (Official Lyric Video) - Oasis").build();
-        when(slskdService.searchResults("Hello - Oasis"))
+        when(slskdService.searchResults("Hello"))
                 .thenReturn(Mono.just(SlskdFixtures.searchState("s2", false, "InProgress")));
 
         DownloadDecision d = executor.execute(task, Map.of(), Map.of()).block();
 
         assertEquals("s2", assertInstanceOf(DownloadDecision.Advance.class, d).next().searchId());
-        verify(slskdService).searchResults("Hello - Oasis");
+        verify(slskdService).searchResults("Hello");
         verify(slskdService, never()).searchResults("Hello (Official Lyric Video) - Oasis");
     }
 
@@ -80,12 +80,12 @@ class DownloadStepExecutorTest {
         var summary = SlskdFixtures.searchState("s1", true, "Completed");
         var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any())).thenReturn(Mono.just(List.of()));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any())).thenReturn(Mono.just(List.of()));
 
         executor.execute(task, Map.of("s1", summary), Map.of()).block();
 
-        // the picker sees the cleaned name, not the raw YouTube one
-        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"));
+        // the picker sees the cleaned name, not the raw YouTube one, and the wording that was searched
+        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"), eq("Hello"));
     }
 
     @Test
@@ -121,7 +121,7 @@ class DownloadStepExecutorTest {
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any()))
+        when(searchProcessor.selectBestFiles(eq(full), any(), any()))
                 .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor
@@ -132,7 +132,7 @@ class DownloadStepExecutorTest {
         assertEquals("alice", next.candidates().getFirst().username());
         assertEquals(1411, next.candidates().getFirst().bitRate());
         verify(slskdService).getSearchWithResponses("s1");
-        verify(searchProcessor, never()).selectBestFiles(eq(summary), any());
+        verify(searchProcessor, never()).selectBestFiles(eq(summary), any(), any());
     }
 
     @Test
@@ -140,7 +140,7 @@ class DownloadStepExecutorTest {
         var summary = SlskdFixtures.searchState("s1", true, "Completed");
         var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any())).thenReturn(Mono.just(List.of()));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any())).thenReturn(Mono.just(List.of()));
 
         DownloadDecision d = executor
                 .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
@@ -159,7 +159,7 @@ class DownloadStepExecutorTest {
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any()))
+        when(searchProcessor.selectBestFiles(eq(full), any(), any()))
                 .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor

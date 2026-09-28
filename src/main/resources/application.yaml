@@ -113,6 +113,12 @@ download-task:
   # in play.
   search-budget-ms: 120000
   download-budget-ms: 3600000
+  # The first wording is the song title alone (28-09-2026, the owner's call). It moves on to the
+  # wordings that name the artist when it finds fewer than this many files in the requested version
+  # with the artist confirmed -- a common title fills slskd's 250-response cap with other artists'
+  # songs -- keeping what it did find in case the artist is a phrase Soulseek blocks and the artist
+  # wordings return nothing. Three, so that one stalling sharer costs a candidate rather than the song.
+  first-wording-min-candidates: 3
   # How long a transfer may sit in the peer's queue -- "Queued, Remotely", "Requested",
   # "Initializing", or in progress with zero bytes moved -- before we give up on THAT peer and try the
   # next candidate. "Queued, Locally" (slskd's own download slots full, peer not asked yet) does not
