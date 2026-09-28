@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
 import java.text.Normalizer;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
@@ -74,25 +75,44 @@ public class ArtistController {
     /**
      * A featured-playlist search for "Oasis" answers the playlists Oasis is IN ("'90s Sing-Alongs")
      * mixed with ones ABOUT Oasis or a related act ("Presenting Oasis", "Presenting The Kooks"); the
-     * shelf wants only the first kind. Order is YouTube's. Matching folds to lowercase letters and
-     * digits with accents stripped, so "Beyoncé" finds "beyonce" and "AC/DC" finds "ACDC". A name
+     * shelf wants only the first kind. Order is YouTube's. A name matches when a run of whole words
+     * of the title spells it: case, accents and punctuation are ignored ("Beyoncé" finds "beyonce",
+     * "AC/DC" finds "ACDC" and "A C D C"), but "Blur" does not find "Blurred Lines" — a plain
+     * substring test would empty the shelf for every short-named act (Muse, Air, Live, Kiss). A name
      * that folds to nothing is skipped rather than matched against everything.
      */
     static List<Playlist> withoutTitledAfter(List<Playlist> playlists, List<String> names) {
-        List<String> keys = names.stream().map(ArtistController::fold).filter(key -> !key.isEmpty()).toList();
+        List<String> keys = names.stream().map(name -> String.join("", fold(name))).filter(key -> !key.isEmpty()).toList();
         return playlists == null ? List.of() : playlists.stream()
                 .filter(playlist -> {
-                    String title = fold(playlist.getName());
-                    return keys.stream().noneMatch(title::contains);
+                    List<String> words = fold(playlist.getName());
+                    return keys.stream().noneMatch(key -> spelledByConsecutiveWords(words, key));
                 })
                 .toList();
     }
 
-    private static String fold(String text) {
-        return text == null ? "" : Normalizer.normalize(text, Normalizer.Form.NFD)
+    private static boolean spelledByConsecutiveWords(List<String> words, String key) {
+        for (int start = 0; start < words.size(); start++) {
+            StringBuilder run = new StringBuilder();
+            for (int end = start; end < words.size() && run.length() < key.length(); end++) {
+                run.append(words.get(end));
+                if (run.toString().equals(key)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Lowercase words of letters and digits, accents stripped; empty for a null or symbol-only text. */
+    private static List<String> fold(String text) {
+        if (text == null) {
+            return List.of();
+        }
+        String plain = Normalizer.normalize(text, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "")
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("[^\\p{L}\\p{N}]", "");
+                .toLowerCase(Locale.ROOT);
+        return Arrays.stream(plain.split("[^\\p{L}\\p{N}]+")).filter(word -> !word.isEmpty()).toList();
     }
 
     /** Same mapping as {@link CollectionController#handleNotFound}: a lookup by id the adapter rejects is a 404. */

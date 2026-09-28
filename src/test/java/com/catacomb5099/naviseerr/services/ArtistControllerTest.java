@@ -162,6 +162,21 @@ class ArtistControllerTest {
         assertEquals(List.of("keep", "nullTitle"), ids(result));
     }
 
+    /** Blur, Muse, Air, Live, Kiss: a substring test would drop half of YouTube's catalogue for them. */
+    @Test
+    void shortNames_matchWholeWordsOnly_soBlurKeepsBlurredLines() {
+        List<Playlist> result = ArtistController.withoutTitledAfter(List.of(
+                        playlist("blur1", "Blurred Lines Party"),
+                        playlist("blur2", "Presenting Blur"),
+                        playlist("muse", "Amusement Park Hits"),
+                        playlist("kooks1", "Presenting The Kooks"),
+                        playlist("kooks2", "Kooks Corner"),
+                        playlist("acdc", "Best of AC/DC")),
+                List.of("Blur", "Muse", "The Kooks", "ACDC"));
+
+        assertEquals(List.of("blur1", "muse", "kooks2"), ids(result));
+    }
+
     @Test
     void withoutTitledAfter_nullPlaylists_isAnEmptyList() {
         assertEquals(List.of(), ArtistController.withoutTitledAfter(null, List.of("Pixies")));
