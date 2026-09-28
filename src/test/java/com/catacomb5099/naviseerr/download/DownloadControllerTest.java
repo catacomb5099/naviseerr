@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -214,5 +215,48 @@ class DownloadControllerTest {
                 .limit(DownloadController.MAX_RESOLVE_IDS).toList();
 
         assertEquals(HttpStatus.OK, controller.downloadsByIds(exactly).block().getStatusCode());
+    }
+
+    // ---- the history table's type filter -------------------------------------------------------
+
+    private static final AllDownloadsResponse EMPTY_PAGE = new AllDownloadsResponse(List.of(), 0);
+
+    @Test
+    void allDownloads_withNoType_asksForEverything() {
+        when(activeDownloadRepository.findAll(any(), any(), any())).thenReturn(Mono.just(EMPTY_PAGE));
+
+        controller.allDownloads(20, 1, null).block();
+
+        verify(activeDownloadRepository).findAll(20, 1, List.of());
+    }
+
+    @Test
+    void allDownloads_passesTheTypeThrough() {
+        when(activeDownloadRepository.findAll(any(), any(), any())).thenReturn(Mono.just(EMPTY_PAGE));
+
+        controller.allDownloads(20, 1, DownloadType.SONG).block();
+
+        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.SONG));
+    }
+
+    @Test
+    void allDownloads_playlistAlsoMeansCurated() {
+        when(activeDownloadRepository.findAll(any(), any(), any())).thenReturn(Mono.just(EMPTY_PAGE));
+
+        controller.allDownloads(20, 1, DownloadType.PLAYLIST).block();
+
+        // To the user a suggested playlist is a playlist; the client's Playlists pill already folds
+        // the two, so the server's filter has to agree or the pill shows a shorter list than the count.
+        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED));
+    }
+
+    @Test
+    void allDownloads_withAnUnknownType_is400_beforeTheQueryRuns() {
+        // Through the HTTP layer, because the rejection is Spring's enum conversion, not this class.
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+
+        http.get().uri("/downloads/all?type=MIXTAPE").exchange().expectStatus().isBadRequest();
+
+        verify(activeDownloadRepository, never()).findAll(any(), any(), any());
     }
 }

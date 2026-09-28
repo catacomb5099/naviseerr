@@ -148,16 +148,33 @@ public class ActiveDownloadRepository {
             """.formatted(PROJECTION, JOIN_MEDIA, TASK_AGGREGATE.formatted(WHERE_LIVE),
                           PROJECTION, TASK_AGGREGATE.formatted(WHERE_RECENTLY_FINISHED), JOIN_MEDIA);
 
-    private static final String ALL_DOWNLOADS_SQL = """
+    /**
+     * The history page, with a slot for an optional type filter. The filter sits on {@code downloads}
+     * itself, before the window function, so {@code total_count} -- and therefore the page count --
+     * describes the filtered list. Filtering after paging is exactly what the client used to do, and
+     * why "Page 1 of 7" kept describing a list the user was no longer looking at.
+     */
+    private static final String ALL_DOWNLOADS_TEMPLATE = """
             SELECT %s,
                    COUNT(*) OVER () AS total_count
               FROM downloads d
               %s
               LEFT JOIN (%s) t ON t.download_id = d.download_id
+             %s
              ORDER BY updated_at DESC, d.download_id DESC
              OFFSET (:pageSize * (:pageNumber - 1)) ROWS
              FETCH NEXT :pageSize ROWS ONLY
-            """.formatted(PROJECTION, JOIN_MEDIA, TASK_AGGREGATE.formatted(WHERE_ALL));
+            """;
+
+    private static String allDownloadsSql(String where) {
+        return ALL_DOWNLOADS_TEMPLATE.formatted(PROJECTION, JOIN_MEDIA,
+                TASK_AGGREGATE.formatted(WHERE_ALL), where);
+    }
+
+    private static final String ALL_DOWNLOADS_SQL = allDownloadsSql("");
+
+    private static final String ALL_DOWNLOADS_OF_TYPES_SQL =
+            allDownloadsSql("WHERE d.download_type = ANY(:types)");
 
     /**
      * No status filter and no window: this answers "what happened to these?" for a client that held
@@ -217,8 +234,21 @@ public class ActiveDownloadRepository {
                 .all();
     }
 
-    public Mono<AllDownloadsResponse> findAll(Integer pageSize, Integer pageNumber) {
-        return client.sql(ALL_DOWNLOADS_SQL)
+    /**
+     * The history page restricted to {@code types}; empty or null means every download. The
+     * filter is a list rather than one type because the client's "Playlists" pill means both a
+     * YouTube playlist and a curated edition, and that folding belongs to whoever speaks the
+     * client's vocabulary, not to the query.
+     */
+    public Mono<AllDownloadsResponse> findAll(Integer pageSize, Integer pageNumber,
+                                              Collection<DownloadType> types) {
+        boolean filtered = types != null && !types.isEmpty();
+        DatabaseClient.GenericExecuteSpec query =
+                client.sql(filtered ? ALL_DOWNLOADS_OF_TYPES_SQL : ALL_DOWNLOADS_SQL);
+        if (filtered) {
+            query = query.bind("types", types.stream().map(Enum::name).toArray(String[]::new));
+        }
+        return query
                 .bind("pageSize", pageSize)
                 .bind("pageNumber", pageNumber)
                 .map((row, meta) -> new PagedRow(toView(row, meta), row.get("total_count", Long.class)))
