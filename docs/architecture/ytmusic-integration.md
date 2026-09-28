@@ -80,7 +80,9 @@ Two-exception hierarchy, both extending `YtMusicException`
 |---|---|---|
 | `200` with `count: 0` | *(none — empty lists)* | n/a; this is "no good match", not a failure |
 | `400`, `422`, `500` | `YtMusicBadRequestException` | No |
-| `429`, `502`, `504`, `404`, any other status | `YtMusicUnavailableException` | Yes |
+| `404` **with** the adapter's `{"error":{"code":"not_found",…}}` envelope — it looked, the id does not exist | `YtMusicBadRequestException` | No |
+| `404` **without** it — FastAPI's `{"detail":"Not Found"}` or an empty body: the running image has no such route | `YtMusicUnavailableException` ("…is the sidecar image up to date?") | Yes |
+| `429`, `502`, `504`, any other status | `YtMusicUnavailableException` | Yes |
 | client-side timeout / connection refused / decode failure | `YtMusicUnavailableException` | Yes |
 
 Retries reuse [ReactivePoller.defaultBackoff](../../src/main/java/com/catacomb5099/naviseerr/util/networkcalls/ReactivePoller.java)
@@ -201,6 +203,14 @@ playlist; retrying cannot make an id exist. Admission leans on the distinction t
 download now" from "try again next pass", so classifying it as unavailable would have one mistyped id
 re-requested every loop interval for the life of the install. See
 [the ADR](../decisions/collection-downloads-14-09-2026.md).
+
+The one 404 that is *not* a bad request is the one the adapter never produced. FastAPI answers
+`{"detail":"Not Found"}` (no `error` envelope) when the path has no route at all, which happens when
+the running `ytmusic-adapter` image predates an endpoint naviseerr now calls — on 28-09-2026 a stale
+image made `/v1/songs/{id}/details` 404 for every song, and every controller dutifully reported
+"unknown song". `buildException` tells the two apart by the envelope: no envelope maps to
+`YtMusicUnavailableException` with a message naming the likely cause, so the client shows "Couldn't
+load … Try again" and the log says to rebuild the image.
 
 ## Endpoints
 

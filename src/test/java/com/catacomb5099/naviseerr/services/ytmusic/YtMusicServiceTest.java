@@ -573,6 +573,42 @@ class YtMusicServiceTest {
     }
 
     @Test
+    void a404WithoutTheAdaptersEnvelope_isAStaleSidecar_notAnUnknownSong_andIsRetried() {
+        // FastAPI's own route-not-found body: the adapter's handler never ran, so this says nothing
+        // about the id. An image predating /details answered every song this way on 28-09-2026 and
+        // the client showed "YouTube Music doesn't know this song" for all of them.
+        server.enqueue(new MockResponse().setResponseCode(404)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"detail\":\"Not Found\"}"));
+        server.enqueue(new MockResponse().setResponseCode(404)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"detail\":\"Not Found\"}"));
+
+        StepVerifier.create(service.getSongDetails("DntZ3-yCaFs"))
+                .expectErrorSatisfies(error -> {
+                    assertInstanceOf(YtMusicUnavailableException.class, error);
+                    assertTrue(error.getMessage().contains("has no route for this request"));
+                    assertTrue(error.getMessage().contains("image up to date"));
+                })
+                .verify();
+
+        assertEquals(2, server.getRequestCount(), "an outage is retried; an unknown id is not");
+    }
+
+    @Test
+    void a404WithAnEmptyBody_isAlsoTreatedAsUnavailable_andRetriedToSuccess() {
+        server.enqueue(new MockResponse().setResponseCode(404));
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody(SONG_DETAILS_BODY));
+
+        StepVerifier.create(service.getSongDetails("DntZ3-yCaFs"))
+                .assertNext(d -> assertEquals("Manchild", d.getTitle()))
+                .verifyComplete();
+
+        assertEquals(2, server.getRequestCount());
+    }
+
+    @Test
     void anUnavailableSidecar_isRetried_forMetadataToo() {
         server.enqueue(new MockResponse().setResponseCode(503));
         server.enqueue(new MockResponse().setResponseCode(200)
