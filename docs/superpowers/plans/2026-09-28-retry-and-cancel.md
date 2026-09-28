@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Two repos: server `/Users/alpascal/IdeaProjects/naviseerr`, client `/Users/alpascal/IdeaProjects/naviseerr-client`. Tasks 1–6 are server, 7–11 client. Within a repo, each task's branch is cut from the previous task's branch (stacked); the first branch in each repo is cut from `origin/move-fast-break-things`.
+- Two repos: server `/Users/alpascal/IdeaProjects/naviseerr`, client `/Users/alpascal/IdeaProjects/naviseerr-client`. Tasks 1–6 are server, 7–11 client. Within a repo, each task's branch is cut from the previous task's branch (stacked); the first branch in each repo is cut from `move-fast-break-things` on the remote (the server repo's remote is `origin`; the client repo's remote is named `remote`).
 - **Every `git` and `gh` command that touches GitHub, and every commit, runs through `~/.gh-catacombs/ghc`** (e.g. `~/.gh-catacombs/ghc git commit -m "..."`, `~/.gh-catacombs/ghc git push -u origin <branch>`, `~/.gh-catacombs/ghc gh pr create ...`). Run it from inside the repo. Its own progress lines (`level=warning`, `Container ...`, `authenticated as catacomb5099`) are noise.
 - Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - PR titles: `feat(AI): ...` or `fix(AI): ...`, lowercase after the prefix, plain words. Label `AI`. Base = the parent task's branch (the first task in each repo: `move-fast-break-things`). PR body sections: **What this does** (plain English, for a product manager), **Checked** (what you ran and the counts), **Docs** (if any), **Merge order** ("Nth of 6 stacked naviseerr PRs; retarget to `move-fast-break-things` once its parent has merged").
@@ -948,7 +948,7 @@ Mono<ResponseEntity<ActiveDownloadView>> retry(@PathVariable UUID id) {
 
 ### Task 7: Show cancelled downloads in grey, not red
 
-**Branch:** `feat/ai-cancelled-grey` from `origin/move-fast-break-things`. PR base `move-fast-break-things`.
+**Branch:** `feat/ai-cancelled-grey` from `remote/move-fast-break-things` (the client remote is `remote`). PR base `move-fast-break-things`.
 
 **Files:**
 - Modify: `src/api/types.ts` (`DownloadFailureCode`, `ActiveDownloadView.songsCancelled`)
