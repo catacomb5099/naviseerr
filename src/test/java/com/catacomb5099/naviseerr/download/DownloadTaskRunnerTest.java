@@ -16,6 +16,7 @@ import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -32,7 +33,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -388,8 +388,11 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         // The TASK's id, not the download's: one song of a collection finishing is not the
-        // collection finishing.
-        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any(), anyString());
+        // collection finishing. And the owner the claim stamped, so the finish only lands while
+        // this step still holds the lease.
+        ArgumentCaptor<String> owner = ArgumentCaptor.forClass(String.class);
+        verify(repository).claimDueTasks(anyInt(), owner.capture(), any(), any(), anyBoolean(), anyInt());
+        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any(), eq(owner.getValue()));
         verify(repository, never()).save(any(), any());
     }
 
