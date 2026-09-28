@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -71,6 +74,10 @@ public final class SearchQueryTiers {
 
     /** Longer titles are searched by their first words too; five is enough to be distinctive. */
     private static final int SHORT_TITLE_WORDS = 5;
+
+    /** Words a name can lose first when it has to lose one: they carry nothing for a search. */
+    private static final Set<String> STOP_WORDS = Set.of("a", "an", "the", "and", "of", "in", "on", "to",
+            "for", "my", "me", "this", "that", "it", "is", "you", "your", "i", "i'm", "with", "at", "by", "from");
 
     /** Never more than this many searches (about 10 s of slskd time each) for one song. */
     private static final int MAX_TIERS = 4;
@@ -146,10 +153,12 @@ public final class SearchQueryTiers {
      * costs nothing when an earlier one hits. Never empty: a name that is nothing but noise
      * ("(Official Video)") falls back to itself rather than to an empty search.
      *
-     * <p>"Title - Artist": the title alone, the bare pair, then the same two with the title cut to
-     * its first {@value #SHORT_TITLE_WORDS} words and any dash qualifier ("Radio Edit") removed, when
-     * that is different. "Artist - Title - channel": the title alone, "Artist Title", the two short
-     * forms, and the channel wording last only if there is room.
+     * <p>"Title - Artist": the title alone, the bare pair, the pair with one word taken out of each
+     * name (see {@link #dodge}), then the pair again with the title cut to its first
+     * {@value #SHORT_TITLE_WORDS} words and any dash qualifier ("Radio Edit") removed, when that is
+     * different (the cap of {@value #MAX_TIERS} leaves no room for the short title alone). "Artist -
+     * Title - channel": the title alone, "Artist Title", the dodge, the short "Artist Title", and the
+     * channel wording last only if there is room.
      */
     public static List<String> of(String songName) {
         String raw = songName == null ? "" : songName;
@@ -170,6 +179,7 @@ public final class SearchQueryTiers {
             String shortTitle = shortTitle(title);
             tiers.add(title);
             tiers.add(artistTitle);
+            dodge(title, leading.getFirst()).ifPresent(tiers::add);
             tiers.add(leading.getFirst() + " " + shortTitle);
             tiers.add(shortTitle);
             tiers.add(artistTitle + " - " + artist);
@@ -178,10 +188,50 @@ public final class SearchQueryTiers {
             String shortTitle = shortTitle(leading.getFirst());
             tiers.add(title);
             tiers.add(title + " - " + artist);
+            dodge(title, artist).ifPresent(tiers::add);
             tiers.add(shortTitle + " - " + artist);
             tiers.add(shortTitle);
         }
         return tiers.stream().limit(MAX_TIERS).toList();
+    }
+
+    /**
+     * The wording that gets past a phrase Soulseek blocks: the title minus one word plus the artist
+     * minus one word. Probed live on 28-09-2026 (see {@code docs/decisions/title-first-search-28-09-2026.md}):
+     * the server returns zero peers, every time, for any search containing every word of certain
+     * phrases -- artists ("Lady Gaga", "Linkin Park", "Skid Row", "Michael Jackson") and hit titles
+     * ("Bad Romance", "Born This Way", "18 and Life", "Happy Song") -- and a search missing any one
+     * word of the phrase goes through: "Bad Romance" and "Lady Gaga" both return nothing, "Romance
+     * Gaga" returns 723 files of the song. A one-word name stays whole, so a one-word artist
+     * ("Rihanna") cannot be dodged. Empty when neither name could lose a word, because that would be
+     * the artist wording again. Because the wording no longer names the whole artist, the picker
+     * requires the artist in the file's path for what it returns.
+     */
+    static Optional<String> dodge(String title, String artist) {
+        String dodged = lessOneWord(title) + " " + lessOneWord(artist);
+        return dodged.equals(title + " " + artist) ? Optional.empty() : Optional.of(dodged);
+    }
+
+    /** The name minus its first stop word, else minus its shortest word (the first of them); one word stays. */
+    static String lessOneWord(String name) {
+        List<String> words = new ArrayList<>(Arrays.asList(name.split(" ")));
+        if (words.size() < 2) {
+            return name;
+        }
+        int drop = 0;
+        for (int i = 1; i < words.size(); i++) {
+            if (words.get(i).length() < words.get(drop).length()) {
+                drop = i;
+            }
+        }
+        for (int i = 0; i < words.size(); i++) {
+            if (STOP_WORDS.contains(words.get(i).toLowerCase(Locale.ROOT))) {
+                drop = i;
+                break;
+            }
+        }
+        words.remove(drop);
+        return String.join(" ", words);
     }
 
     /** The first {@value #SHORT_TITLE_WORDS} words of a longer title; a shorter title as it is. */
