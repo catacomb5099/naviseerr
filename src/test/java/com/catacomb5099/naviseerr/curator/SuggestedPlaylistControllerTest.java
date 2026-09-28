@@ -50,8 +50,8 @@ class SuggestedPlaylistControllerTest {
         when(scheduler.isEnabled()).thenReturn(true);
         when(scheduler.getRefreshDay()).thenReturn(DayOfWeek.MONDAY);
         when(client.getEditions()).thenReturn(Mono.just(List.of(
-                new CuratorEditionSummary("80s-indie-pop", "80s indie pop", "2026-09-27", 40),
-                new CuratorEditionSummary("current-pop", "Current pop", "2026-09-28", null))));
+                new CuratorEditionSummary("80s-indie-pop", "80s indie pop", "1980-1989", "2026-09-27", 40),
+                new CuratorEditionSummary("current-pop", "Current pop", null, "2026-09-28", null))));
 
         StepVerifier.create(controller.list())
                 .assertNext(view -> {
@@ -61,8 +61,10 @@ class SuggestedPlaylistControllerTest {
                     SuggestedPlaylistsView.SuggestedPlaylistSummary first = view.playlists().getFirst();
                     assertEquals("80s-indie-pop", first.category());
                     assertEquals("80s indie pop", first.title());
+                    assertEquals("1980-1989", first.year());
                     assertEquals("2026-09-27", first.editionDate());
                     assertEquals(40, first.trackCount());
+                    assertNull(view.playlists().get(1).year(), "no year range from the curator stays null");
                     assertEquals(0, view.playlists().get(1).trackCount(), "a missing count is 0, not null");
                 })
                 .verifyComplete();
