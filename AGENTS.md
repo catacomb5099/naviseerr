@@ -45,7 +45,7 @@ Prefer putting genuinely new state in a new table over altering an existing one.
 
 ## Current Implementation State
 
-The durable state machine described in "Download Manager Architecture" below is now built, not just targeted. Collection downloads landed on 14-09-2026 — see [the ADR](docs/decisions/collection-downloads-14-09-2026.md). Download metadata (a `media_items` table, artwork, lifecycle timestamps, and the per-song view `GET /downloads/{id}`) landed on 25-09-2026 — see [that ADR](docs/decisions/download-metadata-25-09-2026.md). Remaining gaps (cancellation, SSE) are called out explicitly below.
+The durable state machine described in "Download Manager Architecture" below is now built, not just targeted. Collection downloads landed on 14-09-2026 — see [the ADR](docs/decisions/collection-downloads-14-09-2026.md). Download metadata (a `media_items` table, artwork, lifecycle timestamps, and the per-song view `GET /downloads/{id}`) landed on 25-09-2026 — see [that ADR](docs/decisions/download-metadata-25-09-2026.md). Cancel landed on 28-09-2026 — see [that ADR](docs/decisions/retry-and-cancel-28-09-2026.md). Remaining gaps (SSE) are called out explicitly below.
 
 The current application is a small Java REST/WebFlux service that:
 
@@ -99,7 +99,7 @@ The current application does not have:
 
 - SSE/WebSocket progress streaming.
 - User accounts, JWT handling, or authorization.
-- Cancellation, `CANCELLED`, or `SKIPPED`.
+- A `CANCELLED` status or `SKIPPED`: a cancelled song is a `FAILED` row with reason `CANCELLED` (see `docs/decisions/retry-and-cancel-28-09-2026.md`); retry lands in the PR after cancel.
 - Redis or RabbitMQ — **rejected**, not merely absent. Postgres is the workflow engine, indefinitely; see `docs/decisions/durable-download-state-machine-13-08-2026.md`.
 
 Current endpoints:
@@ -118,6 +118,7 @@ Current endpoints:
 - `GET /downloads?ids=a,b,c` — the same shape for specific ids, ignoring both the terminal filter and the retention window (max 100 ids). Lets a client reconcile cards it held across a restart; absent ids are omitted, not 404'd
 - `GET /downloads/all?pageSize=&pageNumber=&type=SONG|ALBUM|PLAYLIST|CURATED` — the same shape, paginated over every download ever, newest first; the history table. `type` is optional and narrows the list on the server so `totalPages` counts within the filter (filtering a page client-side left the pager describing the unfiltered list); `type=PLAYLIST` also matches `CURATED`, since to the user a suggested playlist is a playlist. Unknown value is 400
 - `GET /downloads/{id}` — one download as `{download, songs[]}`: the feed card plus every song in track order as `{taskId, youtubeId, position, title, artists, artistIds, imageUrl, durationSeconds, stage, progressPercent, failureCode, stageEnteredAt, updatedAt, finishedAt, candidateCount, candidateIndex, retryIndex, slskdUsername, slskdFilename, lastError}`. 404 for an unknown id; `songs` is empty, not absent, for a download not yet admitted
+- `POST /downloads/{id}/cancel?taskId=` — cancels every unfinished song of a download, or one song. A cancelled song is a `FAILED` task row with `failure_reason` `CANCELLED` (no status of its own); the download's status is then derived as usual (`FAILED` when nothing downloaded, `PARTIAL_SUCCESS` otherwise). Best-effort `DELETE` of the live slskd transfers. 200 with the fresh card, 409 with the current card when nothing was left to cancel, 404 unknown. See `docs/decisions/retry-and-cancel-28-09-2026.md`
 - `GET /suggested-playlists` — the playlist curator's latest edition per category as `{enabled, refreshDay, playlists[{category, title, year, editionDate, trackCount}]}`; `year` is the category's Discogs range ("1980-1989", "1950-2026" for all-time; null from an older curator) so the client can group by decade; `refreshDay` ("MONDAY", from `curator.cron`; null when the cron is not one plain weekday) lets the client say "New edition every Monday"; `enabled` is false (and the list empty) on an install with no curator configured, so the client can hide the section. Read through to the curator's `GET /v1/editions` on every call; curator down is 502
 - `GET /suggested-playlists/{category}` — one edition as `{category, title, filters, editionDate, trackCount, tracks[{id, name, artists, album, albumYear, popularity, tier, reason, iconURL, position}]}`, field names as on the search contract so the client's song rows work unchanged. `tier`/`reason` are the curator's explanation of each pick; `iconURL` is YouTube's predictable thumbnail (the curator stores no artwork). 404 when the curator has no edition for the category; 503 when no curator is configured; 502 when it is unreachable. See `docs/decisions/suggested-playlists-api-28-09-2026.md`
 - `POST /suggested-playlists/refresh` — "make this week's playlists now": triggers the curator (no retry, unlike the cron tick) and answers 202 at once with the curator's run record `{runId, status, requestedAt, startedAt, finishedAt, categories[{key, status, editionDate, trackCount, message}], final}`; pressing during a run returns that run. naviseerr then follows the run in the background as after a cron tick (`CuratorScheduler.refreshNow()`). 503 with no curator
@@ -171,7 +172,7 @@ The execution model is a **level-triggered reconciliation loop** over durable st
 - Retries and backoff are timestamps in a column, not retry operators wrapped around a subscription.
 - Crash detection is a **lease with an expiry**, not a time-since-`updated_at` reaper. One mechanism covers both "another pass must not double-step this row" and "the process that held this row died".
 - Terminal writes are a single atomic statement (a data-modifying CTE) that sets the download's status and marks the task row terminal (retained, not deleted — self-hosters need the history).
-- Cancellation, when it lands, is a flag checked by the loop — not an attempt to retract queued work.
+- Cancellation is a terminal write, not a flag: a cancelled song is a `FAILED` task row with reason `CANCELLED`, written by `DownloadService.cancel` with the lease cleared, so the loop never claims it again. Live slskd transfers are cancelled best-effort afterwards; queued work is never retracted in slskd.
 - SSE, when it lands, reads from Postgres. If a resume cursor is needed, add an append-only `download_events` table and use its sequence number. That table is also the dataset for tuning candidate ranking and match thresholds, which is its stronger justification.
 
 Four independent bounds, and they must not be conflated — the deleted `flatMap(this::process, 3)` collapsed all of them into one number:

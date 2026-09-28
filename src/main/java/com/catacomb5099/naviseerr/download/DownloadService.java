@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.r2dbc.core.DatabaseClient;
@@ -43,9 +44,16 @@ public class DownloadService {
             """;
 
     private final R2dbcEntityTemplate entityTemplate;
+    private final DownloadTaskRepository repository;
+    private final SlskdService slskdService;
+    private final LibraryOrganiser organiser;
 
-    public DownloadService(R2dbcEntityTemplate entityTemplate) {
+    public DownloadService(R2dbcEntityTemplate entityTemplate, DownloadTaskRepository repository,
+                           SlskdService slskdService, LibraryOrganiser organiser) {
         this.entityTemplate = entityTemplate;
+        this.repository = repository;
+        this.slskdService = slskdService;
+        this.organiser = organiser;
     }
 
     /**
@@ -87,5 +95,52 @@ public class DownloadService {
                 .rowsUpdated()
                 .doOnError(error -> log.error("Could not finish task {} as {}",
                         taskId, status, error));
+    }
+
+    /**
+     * Cancels a whole download ({@code taskId} null) or one of its songs. Three statements, in an
+     * order that matters:
+     * <ol>
+     *   <li>Whole download only: fail it as unadmitted if it is still PENDING (guarded on that status,
+     *       so admission and cancel serialise on the row: whichever commits first wins).</li>
+     *   <li>Cancel every unfinished song row; for each, best-effort stop its slskd transfer and remove
+     *       partial files. Fire-and-forget: the row is cancelled whether or not slskd hears this.</li>
+     *   <li>Derive the download's status NOW rather than at the end of the next pass, so the response
+     *       body is never the two-second window in which every song is finished but the download is
+     *       still IN_PROGRESS (which the feed renders as QUEUED). Idempotent; runs even when nothing
+     *       was cancelled, because the step that finished the last song may have beaten us to it.</li>
+     * </ol>
+     * Not one CTE: a single statement sees one snapshot, so when admission wins the row lock it could
+     * not see the song rows admission just committed and would report "nothing to cancel".
+     *
+     * @return rows cancelled: the unadmitted download counts as one; 0 means nothing was left to cancel
+     */
+    public Mono<Long> cancel(UUID downloadId, UUID taskId, Instant now) {
+        Mono<Long> unadmitted = taskId == null
+                ? repository.failUnadmitted(downloadId, DownloadFailureCode.CANCELLED, now)
+                : Mono.just(0L);
+        return unadmitted
+                .flatMap(rows -> rows > 0
+                        ? Mono.just(rows)
+                        : repository.cancelTasks(downloadId, taskId, now)
+                                .doOnNext(this::stopInSlskd)
+                                .count())
+                .doOnNext(rows -> {
+                    if (rows > 0) log.info("Cancelled {} song(s) of download {}", rows, downloadId);
+                })
+                .flatMap(rows -> repository.concludeDownloads().thenReturn(rows));
+    }
+
+    /** Same shape as DownloadStepExecutor.cancelIfAbandoned: the decision is written; slskd is told after, best effort. */
+    private void stopInSlskd(DownloadTask task) {
+        if (task.slskdTransferId() != null) {
+            Mono.defer(() -> slskdService.cancelDownload(task.slskdUsername(), task.slskdTransferId()))
+                    .subscribe(ignored -> { },
+                            error -> log.warn("Could not cancel transfer {} from '{}' for song {}; it stays in slskd's list",
+                                    task.slskdTransferId(), task.slskdUsername(), task.taskId(), error),
+                            () -> log.info("Cancelled transfer {} from '{}' for song {}",
+                                    task.slskdTransferId(), task.slskdUsername(), task.taskId()));
+        }
+        organiser.deletePartials(task).subscribe();
     }
 }

@@ -143,6 +143,25 @@ public class DownloadController {
     }
 
     /**
+     * Cancels a download, or one song of it when {@code taskId} is given. Songs already downloaded are
+     * untouched; the rest are marked cancelled and their transfers stopped. 200 with the fresh card,
+     * 409 with the current card when nothing was left to cancel (already finished, or a second click),
+     * 404 for an unknown id.
+     */
+    @PostMapping("/downloads/{id}/cancel")
+    Mono<ResponseEntity<ActiveDownloadView>> cancel(@PathVariable UUID id,
+                                                    @RequestParam(required = false) UUID taskId) {
+        return outcome(id, downloadService.cancel(id, taskId, clock.instant()), HttpStatus.OK);
+    }
+
+    /** Runs a write, then reads the card back: rows > 0 is the happy status, 0 is 409, no card is 404. */
+    private Mono<ResponseEntity<ActiveDownloadView>> outcome(UUID id, Mono<Long> rows, HttpStatus onSuccess) {
+        return rows.flatMap(n -> activeDownloadRepository.findByIds(List.of(id)).next()
+                .map(view -> ResponseEntity.status(n > 0 ? onSuccess : HttpStatus.CONFLICT).body(view))
+                .defaultIfEmpty(ResponseEntity.notFound().build()));
+    }
+
+    /**
      * The history table, optionally narrowed to one kind of download. The filter lives here and not
      * in the client because the page count has to describe the narrowed list: filtering a page after
      * it arrived left "Page 1 of 7" and the arrows describing the unfiltered history.
