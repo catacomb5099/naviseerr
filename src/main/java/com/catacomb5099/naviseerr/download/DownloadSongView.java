@@ -17,9 +17,13 @@ import java.util.UUID;
  * @param position        1-based track order within the collection. Null for rows admitted before
  *                        order was recorded.
  * @param title           from {@code media_items}; null only for a task admitted before V6.
+ * @param artistIds       as on {@link ActiveDownloadView#artistIds()}: one channel id per
+ *                        {@code artists} entry, null where YouTube gave none, shorter for rows
+ *                        written before V11.
  * @param stage           the SONG's own stage — for a finished song, its own outcome, whatever the
  *                        collection's is.
- * @param candidateCount  how many usable files the search turned up. 0 in the search stages.
+ * @param candidateCount  how many usable files the search turned up. While a song is still searching,
+ *                        the files kept from an earlier wording (0 when none).
  * @param candidateIndex  0-based; which of those this attempt is on. With {@code retryIndex}, "third
  *                        candidate, second retry".
  * @param slskdUsername   the peer the current (or last) transfer was from.
@@ -32,6 +36,7 @@ public record DownloadSongView(
         Integer position,
         String title,
         List<String> artists,
+        List<String> artistIds,
         String imageUrl,
         Integer durationSeconds,
         DownloadStage stage,

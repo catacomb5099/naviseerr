@@ -29,6 +29,8 @@ class TrackMatchingServiceLabelledTest {
 
     private static final double MIN_PRECISION = 0.86;
     private static final double MIN_RECALL = 0.85;
+    private static final double MIN_TITLE_ONLY_PRECISION = 0.85;
+    private static final double MIN_TITLE_ONLY_RECALL = 0.65;
 
     private final TrackMatchingService matcher = new TrackMatchingService();
 
@@ -49,6 +51,35 @@ class TrackMatchingServiceLabelledTest {
                 rows.size(), precision, recall, tp, fp, fn);
         assertTrue(precision >= MIN_PRECISION, "precision fell to " + precision);
         assertTrue(recall >= MIN_RECALL, "recall fell to " + recall);
+    }
+
+    /**
+     * The title-only searches of the lab (variant "C": the wording named no artist). Judged as the app now
+     * judges them, with the artist required somewhere in the path, against judged on the filename alone.
+     * Floors set from the run that introduced the rule; the fixture keeps only the last folders of each
+     * path, so the recall here understates what a full Soulseek path gives.
+     */
+    @Test
+    void titleOnlyResults_withTheArtistRequiredInThePath_areMuchMorePrecise() throws Exception {
+        int tp = 0, fp = 0, fn = 0, fpBefore = 0;
+        for (JsonNode r : fixture()) {
+            if (!r.get("variants").toString().contains("\"C\"")) continue;
+            boolean exact = r.get("exact").asBoolean();
+            String request = SearchQueryTiers.pickerName(r.get("request").asText());
+            String title = request.contains(" - ") ? request.substring(0, request.indexOf(" - ")) : request;
+            boolean accepted = matcher.grade(request, r.get("path").asText(), title) == TrackMatchingService.Match.EXACT;
+            if (!exact && matcher.isMatch(request, r.get("path").asText())) fpBefore++;
+            if (accepted && exact) tp++;
+            else if (accepted) fp++;
+            else if (exact) fn++;
+        }
+        double precision = (double) tp / (tp + fp);
+        double recall = (double) tp / (tp + fn);
+        System.out.printf("Title-only results, artist required in path: precision %.3f, recall %.3f (tp=%d fp=%d fn=%d); wrong files accepted before %d, now %d%n",
+                precision, recall, tp, fp, fn, fpBefore, fp);
+        assertTrue(fp < fpBefore, "the artist rule should reject wrong files the filename alone let through");
+        assertTrue(precision >= MIN_TITLE_ONLY_PRECISION, "title-only precision fell to " + precision);
+        assertTrue(recall >= MIN_TITLE_ONLY_RECALL, "title-only recall fell to " + recall);
     }
 
     static List<JsonNode> fixture() throws Exception {

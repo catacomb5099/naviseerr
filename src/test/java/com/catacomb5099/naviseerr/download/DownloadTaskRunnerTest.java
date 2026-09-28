@@ -16,6 +16,7 @@ import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -32,7 +33,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -388,8 +388,11 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         // The TASK's id, not the download's: one song of a collection finishing is not the
-        // collection finishing.
-        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any(), anyString());
+        // collection finishing. And the owner the claim stamped, so the finish only lands while
+        // this step still holds the lease.
+        ArgumentCaptor<String> owner = ArgumentCaptor.forClass(String.class);
+        verify(repository).claimDueTasks(anyInt(), owner.capture(), any(), any(), anyBoolean(), anyInt());
+        verify(downloadService).finishTask(eq(TASK_ID), eq(DownloadStatus.FAILED), any(), any(), eq(owner.getValue()));
         verify(repository, never()).save(any(), any());
     }
 
@@ -429,8 +432,8 @@ class DownloadTaskRunnerTest {
         Download request = pendingRequest(DownloadType.SONG, "vid-1");
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
         when(ytMusicService.getSongInfo("vid-1"))
-                .thenReturn(Mono.just(new YoutubeSongInfo("vid-1", List.of("Rick Astley"),
-                        "Never Gonna Give You Up", "https://img/rick.jpg", 213)));
+                .thenReturn(Mono.just(new YoutubeSongInfo("vid-1", List.of("Rick Astley"), List.of("UC-rick"),
+                        "Never Gonna Give You Up", "https://img/rick.jpg", 213, null)));
 
         runner.pass().block();
 
@@ -448,7 +451,8 @@ class DownloadTaskRunnerTest {
                 .anyMatch(m -> m.youtubeId().equals("vid-1")
                         && m.title().equals("Never Gonna Give You Up")
                         && m.imageUrl().equals("https://img/rick.jpg")
-                        && m.artists().equals(List.of("Rick Astley")))));
+                        && m.artists().equals(List.of("Rick Astley"))
+                        && m.artistIds().equals(List.of("UC-rick")))));
     }
 
     @Test
@@ -476,16 +480,19 @@ class DownloadTaskRunnerTest {
                 eq(T0));
         // The playlist's own media row is keyed by the category the REQUEST carried, named after the
         // edition, credited to Naviseerr and pictured with its first song; every song gets YouTube's
-        // predictable thumbnail because the curator stores none.
+        // predictable thumbnail because the curator stores none. Nor does it store channel ids, so
+        // every name gets a blank one and renders as plain text.
         verify(repository).upsertMedia(argThat(items -> items.size() == 3
                 && items.stream().anyMatch(m -> m.youtubeId().equals("80s-indie-pop")
                         && m.title().equals("80s indie pop")
                         && m.artists().equals(List.of("Naviseerr"))
+                        && m.artistIds().equals(List.of(""))
                         && m.trackCount() == 2
                         && m.imageUrl().equals("https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg"))
                 && items.stream().anyMatch(m -> m.youtubeId().equals("ewnLtRyqAzo")
                         && m.title().equals("Decomposing Trees")
                         && m.artists().equals(List.of("Galaxie 500"))
+                        && m.artistIds().equals(List.of(""))
                         && m.imageUrl().equals("https://i.ytimg.com/vi/ewnLtRyqAzo/hqdefault.jpg"))));
     }
 
@@ -553,7 +560,7 @@ class DownloadTaskRunnerTest {
                         new YoutubeSongInfo("v1", List.of("A"), "one", "https://img/a.jpg", 100),
                         new YoutubeSongInfo("v2", List.of("A"), "two", "https://img/a.jpg", 100),
                         new YoutubeSongInfo("v3", List.of("A"), "three", "https://img/a.jpg", 100)),
-                        "1999", "The Album", List.of("A"), "https://img/a.jpg")));
+                        "1999", "The Album", List.of("A"), List.of("UC-a"), "https://img/a.jpg")));
 
         runner.pass().block();
 
@@ -564,6 +571,7 @@ class DownloadTaskRunnerTest {
         verify(repository).upsertMedia(argThat(items -> items.size() == 4
                 && items.getFirst().youtubeId().equals("MPREb_1")
                 && items.getFirst().title().equals("The Album")
+                && items.getFirst().artistIds().equals(List.of("UC-a"))
                 && items.getFirst().trackCount() == 3));
     }
 

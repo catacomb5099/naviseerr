@@ -5,6 +5,7 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.SlskdSearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
+import com.catacomb5099.naviseerr.util.TrackMatchingService;
 import com.catacomb5099.naviseerr.util.TransferedFileUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -34,6 +35,7 @@ public class DownloadStateMachine {
     private final Duration queuedBudget;
     private final Duration missingTransferGrace;
     private final int retryLimit;
+    private final int firstWordingMinCandidates;
     private final StallingSharers stallingSharers;
 
     public DownloadStateMachine(
@@ -44,6 +46,7 @@ public class DownloadStateMachine {
             @Value("${download-task.queued-budget-ms:600000}") Duration queuedBudget,
             @Value("${download-task.missing-transfer-grace-ms:60000}") Duration missingTransferGrace,
             @Value("${slskd-service.retry-count}") int retryLimit,
+            @Value("${download-task.first-wording-min-candidates:3}") int firstWordingMinCandidates,
             StallingSharers stallingSharers) {
         this.searchPollInterval = searchPollInterval;
         this.downloadPollInterval = downloadPollInterval;
@@ -52,17 +55,17 @@ public class DownloadStateMachine {
         this.queuedBudget = queuedBudget;
         this.missingTransferGrace = missingTransferGrace;
         this.retryLimit = retryLimit;
+        this.firstWordingMinCandidates = firstWordingMinCandidates;
         this.stallingSharers = stallingSharers;
     }
 
     public DownloadDecision afterSearchInit(DownloadTask task, SearchState started, Instant now) {
         if (started == null || started.getId() == null || started.getId().isBlank()) {
-            return new DownloadDecision.Terminal(DownloadStatus.FAILED,
-                    DownloadFailureCode.SEARCH_FAILED);
+            return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
         }
         DownloadTask next = task.withPhase(DownloadPhase.SEARCH_POLL, now);
         return new DownloadDecision.Advance(next.toBuilder()
-                .searchId(started.getId())
+                .searchId(started.getId()).retryIndex(0)
                 .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
                 .progressPercent(BigDecimal.ZERO)
                 .build());
@@ -72,32 +75,73 @@ public class DownloadStateMachine {
     public DownloadDecision afterSearchPoll(DownloadTask task, SearchState state,
                                             List<DownloadCandidate> selected, Instant now) {
         if (state != null && SlskdSearchState.isFailure(state.getState())) {
-            return new DownloadDecision.Terminal(DownloadStatus.FAILED,
-                    DownloadFailureCode.SEARCH_FAILED);
+            return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
         }
         if (state == null || !Boolean.TRUE.equals(state.getIsComplete())) {
             return task.isPastBudget(now, searchBudget)
-                    ? new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT)
+                    ? giveUpSearch(task, DownloadFailureCode.TIMED_OUT, now)
                     : new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
         }
-        if (selected == null || selected.isEmpty()) {
-            // A qualifier YouTube put in the title ("(Remix)", a leading "Artist - " the artist
-            // suffix repeats) can still find nothing on Soulseek where the bare title would, so the
-            // next cleaner wording is tried before giving up. withPhase rather than dueAt: each tier
-            // is a new search with its own search budget.
-            // This is the ONLY branch that advances a tier -- slskd failures, errored searches and
-            // timeouts fail exactly as before.
-            List<String> tiers = SearchQueryTiers.of(task.songName());
-            if (task.searchTier() + 1 < tiers.size()) {
-                return new DownloadDecision.Advance(task.withPhase(DownloadPhase.SEARCH_INIT, now)
-                        .toBuilder().searchTier(task.searchTier() + 1).searchId(null).build());
-            }
-            return new DownloadDecision.Terminal(DownloadStatus.FAILED,
-                    DownloadFailureCode.NO_CANDIDATES);
+        List<DownloadCandidate> chosen = selected == null ? List.of() : selected;
+        // The best list seen so far travels on the row (see better): when the artist is a phrase
+        // Soulseek blocks, the wordings that name it come back empty, and a few files beat none.
+        List<DownloadCandidate> kept = better(chosen, task.candidates());
+        // The first wording is the title alone (the owner's call, 28-09-2026). It is enough only with a
+        // handful of files in the requested version with the artist confirmed: a common title fills
+        // slskd's response cap with other artists' songs, and three studio copies must not settle a
+        // request for the live take before the artist wording has run. The later wordings name the
+        // artist and are enough with one confirmed file. withPhase rather than dueAt: each tier is a
+        // new search with its own search budget. This is the ONLY branch that advances a tier.
+        boolean anotherWording = task.searchTier() + 1 < SearchQueryTiers.of(task.songName()).size();
+        boolean enough = task.searchTier() == 0
+                ? countOf(chosen, TrackMatchingService.Match.EXACT) >= firstWordingMinCandidates
+                : hasConfirmed(chosen);
+        if (!enough && anotherWording) {
+            return new DownloadDecision.Advance(task.withPhase(DownloadPhase.SEARCH_INIT, now)
+                    .toBuilder().searchTier(task.searchTier() + 1).searchId(null).candidates(kept).build());
         }
+        if (kept.isEmpty()) {
+            return new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES);
+        }
+        return startDownload(task, kept, now);
+    }
+
+    /**
+     * The list worth carrying to the next wording: one with the artist confirmed beats one of unverified
+     * files, any list beats none, and of two equals the newer wins (it came from the more specific wording).
+     */
+    private static List<DownloadCandidate> better(List<DownloadCandidate> newer, List<DownloadCandidate> older) {
+        return rank(newer) >= rank(older) ? newer : older;
+    }
+
+    private static int rank(List<DownloadCandidate> list) {
+        return list.isEmpty() ? 0 : hasConfirmed(list) ? 2 : 1;
+    }
+
+    /** Any file whose artist the picker could confirm (rows from before grades existed count as confirmed). */
+    private static boolean hasConfirmed(List<DownloadCandidate> list) {
+        return list.stream().anyMatch(c -> !TrackMatchingService.Match.UNVERIFIED.name().equals(c.grade()));
+    }
+
+    private static long countOf(List<DownloadCandidate> list, TrackMatchingService.Match grade) {
+        return list.stream().filter(c -> grade.name().equals(c.grade())).count();
+    }
+
+    /**
+     * A search that cannot be started, errors or never finishes: the files an earlier wording kept are
+     * downloaded rather than failing the song -- a few files beat none -- and with none kept the song
+     * fails with the given reason, exactly as before files were carried between wordings.
+     */
+    private DownloadDecision giveUpSearch(DownloadTask task, DownloadFailureCode reason, Instant now) {
+        return task.candidates().isEmpty()
+                ? new DownloadDecision.Terminal(DownloadStatus.FAILED, reason)
+                : startDownload(task, task.candidates(), now);
+    }
+
+    private DownloadDecision startDownload(DownloadTask task, List<DownloadCandidate> candidates, Instant now) {
         DownloadTask next = task.withPhase(DownloadPhase.DOWNLOAD_INIT, now);
         return new DownloadDecision.Advance(next.toBuilder()
-                .candidates(selected).candidateIndex(pickCandidate(selected, 0, now)).retryIndex(0)
+                .candidates(candidates).candidateIndex(pickCandidate(candidates, 0, now)).retryIndex(0)
                 .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
                 .progressPercent(BigDecimal.ZERO)
                 .build());
@@ -192,21 +236,43 @@ public class DownloadStateMachine {
 
     /**
      * A failed slskd call during search is retried in place -- same phase, no candidate/progress
-     * reset -- rather than failing the download outright, as long as the {@code searchBudget} isn't
-     * already spent. This covers both a dropped/timed-out connection ({@link WebClientRequestException})
-     * and slskd itself erroring the call ({@link WebClientResponseException}, 4xx or 5xx alike: a
-     * rejected search is retried the same as a dropped one, on the theory that a transient rejection
-     * recovering is worth more than a genuinely bad one failing sooner -- the budget already bounds
-     * the cost either way). Anything else is an error shape this code doesn't recognise, so it fails
-     * fast rather than guess.
+     * reset -- rather than failing the download outright. In {@code SEARCH_POLL} a search is running
+     * and the {@code searchBudget} measures it, so retries stop once the budget is spent. In
+     * {@code SEARCH_INIT} no search exists yet, and the budget's clock started when the row was
+     * created: a song in a large playlist waits minutes for one of the two search slots before its
+     * first {@code POST /searches} (28-09-2026: four songs failed on their very first, unretried
+     * attempt, 7-21 minutes after creation). So a failed start is retried while the budget lasts, as
+     * before, and at least {@code retryLimit} times whatever the wall clock says, {@code
+     * searchPollInterval} apart, with the reason kept on the row ({@code lastError}) for the next
+     * post-mortem to read. Both cover a dropped or timed-out connection ({@link
+     * WebClientRequestException}) and slskd itself erroring the call ({@link
+     * WebClientResponseException}, 4xx or 5xx alike: a rejected search is retried the same as a
+     * dropped one, on the theory that a transient rejection recovering is worth more than a genuinely
+     * bad one failing sooner -- the bounds already limit the cost either way). Anything else is an
+     * error shape this code doesn't recognise, so it gives up at once rather than guess.
      */
     private DownloadDecision onSearchCallFailed(DownloadTask task, Throwable error, Instant now) {
         boolean retryable = error instanceof WebClientRequestException
                 || error instanceof WebClientResponseException;
-        if (retryable && !task.isPastBudget(now, searchBudget)) {
+        if (!retryable) {
+            return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
+        }
+        if (task.phase() == DownloadPhase.SEARCH_INIT) {
+            if (task.retryIndex() < retryLimit || !task.isPastBudget(now, searchBudget)) {
+                return new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)).toBuilder()
+                        .retryIndex(task.retryIndex() + 1).lastError(describe(error)).build());
+            }
+            return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
+        }
+        if (!task.isPastBudget(now, searchBudget)) {
             return new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
         }
-        return new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.SEARCH_FAILED);
+        return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
+    }
+
+    /** The exception's message, or its class name when it carries none (a Netty read timeout does not). */
+    private static String describe(Throwable error) {
+        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
     private DownloadDecision retryOrAdvanceCandidate(DownloadTask task, Instant now) {

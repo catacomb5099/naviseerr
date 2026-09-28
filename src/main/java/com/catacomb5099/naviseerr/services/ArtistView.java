@@ -26,11 +26,13 @@ import java.util.Objects;
  *                       per-video thumbnail, since the adapter's artist answer carries no artwork for them.
  * @param albums         {@code artists} is {@code [this artist's name]}: the shelf lists only the
  *                       artist's own releases and the adapter gives no per-album artists.
- * @param playlists      NOT "playlists featuring this artist" — YouTube Music exposes no such list.
- *                       A playlist search for the artist's name, which is the closest thing there is.
- * @param similarArtists {@code iconUrl} is {@code ""} for now: ytmusicapi returns each related artist's
- *                       thumbnail in the same answer, but the adapter's RelatedArtist model drops it.
- *                       Follow-up: expose it in the adapter, then fill it here — no extra calls.
+ * @param playlists      YouTube Music's own featured playlists that its search links to this artist,
+ *                       minus those titled after the artist or a related artist, kept only when the
+ *                       playlist's track list (its first 100 tracks) credits the artist by name.
+ *                       YouTube Music exposes no exact "featured on" list, so this is the closest
+ *                       thing there is.
+ * @param similarArtists {@code iconUrl} is the related artist's thumbnail from the same adapter answer
+ *                       (no extra call); {@code ""} when the adapter sends none.
  */
 public record ArtistView(String id, String name, String iconURL, String description, String subscribers,
                          List<Track> topSongs, List<Album> albums, List<Album> singles,
@@ -50,7 +52,8 @@ public record ArtistView(String id, String name, String iconURL, String descript
         List<Artist> similar = orEmpty(artist.getRelated()).stream()
                 .filter(related -> related.getBrowseId() != null)
                 .limit(MAX)
-                .map(related -> new Artist(related.getBrowseId(), "", orEmpty(related.getTitle())))
+                .map(related -> new Artist(related.getBrowseId(), orEmpty(related.getThumbnailUrl()),
+                        orEmpty(related.getTitle())))
                 .toList();
         return new ArtistView(requestedId, orEmpty(artist.getName()), orEmpty(artist.getThumbnailUrl()),
                 artist.getDescription(), artist.getSubscribers(), topSongs,

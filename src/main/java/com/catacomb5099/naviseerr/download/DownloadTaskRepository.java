@@ -104,17 +104,22 @@ public class DownloadTaskRepository {
      * lookup does.
      */
     private static final String UPSERT_MEDIA_SQL = """
-            INSERT INTO media_items (youtube_id, title, artists, image_url, duration_seconds, track_count)
-            SELECT x."youtubeId", x.title, COALESCE(x.artists, '{}'), x."imageUrl",
-                   x."durationSeconds", x."trackCount"
+            INSERT INTO media_items (youtube_id, title, artists, artist_ids, image_url, duration_seconds,
+                                     track_count)
+            SELECT x."youtubeId", x.title, COALESCE(x.artists, '{}'), COALESCE(x."artistIds", '{}'),
+                   x."imageUrl", x."durationSeconds", x."trackCount"
               FROM jsonb_to_recordset(:items::jsonb)
-                   AS x("youtubeId" text, title text, artists text[], "imageUrl" text,
-                        "durationSeconds" int, "trackCount" int)
+                   AS x("youtubeId" text, title text, artists text[], "artistIds" text[],
+                        "imageUrl" text, "durationSeconds" int, "trackCount" int)
              WHERE x."youtubeId" IS NOT NULL
             ON CONFLICT (youtube_id) DO UPDATE
                SET title            = COALESCE(EXCLUDED.title, media_items.title),
                    artists          = CASE WHEN EXCLUDED.artists = '{}' THEN media_items.artists
                                            ELSE EXCLUDED.artists END,
+                   -- Keyed on the NAMES, not the ids: ids belong with the names they came with, so
+                   -- they follow them -- kept together, replaced together.
+                   artist_ids       = CASE WHEN EXCLUDED.artists = '{}' THEN media_items.artist_ids
+                                           ELSE EXCLUDED.artist_ids END,
                    image_url        = COALESCE(EXCLUDED.image_url, media_items.image_url),
                    duration_seconds = COALESCE(EXCLUDED.duration_seconds, media_items.duration_seconds),
                    track_count      = COALESCE(EXCLUDED.track_count, media_items.track_count),

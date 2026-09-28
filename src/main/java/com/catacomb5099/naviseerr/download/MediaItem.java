@@ -12,12 +12,15 @@ import java.util.List;
  * <p>Serialised whole as JSON for {@code DownloadTaskRepository.UPSERT_MEDIA_SQL}, so the component
  * names here ARE the column names that statement's {@code jsonb_to_recordset} declares. Rename one,
  * rename the other.
+ *
+ * @param artistIds the channel id behind each {@link #artists} entry, {@code ""} where unknown;
+ *                  index-aligned, so the two are written and replaced together.
  */
-public record MediaItem(String youtubeId, String title, List<String> artists, String imageUrl,
-                        Integer durationSeconds, Integer trackCount) {
+public record MediaItem(String youtubeId, String title, List<String> artists, List<String> artistIds,
+                        String imageUrl, Integer durationSeconds, Integer trackCount) {
 
     public static MediaItem of(YoutubeSongInfo song) {
-        return new MediaItem(song.id(), song.name(), song.authorNames(), song.imageUrl(),
-                song.durationSeconds(), null);
+        return new MediaItem(song.id(), song.name(), song.authorNames(), song.authorIds(),
+                song.imageUrl(), song.durationSeconds(), null);
     }
 }
