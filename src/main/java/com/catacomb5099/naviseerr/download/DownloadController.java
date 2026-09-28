@@ -142,14 +142,34 @@ public class DownloadController {
                 .defaultIfEmpty(ResponseEntity.notFound().build());
     }
 
+    /**
+     * The history table, optionally narrowed to one kind of download. The filter lives here and not
+     * in the client because the page count has to describe the narrowed list: filtering a page after
+     * it arrived left "Page 1 of 7" and the arrows describing the unfiltered history.
+     *
+     * <p>{@code type=PLAYLIST} also matches curated editions. To the user a suggested playlist is a
+     * playlist, and the client's pill already folds the two; an unknown value is a 400 from Spring
+     * before this runs.
+     */
     @GetMapping("/downloads/all")
     Mono<ResponseEntity<AllDownloadsResponse>> allDownloads(
             @RequestParam(defaultValue = "20") Integer pageSize,
-            @RequestParam(defaultValue = "1") Integer pageNumber) {
+            @RequestParam(defaultValue = "1") Integer pageNumber,
+            @RequestParam(required = false) DownloadType type) {
         if (pageSize < 1 || pageNumber < 1) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return activeDownloadRepository.findAll(pageSize, pageNumber)
+        return activeDownloadRepository.findAll(pageSize, pageNumber, typesFor(type))
                 .map(ResponseEntity::ok);
+    }
+
+    /** Null (no filter) becomes the empty list the repository reads as "everything". */
+    static List<DownloadType> typesFor(DownloadType type) {
+        if (type == null) {
+            return List.of();
+        }
+        return type == DownloadType.PLAYLIST
+                ? List.of(DownloadType.PLAYLIST, DownloadType.CURATED)
+                : List.of(type);
     }
 }

@@ -377,6 +377,57 @@ class ActiveDownloadRepositoryIT {
         assertEquals(DownloadStage.SUCCEEDED, page.downloads().getFirst().stage());
     }
 
+    // The type filter has to narrow the list BEFORE the window function counts it. Filtering the
+    // page after it arrived is what the client used to do, and why its pager kept saying
+    // "Page 1 of 7" over a list of two songs.
+
+    @Test
+    void findAll_byType_pagesOverThatTypeOnly() {
+        for (int i = 0; i < 3; i++) {
+            insertDownload("PENDING", "SONG");
+        }
+        insertDownload("PENDING", "ALBUM");
+        insertDownload("PENDING", "PLAYLIST");
+
+        AllDownloadsResponse first = activeDownloadRepository.findAll(2, 1, List.of(DownloadType.SONG)).block();
+        AllDownloadsResponse beyond = activeDownloadRepository.findAll(2, 5, List.of(DownloadType.SONG)).block();
+
+        assertEquals(2, first.downloads().size());
+        assertEquals(2, first.totalPages(), "3 songs at 2 per page, the album and playlist not counted");
+        assertTrue(first.downloads().stream().allMatch(d -> d.downloadType() == DownloadType.SONG));
+        assertEquals(0, beyond.totalPages(), "past the end of the filtered list is still the go-back signal");
+    }
+
+    @Test
+    void findAll_byTypes_matchesEveryListedType_soPlaylistCanIncludeCurated() {
+        insertDownload("PENDING", "PLAYLIST");
+        insertDownload("PENDING", "CURATED");
+        insertDownload("PENDING", "SONG");
+        insertDownload("PENDING", "ALBUM");
+
+        AllDownloadsResponse page = activeDownloadRepository
+                .findAll(10, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED)).block();
+
+        assertEquals(Set.of(DownloadType.PLAYLIST, DownloadType.CURATED),
+                page.downloads().stream().map(ActiveDownloadView::downloadType).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(1, page.totalPages());
+    }
+
+    @Test
+    void findAll_withNoTypes_isTheUnfilteredHistory() {
+        insertDownload("PENDING", "SONG");
+        insertDownload("PENDING", "ALBUM");
+        insertDownload("PENDING", "CURATED");
+
+        AllDownloadsResponse all = activeDownloadRepository.findAll(10, 1).block();
+        AllDownloadsResponse empty = activeDownloadRepository.findAll(10, 1, List.of()).block();
+        AllDownloadsResponse nul = activeDownloadRepository.findAll(10, 1, null).block();
+
+        assertEquals(3, all.downloads().size());
+        assertEquals(all.downloads(), empty.downloads());
+        assertEquals(all.downloads(), nul.downloads());
+    }
+
     // ---- metadata: title, artists, artwork come from media_items ------------------------------
 
     @Test
