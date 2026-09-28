@@ -13,6 +13,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -44,13 +45,14 @@ class DownloadControllerTest {
 
     private static ActiveDownloadView view() {
         return new ActiveDownloadView(UUID.randomUUID(), "vid-1", DownloadType.SONG, "song",
-                List.of("artist"), "https://img/1.jpg", DownloadStage.DOWNLOADING,
+                List.of("artist", "nobody"), Arrays.asList("UC-artist", null), "https://img/1.jpg",
+                DownloadStage.DOWNLOADING,
                 new BigDecimal("43.00"), 1, 0, 0, NOW, NOW, NOW, null, null);
     }
 
     private static DownloadSongView song() {
         return new DownloadSongView(UUID.randomUUID(), "vid-1", 1, "song", List.of("artist"),
-                "https://img/1.jpg", 200, DownloadStage.DOWNLOADING, new BigDecimal("43.00"), null,
+                List.of("UC-artist"), "https://img/1.jpg", 200, DownloadStage.DOWNLOADING, new BigDecimal("43.00"), null,
                 NOW, NOW, null, 3, 0, 0, "alice", "music/alice/song.flac", null);
     }
 
@@ -68,6 +70,25 @@ class DownloadControllerTest {
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(card, response.getBody().download());
         assertEquals(List.of(song), response.getBody().songs());
+    }
+
+    @Test
+    void downloadDetail_putsOneArtistIdPerName_onTheWire_nullWhereThereIsNone() {
+        ActiveDownloadView card = view();
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+        when(activeDownloadRepository.findSongs(card.downloadId())).thenReturn(Flux.just(song()));
+
+        // Through the JSON layer on purpose: the key name and the kept null ARE the client contract.
+        WebTestClient.bindToController(controller).build()
+                .get().uri("/downloads/" + card.downloadId())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.download.artists.length()").isEqualTo(2)
+                .jsonPath("$.download.artistIds.length()").isEqualTo(2)
+                .jsonPath("$.download.artistIds[0]").isEqualTo("UC-artist")
+                .jsonPath("$.download.artistIds[1]").isEmpty()
+                .jsonPath("$.songs[0].artistIds[0]").isEqualTo("UC-artist");
     }
 
     @Test

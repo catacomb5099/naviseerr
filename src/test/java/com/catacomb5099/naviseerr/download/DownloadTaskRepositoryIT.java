@@ -145,26 +145,47 @@ class DownloadTaskRepositoryIT {
     @Test
     void upsertMedia_roundTripsEveryFieldIncludingTheArtistArray() {
         repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall", List.of("Oasis", "Noel"),
-                "https://img/1.jpg", 259, null))).block();
+                List.of("UC-oasis", ""), "https://img/1.jpg", 259, null))).block();
 
         assertEquals("Wonderwall", mediaField("v1", "title"));
         assertEquals("https://img/1.jpg", mediaField("v1", "image_url"));
         assertEquals(List.of("Oasis", "Noel"), mediaArtists("v1"));
+        // Stored as given, '' included: the array has to stay the same length as the names.
+        assertEquals(List.of("UC-oasis", ""), mediaArtistIds("v1"));
     }
 
     @Test
     void upsertMedia_refreshesARow_butNeverReplacesAValueWithNull() {
         repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall", List.of("Oasis"),
-                "https://img/1.jpg", 259, null))).block();
+                List.of("UC-oasis"), "https://img/1.jpg", 259, null))).block();
 
         // A playlist listing the same track knows its title but not its artwork or length.
         repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall (Remastered)", List.of(),
-                null, null, null))).block();
+                List.of(), null, null, null))).block();
 
         assertEquals("Wonderwall (Remastered)", mediaField("v1", "title"));
         assertEquals("https://img/1.jpg", mediaField("v1", "image_url"),
                 "a less complete answer must not blank a picture we already had");
         assertEquals(List.of("Oasis"), mediaArtists("v1"));
+        assertEquals(List.of("UC-oasis"), mediaArtistIds("v1"), "no names, so the ids stay with the old ones");
+    }
+
+    @Test
+    void upsertMedia_replacesTheIdsTogetherWithTheNames() {
+        repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall", List.of("Oasis"),
+                List.of("UC-oasis"), null, null, null))).block();
+
+        // A fuller answer names two artists: its ids come along, even where one of them is unknown.
+        repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall", List.of("Oasis", "Noel"),
+                List.of("UC-oasis", ""), null, null, null))).block();
+        assertEquals(List.of("UC-oasis", ""), mediaArtistIds("v1"));
+
+        // An answer that names artists but knows no ids replaces them with nothing, rather than
+        // leaving ids that belonged to a different set of names lined up against the new ones.
+        repository.upsertMedia(List.of(new MediaItem("v1", "Wonderwall", List.of("Noel Gallagher"),
+                List.of(), null, null, null))).block();
+        assertEquals(List.of("Noel Gallagher"), mediaArtists("v1"));
+        assertEquals(List.of(), mediaArtistIds("v1"));
     }
 
     @Test
@@ -172,8 +193,8 @@ class DownloadTaskRepositoryIT {
         // A playlist can list one track twice; ON CONFLICT DO UPDATE refuses to touch a row twice
         // in one statement, so the repository has to fold them before binding.
         assertDoesNotThrow(() -> repository.upsertMedia(List.of(
-                new MediaItem("v1", "Once", List.of(), null, null, null),
-                new MediaItem("v1", "Twice", List.of(), null, null, null))).block());
+                new MediaItem("v1", "Once", List.of(), List.of(), null, null, null),
+                new MediaItem("v1", "Twice", List.of(), List.of(), null, null, null))).block());
 
         assertEquals("Once", mediaField("v1", "title"));
     }
@@ -363,7 +384,7 @@ class DownloadTaskRepositoryIT {
     }
 
     private void media(String youtubeId, String title, String... artists) {
-        repository.upsertMedia(List.of(new MediaItem(youtubeId, title, List.of(artists), null, null, null))).block();
+        repository.upsertMedia(List.of(new MediaItem(youtubeId, title, List.of(artists), List.of(), null, null, null))).block();
     }
 
     @Test
@@ -473,7 +494,7 @@ class DownloadTaskRepositoryIT {
     void playlistEntries_listsFiledSongsInTrackOrder_withTheirNamesAndLength() {
         UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
         media("s2", "Whip It", "Devo");
-        repository.upsertMedia(List.of(new MediaItem("s1", "Debaser", List.of("Pixies"), null, 170, null))).block();
+        repository.upsertMedia(List.of(new MediaItem("s1", "Debaser", List.of("Pixies"), List.of(), null, 170, null))).block();
         UUID second = succeededSong(playlist, "s2", "x\\b.mp3", NOW);
         UUID first = succeededSong(playlist, "s1", "x\\a.flac", NOW);
         UUID unfiled = succeededSong(playlist, "s3", "x\\c.flac", NOW);
@@ -762,6 +783,12 @@ class DownloadTaskRepositoryIT {
         return template.getDatabaseClient()
                 .sql("SELECT artists FROM media_items WHERE youtube_id = :id").bind("id", youtubeId)
                 .map((row, meta) -> List.of(row.get("artists", String[].class))).one().block();
+    }
+
+    private List<String> mediaArtistIds(String youtubeId) {
+        return template.getDatabaseClient()
+                .sql("SELECT artist_ids FROM media_items WHERE youtube_id = :id").bind("id", youtubeId)
+                .map((row, meta) -> List.of(row.get("artist_ids", String[].class))).one().block();
     }
 
     private String phaseOf(UUID id) {

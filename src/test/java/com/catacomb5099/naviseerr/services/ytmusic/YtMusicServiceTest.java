@@ -377,7 +377,8 @@ class YtMusicServiceTest {
                  "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 1,
                  "durationSeconds": 322, "views": "28M plays"},
                 {"videoId": "v2", "title": "Shakermaker",
-                 "artists": [{"name": "Oasis", "channelId": "UC1"}], "trackNumber": 2}
+                 "artists": [{"name": "Oasis", "channelId": "UC1"}, {"name": "Bonehead", "channelId": null}],
+                 "trackNumber": 2}
               ]
             }
             """;
@@ -413,6 +414,8 @@ class YtMusicServiceTest {
                     // The whole point of the flattening: callers never have to know that a song
                     // response says `author` where a collection's tracks say `artists`.
                     assertEquals(List.of("Oasis"), song.authorNames());
+                    // The uploader's channel, which is the artist page the client links the name to.
+                    assertEquals(List.of("UCmMUZbaYdNH0bEd1PAlAqsA"), song.authorIds());
                     assertEquals("https://example.com/song.jpg", song.imageUrl());
                     assertEquals(259, song.durationSeconds(),
                             "the adapter calls it lengthSeconds on a song; the pipeline has one name");
@@ -442,7 +445,10 @@ class YtMusicServiceTest {
                 .setBody("{\"videoId\":\"v1\",\"title\":\"Untitled\",\"author\":null}"));
 
         StepVerifier.create(service.getSongInfo("v1"))
-                .assertNext(song -> assertEquals(List.of(), song.authorNames()))
+                .assertNext(song -> {
+                    assertEquals(List.of(), song.authorNames());
+                    assertEquals(List.of(), song.authorIds());
+                })
                 .verifyComplete();
     }
 
@@ -457,11 +463,16 @@ class YtMusicServiceTest {
                     assertEquals("Definitely Maybe", album.name());
                     assertEquals("1994", album.year());
                     assertEquals(List.of("Oasis"), album.authorNames());
+                    assertEquals(List.of("UCmMUZbaYdNH0bEd1PAlAqsA"), album.authorIds());
                     // One task row per entry here, so a dropped track is a song the user asked for
                     // and never gets.
                     assertEquals(List.of("v1", "v2"),
                             album.songs().stream().map(s -> s.id()).toList());
                     assertEquals("Rock 'n' Roll Star", album.songs().getFirst().name());
+                    assertEquals(List.of("UC1"), album.songs().getFirst().authorIds());
+                    // A name with no channel keeps its slot as "", so ids[i] is always names[i].
+                    assertEquals(List.of("Oasis", "Bonehead"), album.songs().get(1).authorNames());
+                    assertEquals(List.of("UC1", ""), album.songs().get(1).authorIds());
                     assertEquals("https://example.com/album.jpg", album.imageUrl());
                     // An album's tracks ARE the album: they inherit its cover rather than falling
                     // back to a letterboxed video frame.
@@ -488,6 +499,8 @@ class YtMusicServiceTest {
                     assertEquals("PL123", playlist.id());
                     assertEquals("Britpop Essentials", playlist.name());
                     assertEquals(List.of("YouTube Music"), playlist.authorNames());
+                    assertEquals(List.of("UC2"), playlist.authorIds());
+                    assertEquals(List.of("UC1"), playlist.songs().getFirst().authorIds());
                     assertNull(playlist.year(), "only albums have a year");
                     assertEquals("https://example.com/playlist.jpg", playlist.imageUrl());
                     // A playlist's tracks come from anywhere, so the playlist's cover would be the

@@ -12,6 +12,7 @@ import org.springframework.test.context.TestPropertySource;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -55,9 +56,10 @@ class ActiveDownloadRepositoryIT {
     }
 
     /** What the runner writes before the task rows: the download's own name and picture. */
-    private void describe(UUID downloadId, String title, List<String> artists, String imageUrl) {
+    private void describe(UUID downloadId, String title, List<String> artists, List<String> artistIds,
+                          String imageUrl) {
         taskRepository.upsertMedia(List.of(
-                new MediaItem("yt-" + downloadId, title, artists, imageUrl, null, null))).block();
+                new MediaItem("yt-" + downloadId, title, artists, artistIds, imageUrl, null, null))).block();
     }
 
     /**
@@ -66,7 +68,7 @@ class ActiveDownloadRepositoryIT {
      */
     private void admit(UUID downloadId, String... songNames) {
         taskRepository.upsertMedia(java.util.Arrays.stream(songNames)
-                .map(name -> new MediaItem("yt-" + name, name, List.of("The Band"), null, 180, null))
+                .map(name -> new MediaItem("yt-" + name, name, List.of("The Band"), List.of(""), null, 180, null))
                 .toList()).block();
         taskRepository.createTasks(downloadId,
                 java.util.Arrays.stream(songNames)
@@ -432,13 +434,14 @@ class ActiveDownloadRepositoryIT {
     @Test
     void findActive_reportsTitleArtistsAndArtworkFromTheMediaRow() {
         UUID album = insertDownload("PENDING", "ALBUM");
-        describe(album, "Definitely Maybe", List.of("Oasis"), "https://img/dm.jpg");
+        describe(album, "Definitely Maybe", List.of("Oasis"), List.of("UC-oasis"), "https://img/dm.jpg");
         admit(album, "a", "b");
 
         ActiveDownloadView view = active().getFirst();
 
         assertEquals("Definitely Maybe", view.title());
         assertEquals(List.of("Oasis"), view.artists());
+        assertEquals(List.of("UC-oasis"), view.artistIds(), "one id per name, so the name can be a link");
         assertEquals("https://img/dm.jpg", view.imageUrl());
         assertEquals(DownloadType.ALBUM, view.downloadType());
         assertEquals("yt-" + album, view.youtubeId());
@@ -454,6 +457,7 @@ class ActiveDownloadRepositoryIT {
 
         assertNull(view.title());
         assertEquals(List.of(), view.artists());
+        assertEquals(List.of(), view.artistIds());
         assertEquals(0, view.songCount(), "not yet known");
     }
 
@@ -520,6 +524,9 @@ class ActiveDownloadRepositoryIT {
         assertEquals(DownloadStage.DOWNLOADING, alpha.stage());
         assertEquals(0, alpha.progressPercent().compareTo(new BigDecimal("40.00")));
         assertEquals(List.of("The Band"), alpha.artists());
+        // Stored as '' (a name YouTube gave no page for), reported as null: still one entry per
+        // name, so the client can index the two lists together.
+        assertEquals(Collections.singletonList(null), alpha.artistIds());
         assertEquals(180, alpha.durationSeconds());
         assertEquals("yt-alpha", alpha.youtubeId());
         assertEquals(DownloadStage.STARTING, songs.get(0).stage());

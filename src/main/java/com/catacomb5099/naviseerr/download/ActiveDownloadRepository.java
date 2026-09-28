@@ -81,7 +81,7 @@ public class ActiveDownloadRepository {
      */
     private static final String PROJECTION = """
             d.download_id, d.youtube_id, d.download_type, d.status, d.created_at, d.finished_at,
-                   m.title, m.artists, m.image_url,
+                   m.title, m.artists, m.artist_ids, m.image_url,
                    t.phase, t.progress_percent,
                    COALESCE(d.failure_reason, t.failure_reason) AS failure_reason,
                    COALESCE(t.song_count, 0)                    AS song_count,
@@ -198,7 +198,7 @@ public class ActiveDownloadRepository {
      * JSON in Java, since it is the only thing this view wants from that column.
      */
     private static final String SONGS_SQL = """
-            SELECT t.task_id, t.youtube_id, t.position, m.title, m.artists, m.image_url,
+            SELECT t.task_id, t.youtube_id, t.position, m.title, m.artists, m.artist_ids, m.image_url,
                    m.duration_seconds, t.phase, t.progress_percent, t.failure_reason,
                    t.phase_entered_at, t.updated_at, t.finished_at,
                    jsonb_array_length(t.candidates::jsonb) AS candidate_count,
@@ -283,6 +283,7 @@ public class ActiveDownloadRepository {
                 DownloadType.valueOf(row.get("download_type", String.class)),
                 row.get("title", String.class),
                 artists(row),
+                artistIds(row),
                 row.get("image_url", String.class),
                 toStage(status, row.get("phase", String.class)),
                 row.get("progress_percent", BigDecimal.class),
@@ -303,6 +304,7 @@ public class ActiveDownloadRepository {
                 row.get("position", Integer.class),
                 row.get("title", String.class),
                 artists(row),
+                artistIds(row),
                 row.get("image_url", String.class),
                 row.get("duration_seconds", Integer.class),
                 toSongStage(row.get("phase", String.class)),
@@ -323,6 +325,16 @@ public class ActiveDownloadRepository {
     private static List<String> artists(Row row) {
         String[] artists = row.get("artists", String[].class);
         return artists == null ? List.of() : List.of(artists);
+    }
+
+    /**
+     * The stored '' (YouTube named an artist but gave no channel), or a hand-edited NULL, goes on
+     * the wire as null, so the client tests one thing -- "is there an id here" -- rather than two.
+     */
+    private static List<String> artistIds(Row row) {
+        String[] ids = row.get("artist_ids", String[].class);
+        return ids == null ? List.of()
+                : java.util.Arrays.stream(ids).map(id -> id == null || id.isEmpty() ? null : id).toList();
     }
 
     /**
