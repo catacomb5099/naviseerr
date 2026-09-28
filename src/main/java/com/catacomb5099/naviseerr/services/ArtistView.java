@@ -26,8 +26,9 @@ import java.util.Objects;
  *                       per-video thumbnail, since the adapter's artist answer carries no artwork for them.
  * @param albums         {@code artists} is {@code [this artist's name]}: the shelf lists only the
  *                       artist's own releases and the adapter gives no per-album artists.
- * @param playlists      NOT "playlists featuring this artist" — YouTube Music exposes no such list.
- *                       A playlist search for the artist's name, which is the closest thing there is.
+ * @param playlists      YouTube Music's own featured playlists that its search links to this artist,
+ *                       minus those titled after the artist or a related artist; YouTube Music exposes
+ *                       no exact "featured on" list, so this is the closest thing there is.
  * @param similarArtists {@code iconUrl} is the related artist's thumbnail from the same adapter answer
  *                       (no extra call); {@code ""} when the adapter sends none.
  */

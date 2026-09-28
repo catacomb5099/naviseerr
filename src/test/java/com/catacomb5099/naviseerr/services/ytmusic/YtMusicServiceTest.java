@@ -204,6 +204,19 @@ class YtMusicServiceTest {
     }
 
     @Test
+    void getResults_withACallerChosenLimit_passesItThrough_andHitsTheFeaturedPlaylistsRoute() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"query\":\"Oasis\",\"type\":\"featured_playlists\",\"count\":0,\"items\":[]}"));
+
+        StepVerifier.create(service.getResults("Oasis", YtMusicSearchType.FEATURED_PLAYLISTS, 20))
+                .assertNext(response -> assertTrue(response.getPlaylists().isEmpty()))
+                .verifyComplete();
+
+        assertEquals("/v1/search/featured_playlists?q=Oasis&limit=20", server.takeRequest().getPath());
+    }
+
+    @Test
     void getResults_generalSearch_issuesExactlyOneUnfilteredRequest() throws InterruptedException {
         server.enqueue(new MockResponse().setResponseCode(200)
                 .addHeader("Content-Type", "application/json")

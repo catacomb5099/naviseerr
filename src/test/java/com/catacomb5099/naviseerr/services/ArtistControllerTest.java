@@ -17,7 +17,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.stream.IntStream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -44,16 +46,23 @@ class ArtistControllerTest {
     }
 
     private static SearchResponse playlists(int count) {
-        List<Playlist> playlists = IntStream.range(0, count)
-                .mapToObj(i -> new Playlist("PL" + i, "https://img/p" + i + ".jpg", "Playlist " + i, List.of("Someone"), 20))
-                .toList();
-        return new SearchResponse(List.of(), List.of(), List.of(), playlists);
+        return new SearchResponse(List.of(), List.of(), List.of(), IntStream.range(0, count)
+                .mapToObj(i -> playlist("PL" + i, "Playlist " + i))
+                .toList());
+    }
+
+    private static Playlist playlist(String id, String title) {
+        return new Playlist(id, "https://img/" + id + ".jpg", title, List.of("YouTube Music"), 20);
+    }
+
+    private static List<String> ids(List<Playlist> playlists) {
+        return playlists.stream().map(Playlist::getId).toList();
     }
 
     @Test
     void realAdapterShape_mapsOntoTheSearchDtos_withTheContractsKeyNames() {
         when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
-        when(ytMusicService.getResults("Pixies", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlists(12)));
+        when(ytMusicService.getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20)).thenReturn(Mono.just(playlists(12)));
 
         client.get().uri("/artists/{id}", PIXIES).exchange()
                 .expectStatus().isOk()
@@ -81,7 +90,7 @@ class ArtistControllerTest {
                 .jsonPath("$.albums[0].iconURL").value(url -> ((String) url).startsWith("https://yt3.googleusercontent.com/"))
                 .jsonPath("$.singles.length()").isEqualTo(1)
                 .jsonPath("$.singles[0].id").isEqualTo("MPREb_NdMCXhqvP6F")
-                // playlists: the search result, capped at 10
+                // playlists: the featured-playlist search, capped at 10
                 .jsonPath("$.playlists.length()").isEqualTo(10)
                 .jsonPath("$.playlists[0].id").isEqualTo("PL0")
                 .jsonPath("$.playlists[0].trackCount").isEqualTo(20)
@@ -94,13 +103,74 @@ class ArtistControllerTest {
                 .jsonPath("$.similarArtists[1].name").isEqualTo("Frank Black")
                 .jsonPath("$.similarArtists[1].iconUrl").isEqualTo("");
 
-        verify(ytMusicService).getResults("Pixies", YtMusicSearchType.PLAYLISTS);
+        verify(ytMusicService).getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20);
+    }
+
+    /**
+     * The real answer for Oasis is "Presenting Oasis" and "Oasis 2025 Setlist" next to "'70s Lite
+     * Hits" and "Presenting The Kooks" (a related act). The fixture's related artists are The
+     * Breeders and Frank Black.
+     */
+    @Test
+    void playlistsTitledAfterTheArtistOrARelatedArtist_areDropped_theRestKeepYouTubesOrder() {
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
+        when(ytMusicService.getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20)).thenReturn(Mono.just(
+                new SearchResponse(List.of(), List.of(), List.of(), List.of(
+                        playlist("own", "Presenting Pixies"),
+                        playlist("keep1", "'90s Alt Rock Anthems"),
+                        playlist("related", "The Breeders Essentials"),
+                        playlist("keep2", "Indie Sing-Alongs"),
+                        playlist("related2", "presenting frank black"),
+                        playlist("keep3", "College Rock Classics")))));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.playlists.length()").isEqualTo(3)
+                .jsonPath("$.playlists[0].id").isEqualTo("keep1")
+                .jsonPath("$.playlists[1].id").isEqualTo("keep2")
+                .jsonPath("$.playlists[2].id").isEqualTo("keep3");
+    }
+
+    @Test
+    void theShelfCapsAtTen_afterFiltering_notBefore() {
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
+        List<Playlist> twenty = new java.util.ArrayList<>();
+        IntStream.range(0, 5).forEach(i -> twenty.add(playlist("own" + i, "Pixies Mix " + i)));
+        IntStream.range(0, 15).forEach(i -> twenty.add(playlist("keep" + i, "Mixtape " + i)));
+        when(ytMusicService.getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20))
+                .thenReturn(Mono.just(new SearchResponse(List.of(), List.of(), List.of(), twenty)));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.playlists.length()").isEqualTo(10)
+                .jsonPath("$.playlists[0].id").isEqualTo("keep0")
+                .jsonPath("$.playlists[9].id").isEqualTo("keep9");
+    }
+
+    @Test
+    void titleMatching_ignoresCaseAccentsAndPunctuation_andSkipsNamesThatFoldToNothing() {
+        List<Playlist> result = ArtistController.withoutTitledAfter(List.of(
+                        playlist("accent", "BEYONCE: The Hits"),
+                        playlist("punct", "Best of AC/DC"),
+                        playlist("spaced", "A C D C Live"),
+                        playlist("keep", "Pop Party"),
+                        playlist("nullTitle", null)),
+                java.util.Arrays.asList("Beyoncé", "ACDC", "***", "", null));
+
+        assertEquals(List.of("keep", "nullTitle"), ids(result));
+    }
+
+    @Test
+    void withoutTitledAfter_nullPlaylists_isAnEmptyList() {
+        assertEquals(List.of(), ArtistController.withoutTitledAfter(null, List.of("Pixies")));
     }
 
     @Test
     void playlistSearchFailing_stillAnswersThePage_withAnEmptyShelf() {
         when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
-        when(ytMusicService.getResults(anyString(), any())).thenReturn(Mono.error(new YtMusicUnavailableException("search down")));
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.error(new YtMusicUnavailableException("search down")));
 
         client.get().uri("/artists/{id}", PIXIES).exchange()
                 .expectStatus().isOk()
@@ -128,7 +198,7 @@ class ArtistControllerTest {
                 .jsonPath("$.playlists").isEqualTo(List.of())
                 .jsonPath("$.similarArtists").isEqualTo(List.of());
 
-        verify(ytMusicService, never()).getResults(anyString(), any());
+        verify(ytMusicService, never()).getResults(anyString(), any(), anyInt());
     }
 
     @Test
@@ -139,7 +209,7 @@ class ArtistControllerTest {
         IntStream.range(0, 12).forEach(i -> songs.add(YtMusicDetailResponse.Track.builder().videoId("v" + i).title("Song " + i).build()));
         when(ytMusicService.getArtistInfo("UCmany")).thenReturn(Mono.just(YtMusicDetailResponse.Artist.builder()
                 .channelId("UCmany").name("Many").topSongs(songs).build()));
-        when(ytMusicService.getResults("Many", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlists(0)));
+        when(ytMusicService.getResults("Many", YtMusicSearchType.FEATURED_PLAYLISTS, 20)).thenReturn(Mono.just(playlists(0)));
 
         client.get().uri("/artists/UCmany").exchange()
                 .expectStatus().isOk()
@@ -154,7 +224,7 @@ class ArtistControllerTest {
         when(ytMusicService.getArtistInfo("nope")).thenReturn(Mono.error(new YtMusicBadRequestException("No artist found")));
 
         client.get().uri("/artists/nope").exchange().expectStatus().isNotFound();
-        verify(ytMusicService, never()).getResults(anyString(), any());
+        verify(ytMusicService, never()).getResults(anyString(), any(), anyInt());
     }
 
     @Test
