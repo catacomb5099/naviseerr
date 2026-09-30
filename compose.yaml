@@ -127,14 +127,27 @@ services:
       SPRING_CONFIG_IMPORT: optional:file:/config/naviseerr.properties
       CURATOR_URL: http://croissant:8010
       CURATOR_TOKEN: ${CURATOR_TOKEN:-}
-    ports:
-      - "${NAVISEERR_API_PORT:-8080}:8080"
+    # Not published: the web app below forwards /api to it. To call the API directly while debugging,
+    # add  services: {naviseerr: {ports: ["8080:8080"]}}  to compose.override.yaml (see slskd above).
     volumes:
       - config:/config:ro
       - downloads:/downloads
       - incomplete:/incomplete
       # Your music library: point Navidrome or Jellyfin at the same folder (LIBRARY_DIR in .env).
       - ${LIBRARY_DIR:-./library}:/library
+
+  # The web app, and the address you open: http://<this machine>:5056. It forwards /api to naviseerr.
+  # Built from GitHub: needs naviseerr-client's container change (its Dockerfile + Caddyfile) merged
+  # into move-fast-break-things first.
+  client:
+    build: https://github.com/catacomb5099/naviseerr-client.git#move-fast-break-things
+    restart: unless-stopped
+    depends_on:
+      naviseerr:
+        condition: service_started
+    ports:
+      # 5056, not 5055: Jellyseerr and Overseerr already use 5055.
+      - "${NAVISEERR_PORT:-5056}:80"
 
   # Builds the weekly "suggested playlists" editions (see application.yaml `curator:`). Opt-in:
   # `docker compose --profile curator up -d`, with CURATOR_TOKEN set in .env (the curator refuses to
