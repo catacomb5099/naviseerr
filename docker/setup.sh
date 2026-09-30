@@ -4,7 +4,8 @@
 #   1. gives the shared folders to PUID:PGID, the one user slskd and naviseerr both run as;
 #   2. checks the Soulseek username from .env (the one thing you must choose);
 #   3. generates the other secrets once and keeps them in /config/secrets.env;
-#   4. writes slskd's config (/slskd/slskd.yml) from .env and those secrets;
+#   4. writes slskd's config (/slskd/slskd.yml) from .env and those secrets, sharing the library
+#      unless SHARE_LIBRARY=false;
 #   5. hands naviseerr slskd's API key (/config/naviseerr.properties).
 set -eu
 
@@ -58,6 +59,16 @@ EOF
   exit 1
 fi
 
+# Checked, not guessed: sharing (or not) is your call, so a typo must not quietly decide it.
+case ${SHARE_LIBRARY:-true} in
+  true | True | TRUE) share=true ;;
+  false | False | FALSE) share=false ;;
+  *)
+    echo "naviseerr setup: SHARE_LIBRARY in .env must be true or false, not '$SHARE_LIBRARY'." >&2
+    exit 1
+    ;;
+esac
+
 # 3. Letters and digits only: slskd has been seen to reject passwords with some punctuation.
 secrets=/config/secrets.env
 random() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
@@ -94,7 +105,8 @@ password=${SOULSEEK_PASSWORD:-$soulseek_password}
 # 4. YAML single quotes take everything literally; a quote inside is written twice.
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 
-write /slskd/slskd.yml <<EOF
+{
+  cat <<EOF
 # Written by naviseerr's setup on every start from .env; edits are overwritten.
 soulseek:
   username: $(q "$name")
@@ -113,6 +125,20 @@ web:
         key: $(q "$api_key")
         role: readwrite
 EOF
+  # /music is the library, mounted read-only into slskd.
+  if [ "$share" = true ]; then
+    cat <<'EOF'
+shares:
+  directories:
+    - '[Music]/music'
+  filters:
+    - '\.m3u8?$'   # playlists
+    - '\.partial$' # naviseerr's half-copied staging files
+  cache:
+    retention: 60   # minutes: rescan hourly so new songs are shared; slskd has no file watching
+EOF
+  fi
+} | write /slskd/slskd.yml
 
 # 5. Read by naviseerr through SPRING_CONFIG_IMPORT.
 write /config/naviseerr.properties <<EOF

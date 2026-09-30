@@ -48,6 +48,7 @@ services:
       PGID: ${PGID:-1000}
       SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
       SOULSEEK_PASSWORD: ${SOULSEEK_PASSWORD:-}
+      SHARE_LIBRARY: ${SHARE_LIBRARY:-true}
     volumes:
       - ./docker/setup.sh:/setup.sh:ro
       - config:/config
@@ -82,6 +83,8 @@ services:
       - slskd:/app
       - downloads:/downloads
       - incomplete:/incomplete
+      # What you share on Soulseek (SHARE_LIBRARY in .env). Read-only: slskd only lists and uploads.
+      - ${LIBRARY_DIR:-./library}:/music:ro
     # The image's own check waits 60 minutes before it may report a problem.
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5030/health"]
