@@ -35,7 +35,7 @@ public class ActiveDownloadRepository {
      *
      * <p>Progress is the mean across songs, so a collection's bar tracks the collection rather than
      * whichever track happens to be transferring. {@code updated_at} is the most recent write, since
-     * that is the feed's recency sort key and any song's write means the download moved.
+     * that is the live feed's recency sort key and any song's write means the download moved.
      * {@code failure_reason} is the first non-null, preferring a real failure over the user's own
      * cancel: a collection reports a reason as soon as one song has one, without waiting for the
      * rest. The four counts are what let a card say "7 of 12 · 2 failed · 1 cancelled" without
@@ -160,6 +160,11 @@ public class ActiveDownloadRepository {
      * itself, before the window function, so {@code total_count} -- and therefore the page count --
      * describes the filtered list. Filtering after paging is exactly what the client used to do, and
      * why "Page 1 of 7" kept describing a list the user was no longer looking at.
+     *
+     * <p>Sorted by when each download was asked for, newest first, not by its last write. A retry or
+     * a song's progress is a write, and sorting on it lifted an old download to the top the moment
+     * the user retried it. {@code created_at} never changes, so it also keeps the pages still while
+     * downloads run: a row cannot hop onto the next page between two clicks.
      */
     private static final String ALL_DOWNLOADS_TEMPLATE = """
             SELECT %s,
@@ -168,7 +173,7 @@ public class ActiveDownloadRepository {
               %s
               LEFT JOIN (%s) t ON t.download_id = d.download_id
              %s
-             ORDER BY updated_at DESC, d.download_id DESC
+             ORDER BY d.created_at DESC, d.download_id DESC
              OFFSET (:pageSize * (:pageNumber - 1)) ROWS
              FETCH NEXT :pageSize ROWS ONLY
             """;
