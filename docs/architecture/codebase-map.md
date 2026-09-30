@@ -10,7 +10,7 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - `src/main/resources/` - [application.yaml](../../src/main/resources/application.yaml) (config) and `db/migration/` (Flyway-versioned DB schema, applied at boot over a blocking JDBC connection used only for that; see [persistence.md](persistence.md)).
 - `src/test/java/com/catacomb5099/naviseerr/` - tests (see [testing.md](testing.md)).
 - [build.gradle](../../build.gradle) - Gradle build (Java 21, Spring Boot 4, R2DBC, fuzzywuzzy, Lombok, Testcontainers).
-- [compose.yaml](../../compose.yaml) - local Postgres 16 for development.
+- [compose.dev.yaml](../../compose.dev.yaml) - Postgres 16 and the adapter for development. [compose.yaml](../../compose.yaml) is the all-in-one install (the server itself in Docker, from the [Dockerfile](../../Dockerfile)).
 - `docs/` - `architecture/` (this folder), `decisions/` (ADRs), `conversations/` (session logs).
 
 ## Package map (`com.catacomb5099.naviseerr`)
@@ -62,5 +62,5 @@ The download work was built up across branches; the Cursor/IDE index can be stal
 ## Build and run
 
 - Build/test: `./gradlew build` / `./gradlew test` (Java 21 toolchain). Tests that boot Spring need Docker (Testcontainers) - see [testing.md](testing.md).
-- Run locally: `./gradlew bootRun`. `spring-boot-docker-compose` is a `developmentOnly` dependency, so `bootRun` auto-starts the Postgres in [compose.yaml](../../compose.yaml). It is NOT on the test classpath, so tests do not get it (they use Testcontainers). Flyway runs its migrations against that same Postgres at boot, over a blocking JDBC connection used only for that.
+- Run locally: `./gradlew bootRun`. `spring-boot-docker-compose` is a `developmentOnly` dependency, so `bootRun` auto-starts the Postgres in [compose.dev.yaml](../../compose.dev.yaml) (`spring.docker.compose.file`). It is NOT on the test classpath, so tests do not get it (they use Testcontainers). Flyway runs its migrations against that same Postgres at boot, over a blocking JDBC connection used only for that.
 - Config: [application.yaml](../../src/main/resources/application.yaml) holds `spring.r2dbc.*`, `spring.flyway.*`, `last-fm-service.*`, `slskd-service.*`, `download-task.*`. Note secrets are currently committed there - see [gotchas.md](gotchas.md).

@@ -1,0 +1,73 @@
+# For developers running the server from an IDE or `./gradlew bootRun`: only what the server needs
+# (Postgres, the adapter, the opt-in curator), each published on this machine.
+# spring-boot-docker-compose starts it on its own (`spring.docker.compose.file` in application.yaml).
+# Newcomers who just want naviseerr running use compose.yaml instead.
+# `naviseerr` is the name this stack has always had (it came from the checkout folder), so the
+# containers, images and database volume it already made are picked up as they are. The all-in-one
+# compose.yaml uses a different name, so the two never replace each other's containers.
+name: naviseerr
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: naviseerr-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-naviseerr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-naviseerr}
+      POSTGRES_DB: ${POSTGRES_DB:-naviseerr}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - naviseerr-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-naviseerr} -d ${POSTGRES_DB:-naviseerr}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Sidecar that wraps ytmusicapi and backs GET /search/**. The relative build path means this only
+  # comes up if the sibling repo is checked out next to this one - see README.md.
+  ytmusic-adapter:
+    build: ../ytmusic-adapter
+    container_name: naviseerr-ytmusic-adapter
+    restart: unless-stopped
+    environment:
+      YTM_LOG_LEVEL: ${YTM_LOG_LEVEL:-INFO}
+      YTM_TIMEOUT_SECONDS: ${YTM_TIMEOUT_SECONDS:-10}
+    ports:
+      - "${YTMUSIC_ADAPTER_PORT:-8000}:8000"
+    # healthcheck is inherited from the image's own HEALTHCHECK (see ../ytmusic-adapter/Dockerfile)
+
+  # Builds the weekly "suggested playlists" editions. naviseerr triggers it once a week and polls the
+  # result (see application.yaml `curator:`). Same relative-build rule as the adapter above. Opt-in:
+  # start it with `docker compose -f compose.dev.yaml --profile curator up -d` so an install without a
+  # curator is not asked for a token. The token is REQUIRED once you do: the curator refuses to start
+  # (and says why in its logs) when CURATOR_TOKEN is empty, and the same value must be in naviseerr's
+  # environment (CURATOR_TOKEN in .env covers both).
+  croissant:
+    profiles: ["curator"]
+    build: ../croissant
+    container_name: naviseerr-croissant
+    restart: unless-stopped
+    environment:
+      CURATOR_TOKEN: ${CURATOR_TOKEN:-}
+    ports:
+      - "${CURATOR_PORT:-8010}:8010"
+    # The curator image keeps categories.yaml and its state folders (output/, history/, runs/) under
+    # /app. One named volume per state folder -- not one at /app, which would hide categories.yaml --
+    # so editions and run history survive a container rebuild.
+    volumes:
+      - naviseerr-curator-output:/app/output
+      - naviseerr-curator-history:/app/history
+      - naviseerr-curator-runs:/app/runs
+
+volumes:
+  naviseerr-postgres-data:
+    name: naviseerr-postgres-data
+  naviseerr-curator-output:
+    name: naviseerr-curator-output
+  naviseerr-curator-history:
+    name: naviseerr-curator-history
+  naviseerr-curator-runs:
+    name: naviseerr-curator-runs

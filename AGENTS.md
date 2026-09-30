@@ -51,7 +51,7 @@ The current application is a small Java REST/WebFlux service that:
 
 - Calls a sidecar service, `ytmusic-adapter` (a standalone Python/FastAPI process wrapping
   `ytmusicapi`, in the sibling repo `~/IdeaProjects/ytmusic-adapter`, wired into
-  [compose.yaml](compose.yaml)), for track, album, artist, and playlist search, and to resolve an album or playlist id to its track list. LastFM previously filled this
+  [compose.dev.yaml](compose.dev.yaml)), for track, album, artist, and playlist search, and to resolve an album or playlist id to its track list. LastFM previously filled this
   role; its client code still compiles but is no longer called — see
   [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md).
 - Accepts `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST|CURATED`, inserts a `PENDING` row into the `downloads` table, and returns `202 Accepted` immediately (fast ack; no work on the request thread). The request carries a **YouTube id and a type**, not a name — the server resolves what the id is, from `ytmusic-adapter`, when the loop admits it.
