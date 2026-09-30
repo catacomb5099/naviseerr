@@ -35,7 +35,7 @@ class SongInfoControllerTest {
                 .videoId("DntZ3-yCaFs").title("Manchild")
                 .artists(List.of(new YtMusicSearchResponse.ArtistRef("Sabrina Carpenter", "UCz51")))
                 .album(new YtMusicSearchResponse.AlbumRef("Man's Best Friend", "MPREb_msf"))
-                .durationSeconds(214).year(2025).viewCount(86_376_709L).explicit(true)
+                .durationSeconds(214).year(2025).viewCount(86_376_709L).plays("310M plays").explicit(true)
                 .thumbnailUrl("https://img/m.jpg")
                 .credits(List.of(
                         new YtMusicDetailResponse.Credit("Performed by", List.of("Sabrina Carpenter")),
@@ -67,7 +67,8 @@ class SongInfoControllerTest {
                     assertEquals(new SongInfoView.Ref("MPREb_msf", "Man's Best Friend"), view.album());
                     assertEquals(214, view.durationSeconds());
                     assertEquals(2025, view.year());
-                    assertEquals(86_376_709L, view.viewCount());
+                    assertEquals(86_376_709L, view.viewCount(), "this upload's exact plays");
+                    assertEquals("310M plays", view.plays(), "the combined count, YouTube's wording unparsed");
                     assertEquals("https://img/m.jpg", view.iconURL());
                     assertEquals(Boolean.TRUE, view.explicit());
                     assertEquals(2, view.credits().size());
@@ -88,6 +89,8 @@ class SongInfoControllerTest {
                     assertNull(view.album());
                     assertNull(view.year());
                     assertNull(view.explicit(), "unknown, not false");
+                    assertNull(view.plays(), "no album track, so no combined count");
+                    assertEquals(41_779_269L, view.viewCount());
                     assertTrue(view.credits().isEmpty());
                     assertEquals(239, view.durationSeconds());
                 })

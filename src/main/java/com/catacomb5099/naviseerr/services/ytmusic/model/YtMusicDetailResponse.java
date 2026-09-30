@@ -69,7 +69,13 @@ public final class YtMusicDetailResponse {
         private YtMusicSearchResponse.AlbumRef album;
         private Integer durationSeconds;
         private Integer year;
+        /** Exact plays of this one video/upload; smaller than {@link #plays}. */
         private Long viewCount;
+        /**
+         * YouTube Music's combined play count in its own wording ("1.7B plays"), from the song's album
+         * track; null for an official video or when that track is not found. Passed through, never parsed.
+         */
+        private String plays;
         private Boolean explicit;
         private String thumbnailUrl;
         private List<Credit> credits;

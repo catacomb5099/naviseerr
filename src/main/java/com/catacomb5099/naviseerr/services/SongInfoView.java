@@ -14,12 +14,16 @@ import java.util.Objects;
  * @param iconURL  capital {@code URL}, matching {@code Track} on the search contract; {@code ""} when
  *                 the adapter has no picture, never null.
  * @param album    null for an official-video id -- YouTube Music knows no album for those.
+ * @param viewCount exact plays of this one video or upload (Wonderwall: 97,645,262).
+ * @param plays    YouTube Music's combined count in its own wording ("1.7B plays"), the same wording
+ *                 album and search rows carry; null for an official video or when the adapter cannot
+ *                 find the album track. Passed through unparsed.
  * @param explicit null when unknown (official videos), not false.
  * @param credits  empty when YouTube Music has none; {@code role} is YouTube's own heading, e.g.
  *                 "Written by", so the client renders it verbatim and new roles need no code.
  */
 public record SongInfoView(String id, String name, List<Ref> artists, Ref album, Integer durationSeconds,
-                           Integer year, Long viewCount, String iconURL, Boolean explicit,
+                           Integer year, Long viewCount, String plays, String iconURL, Boolean explicit,
                            List<Credit> credits) {
 
     /** An artist ({@code id} = channel id) or an album ({@code id} = browse id); either id may be null. */
@@ -42,7 +46,7 @@ public record SongInfoView(String id, String name, List<Ref> artists, Ref album,
                 .toList();
         return new SongInfoView(requestedId, d.getTitle(), artists,
                 album == null || album.getName() == null ? null : new Ref(album.getBrowseId(), album.getName()),
-                d.getDurationSeconds(), d.getYear(), d.getViewCount(),
+                d.getDurationSeconds(), d.getYear(), d.getViewCount(), d.getPlays(),
                 d.getThumbnailUrl() == null ? "" : d.getThumbnailUrl(), d.getExplicit(), credits);
     }
 }

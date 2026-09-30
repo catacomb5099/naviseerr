@@ -233,8 +233,9 @@ And by [SongInfoController.java](../../src/main/java/com/catacomb5099/naviseerr/
 
 - `GET /songs/{videoId}` - one song as a
   [SongInfoView](../../src/main/java/com/catacomb5099/naviseerr/services/SongInfoView.java): artists
-  with channel ids, album, year, exact duration and view count, the per-track `explicit` flag and the
-  credits panel (`role` is YouTube's own heading, rendered verbatim). The adapter stitches it from up
+  with channel ids, album, year, exact duration and view count (this one upload's plays), YouTube
+  Music's combined `plays` wording ("1.7B plays", null for an official video), the per-track
+  `explicit` flag and the credits panel (`role` is YouTube's own heading, rendered verbatim). The adapter stitches it from up
   to four YouTube Music calls, so expect 1-2.5 s. An official-video id (`(Official Video)` titles)
   has no album, year, explicit flag or credits anywhere on YouTube Music; they come back null / `[]`,
   not as an error, and the adapter deliberately does not guess the album twin by title search.
