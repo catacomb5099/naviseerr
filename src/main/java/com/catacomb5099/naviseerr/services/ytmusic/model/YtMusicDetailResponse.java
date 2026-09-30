@@ -118,8 +118,8 @@ public final class YtMusicDetailResponse {
         private List<YtMusicSearchResponse.ArtistRef> artists;
         private Integer durationSeconds;
         /**
-         * YouTube's own wording ("28M plays"). Present on album tracks, null on playlist and top-song
-         * rows. Passed through, never parsed: the adapter warns the figure is lossy upstream.
+         * YouTube's own wording ("28M plays"). Present on album tracks and an artist's top songs, null
+         * on playlist rows. Passed through, never parsed: the adapter warns the figure is lossy upstream.
          */
         private String views;
         /**

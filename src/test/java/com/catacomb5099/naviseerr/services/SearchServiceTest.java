@@ -31,7 +31,7 @@ class SearchServiceTest {
     private final SearchService searchService = new SearchService(ytMusicService);
 
     private static Track track() {
-        return new Track("vid1", "https://example.com/t.jpg", "", "Wonderwall", List.of("Oasis"), "MPREb_1", 0);
+        return new Track("vid1", "https://example.com/t.jpg", "", "Wonderwall", List.of("Oasis"), "MPREb_1", 0, null);
     }
 
     private static Album album() {

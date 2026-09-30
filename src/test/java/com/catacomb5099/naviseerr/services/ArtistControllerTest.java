@@ -124,6 +124,20 @@ class ArtistControllerTest {
         verify(ytMusicService).getResults("Pixies", YtMusicSearchType.FEATURED_PLAYLISTS, 20);
     }
 
+    @Test
+    void topSongs_carryYouTubesPlayCount_asWorded_andNullWhereTheAdapterHasNone() {
+        YtMusicDetailResponse.Artist artist = pixies();
+        artist.getTopSongs().get(0).setViews("311M plays");
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(artist));
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(playlists(0)));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.topSongs[0].plays").isEqualTo("311M plays")
+                .jsonPath("$.topSongs[1].plays").isEmpty();
+    }
+
     /**
      * The real answer for Oasis is "Presenting Oasis" and "Oasis 2025 Setlist" next to "'70s Lite
      * Hits" and "Presenting The Kooks" (a related act). The fixture's related artists are The
