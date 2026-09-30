@@ -118,6 +118,18 @@ public class YtMusicService {
     }
 
     /**
+     * How many times this one video was played: the same {@code /v1/songs/{id}} call as
+     * {@link #getSongInfo}, reading only {@code viewCount}. Kept apart so {@code YoutubeSongInfo},
+     * which belongs to the download pipeline, does not grow a field the pipeline never reads. Empty
+     * when the adapter has no count.
+     */
+    public Mono<Long> getSongViewCount(String id) {
+        return execute(uriBuilder -> uriBuilder.path(SONG_PATH_PREFIX + id).build(),
+                YtMusicDetailResponse.Song.class, "song-views", id)
+                .mapNotNull(YtMusicDetailResponse.Song::getViewCount);
+    }
+
+    /**
      * The song page: everything {@link #getSongInfo} knows plus artists with ids, album, year, view
      * count, the explicit flag and the credits panel. Returned as the adapter shape; the only consumer
      * is {@code SongInfoView.from}, and a domain record between the two would be a third copy of the

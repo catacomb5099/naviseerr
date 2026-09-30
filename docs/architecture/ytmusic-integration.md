@@ -172,7 +172,7 @@ provider load and adapter semaphore occupancy — it is not a user-visible laten
 Search is not the only caller any more. `DownloadTaskRunner.gatherMetadata` resolves a download's
 YouTube id at admission time, via the first three of these methods on
 [YtMusicService](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java)
-(the last two belong to the artist page and the song page; admission never calls them):
+(the last three belong to the artist page, the song page and the view-count lookup; admission never calls them):
 
 | Method | Route | Returns |
 |---|---|---|
@@ -181,6 +181,7 @@ YouTube id at admission time, via the first three of these methods on
 | `getPlaylistInfo(playlistId)` | `GET /v1/playlists/{playlistId}` | `YoutubeCollectionInfo` |
 | `getArtistInfo(channelId)` | `GET /v1/artists/{channelId}` | `YtMusicDetailResponse.Artist` |
 | `getSongDetails(videoId)` | `GET /v1/songs/{videoId}/details` | `YtMusicDetailResponse.SongDetails` (adapter shape; only `SongInfoView.from` reads it) |
+| `getSongViewCount(videoId)` | `GET /v1/songs/{videoId}` | `Long`, that one upload's exact `viewCount`; empty when none (only `GET /songs/views` reads it) |
 
 Three things about the mapping are easy to get wrong, because the adapter's three responses are not
 the same shape:
@@ -238,6 +239,10 @@ And by [SongInfoController.java](../../src/main/java/com/catacomb5099/naviseerr/
   has no album, year, explicit flag or credits anywhere on YouTube Music; they come back null / `[]`,
   not as an error, and the adapter deliberately does not guess the album twin by title search.
   Same 404/502 handlers as `/collections/{id}`.
+- `GET /songs/views?ids=` - `{id: viewCount}` for up to 50 ids, one `getSongViewCount` each, 8 at a
+  time. The count is that one upload's exact plays, smaller than the combined "plays" wording other
+  song rows carry; the client uses it for playlist songs, which YouTube gives no count. A lookup that
+  fails, or has no count, is left out of the object instead of failing the request.
 
 And by [CollectionController.java](../../src/main/java/com/catacomb5099/naviseerr/services/CollectionController.java):
 
