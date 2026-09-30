@@ -439,6 +439,27 @@ class YtMusicServiceTest {
     }
 
     @Test
+    void getSongViewCount_readsThisVideosExactViewCount_fromTheSameSongRoute() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody(SONG_DETAIL_BODY));
+
+        StepVerifier.create(service.getSongViewCount("hpSrLjc5SMs"))
+                .expectNext(123456L)
+                .verifyComplete();
+
+        assertEquals("/v1/songs/hpSrLjc5SMs", server.takeRequest().getPath());
+    }
+
+    @Test
+    void getSongViewCount_withNoCount_isEmpty_notZero() {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"videoId\":\"v1\",\"viewCount\":null}"));
+
+        StepVerifier.create(service.getSongViewCount("v1")).verifyComplete();
+    }
+
+    @Test
     void getSongInfo_withNoThumbnail_fallsBackToYouTubesPredictableOne() {
         server.enqueue(new MockResponse().setResponseCode(200)
                 .addHeader("Content-Type", "application/json")

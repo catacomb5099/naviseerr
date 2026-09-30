@@ -8,19 +8,27 @@ import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicSearchResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.json.JsonCompareMode;
+import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class SongInfoControllerTest {
 
     private final YtMusicService ytMusicService = mock(YtMusicService.class);
     private final SongInfoController controller = new SongInfoController(ytMusicService);
+    private final WebTestClient client = WebTestClient.bindToController(controller).build();
 
     private static YtMusicDetailResponse.SongDetails albumTrack() {
         return YtMusicDetailResponse.SongDetails.builder()
@@ -137,5 +145,70 @@ class SongInfoControllerTest {
 
         ResponseEntity<Void> response = controller.handleUnavailable(new YtMusicUnavailableException("down"));
         assertEquals(HttpStatus.BAD_GATEWAY, response.getStatusCode());
+    }
+
+    private WebTestClient.ResponseSpec views(String ids) {
+        return client.get().uri(uri -> uri.path("/songs/views").queryParam("ids", ids).build()).exchange();
+    }
+
+    @Test
+    void views_answersIdToCount_trimmingBlanksAndLookingUpADuplicateOnce() {
+        when(ytMusicService.getSongViewCount("a")).thenReturn(Mono.just(19_334_421L));
+        when(ytMusicService.getSongViewCount("b")).thenReturn(Mono.empty()); // the adapter has no count
+        when(ytMusicService.getSongViewCount("c")).thenReturn(Mono.just(7_004_756L));
+
+        views(" a , b,,a,c").expectStatus().isOk()
+                .expectBody().json("{\"a\": 19334421, \"c\": 7004756}", JsonCompareMode.STRICT);
+
+        verify(ytMusicService, times(1)).getSongViewCount("a");
+    }
+
+    @Test
+    void views_theLiteralPathWins_overSongsId() {
+        when(ytMusicService.getSongViewCount("a")).thenReturn(Mono.just(1L));
+
+        views("a").expectStatus().isOk();
+
+        verify(ytMusicService, never()).getSongDetails(anyString());
+    }
+
+    @Test
+    void views_aFailingLookup_isLeftOut_andAllFailingIsStillAnObject() {
+        when(ytMusicService.getSongViewCount("ok")).thenReturn(Mono.just(5L));
+        when(ytMusicService.getSongViewCount("unknown")).thenReturn(Mono.error(new YtMusicBadRequestException("404")));
+        when(ytMusicService.getSongViewCount("down")).thenReturn(Mono.error(new YtMusicUnavailableException("down")));
+
+        views("ok,unknown,down").expectStatus().isOk()
+                .expectBody().json("{\"ok\": 5}", JsonCompareMode.STRICT);
+        views("unknown,down").expectStatus().isOk()
+                .expectBody().json("{}", JsonCompareMode.STRICT);
+    }
+
+    @Test
+    void views_noIdOrMoreThanFifty_is400_withoutCallingTheAdapter() {
+        String fiftyOne = IntStream.range(0, 51).mapToObj(i -> "v" + i).collect(Collectors.joining(","));
+
+        views(" , ,").expectStatus().isBadRequest();
+        client.get().uri("/songs/views").exchange().expectStatus().isBadRequest();
+        views(fiftyOne).expectStatus().isBadRequest();
+
+        verifyNoInteractions(ytMusicService);
+    }
+
+    @Test
+    void views_runsAtMostEightLookupsAtOnce() {
+        AtomicInteger inFlight = new AtomicInteger();
+        AtomicInteger peak = new AtomicInteger();
+        // counted down before the answer is emitted: flatMap starts the next lookup as soon as one completes
+        when(ytMusicService.getSongViewCount(anyString())).thenAnswer(call -> Mono.defer(() -> {
+            peak.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+            return Mono.delay(Duration.ofMillis(20)).doOnNext(tick -> inFlight.decrementAndGet()).thenReturn(1L);
+        }));
+
+        views(IntStream.range(0, 50).mapToObj(i -> "v" + i).collect(Collectors.joining(",")))
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.v49").isEqualTo(1);
+
+        assertEquals(SongInfoController.VIEWS_CONCURRENCY, peak.get());
     }
 }

@@ -44,6 +44,12 @@ public final class YtMusicDetailResponse {
         /** The adapter's own name for a song's duration; collections call the same thing {@code durationSeconds}. */
         private Integer lengthSeconds;
         private String thumbnailUrl;
+        /**
+         * Exact plays of this one video/upload (19334421). Not YouTube Music's combined count across
+         * every upload of the song, the larger "1.7B plays" album and search rows carry. Read only by
+         * {@code YtMusicService.getSongViewCount}.
+         */
+        private Long viewCount;
     }
 
     /**
