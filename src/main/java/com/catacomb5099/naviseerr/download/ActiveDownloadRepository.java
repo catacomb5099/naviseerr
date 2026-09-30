@@ -163,8 +163,8 @@ public class ActiveDownloadRepository {
      *
      * <p>Sorted by when each download was asked for, newest first, not by its last write. A retry or
      * a song's progress is a write, and sorting on it lifted an old download to the top the moment
-     * the user retried it. {@code created_at} never changes, so it also keeps the pages still while
-     * downloads run: a row cannot hop onto the next page between two clicks.
+     * the user retried it. {@code created_at} never changes, so a download's progress or retry can no
+     * longer move it to another page; only a new request, which lands on page 1, shifts the rest down.
      */
     private static final String ALL_DOWNLOADS_TEMPLATE = """
             SELECT %s,

@@ -38,8 +38,9 @@ import java.util.UUID;
  * @param requestedAt     when the request arrived.
  * @param stageEnteredAt  when the current stage began. What indeterminate stages show elapsed time
  *                        from, so a slow search reads as slow rather than as stuck.
- * @param updatedAt       when the row was last written. The recency sort key, and the only field that
- *                        moves when nothing but progress changes.
+ * @param updatedAt       when the row was last written. The live feed's recency sort key (the history
+ *                        page sorts by {@code requestedAt}), and the only field that moves when
+ *                        nothing but progress changes.
  * @param finishedAt      when the last song settled. Null while anything is still running.
  * @param failureCode     a {@link DownloadFailureCode} name, or null. Deliberately a String, not the
  *                        enum: rows written before the enum existed hold free prose, and a read path
