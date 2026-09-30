@@ -1,9 +1,10 @@
-# The all-in-one install: everything naviseerr needs, in one `docker compose up -d`. Settings come from
-# .env next to this file (copy .env.example). Developers running the server from an IDE use
+# The all-in-one install: everything naviseerr needs, its own slskd included, in one
+# `docker compose up -d`. Settings come from .env next to this file (copy .env.example;
+# SOULSEEK_USERNAME is the only one you must fill in). Developers running the server from an IDE use
 # compose.dev.yaml instead.
 #
-# No container_name anywhere and no named volumes: everything is scoped to the project name below
-# (the developer stack in compose.dev.yaml is `naviseerr`), so this stack never touches the
+# No container_name anywhere and no fixed volume names: everything is scoped to the project name
+# below (the developer stack in compose.dev.yaml is `naviseerr`), so this stack never touches the
 # developer stack's containers or its database.
 name: naviseerr-app
 
@@ -34,16 +35,76 @@ services:
       YTM_LOG_LEVEL: ${YTM_LOG_LEVEL:-INFO}
       YTM_TIMEOUT_SECONDS: ${YTM_TIMEOUT_SECONDS:-10}
 
-  naviseerr:
-    build: .
-    # Runs as your own user (PUID/PGID in .env), not root, so the files it writes are yours.
+  # Runs once on every `docker compose up`, as root, then exits: gives the folders below to PUID:PGID,
+  # checks SOULSEEK_USERNAME, generates the passwords and slskd's API key once, and writes slskd's
+  # config. slskd and naviseerr wait for it to succeed; if it fails, `docker compose logs setup` says
+  # why. See docker/setup.sh.
+  setup:
+    image: alpine:3.20
+    restart: "no"
+    entrypoint: ["sh", "/setup.sh"]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
+      SOULSEEK_PASSWORD: ${SOULSEEK_PASSWORD:-}
+    volumes:
+      - ./docker/setup.sh:/setup.sh:ro
+      - config:/config
+      - slskd:/slskd
+      - downloads:/downloads
+      - incomplete:/incomplete
+      - ${LIBRARY_DIR:-./library}:/library
+
+  # The Soulseek client. Its settings live in slskd.yml, written by `setup` from .env: change .env,
+  # not that file.
+  slskd:
+    image: slskd/slskd:0.26.0
+    # `user:`, not PUID/PGID variables: slskd refuses to start with both, and this way it never
+    # re-owns anything. Same user as naviseerr, which moves and deletes what slskd downloads.
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
     depends_on:
+      setup:
+        condition: service_completed_successfully
+    ports:
+      # Soulseek peers connect to you here. The host port must stay 50300 (slskd tells the network
+      # this number). Forward TCP 50300 on your router to this machine for the best results: without
+      # it you see fewer search results and some downloads fail. slskd cannot open it by itself
+      # (no UPnP).
+      - "50300:50300"
+      # slskd's own web page is not published: naviseerr is the way in. To look at it anyway, from this
+      # machine only, put this in a compose.override.yaml next to this file (git ignores it, so
+      # `git pull` keeps working), run `docker compose up -d` and open http://localhost:5030:
+      #   services: {slskd: {ports: ["127.0.0.1:5030:5030"]}}
+      # Log in as slskd with the web password from `docker compose exec slskd cat /app/slskd.yml`.
+    volumes:
+      - slskd:/app
+      - downloads:/downloads
+      - incomplete:/incomplete
+    # The image's own check waits 60 minutes before it may report a problem.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5030/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+
+  naviseerr:
+    build: .
+    # One user for every container that touches the music files, so each can move what the other wrote.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       ytmusic-adapter:
         condition: service_healthy
+      # Started, not healthy: a Soulseek login problem must not keep the web app from starting.
+      slskd:
+        condition: service_started
     environment:
       # The weekly curator trigger runs on this clock; the container is on UTC otherwise.
       TZ: ${TZ:-Etc/UTC}
@@ -52,13 +113,25 @@ services:
       SPRING_R2DBC_USERNAME: ${POSTGRES_USER:-naviseerr}
       SPRING_R2DBC_PASSWORD: ${POSTGRES_PASSWORD:-naviseerr}
       YT_MUSIC_SERVICE_URL: http://ytmusic-adapter:8000
-      # Your own slskd, from .env.
-      SLSKD_URL: ${SLSKD_URL:-}
-      SLSKD_API_KEY: ${SLSKD_API_KEY:-}
+      SLSKD_URL: http://slskd:5030/api/v0/
+      # The same volumes at the same paths as in slskd, so the library organiser is on: each finished
+      # song is filed into the library, and each finished playlist becomes a .m3u8 there.
+      SLSKD_DOWNLOADS_DIR: /downloads
+      SLSKD_INCOMPLETE_DIR: /incomplete
+      LIBRARY_ROOT: /library
+      # SLSKD_API_KEY comes from this file, written by `setup`. Do NOT also set it here: an environment
+      # variable, even an empty one, wins over the file.
+      SPRING_CONFIG_IMPORT: optional:file:/config/naviseerr.properties
       CURATOR_URL: http://croissant:8010
       CURATOR_TOKEN: ${CURATOR_TOKEN:-}
     ports:
       - "${NAVISEERR_API_PORT:-8080}:8080"
+    volumes:
+      - config:/config:ro
+      - downloads:/downloads
+      - incomplete:/incomplete
+      # Your music library: point Navidrome or Jellyfin at the same folder (LIBRARY_DIR in .env).
+      - ${LIBRARY_DIR:-./library}:/library
 
   # Builds the weekly "suggested playlists" editions (see application.yaml `curator:`). Opt-in:
   # `docker compose --profile curator up -d`, with CURATOR_TOKEN set in .env (the curator refuses to
@@ -77,6 +150,13 @@ services:
 
 volumes:
   postgres-data:
+  # setup's generated secrets and naviseerr's copy of slskd's API key.
+  config:
+  # slskd's config and its own database.
+  slskd:
+  # slskd downloads here; naviseerr then moves each finished song into the library.
+  downloads:
+  incomplete:
   curator-output:
   curator-history:
   curator-runs:

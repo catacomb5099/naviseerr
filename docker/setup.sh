@@ -1,0 +1,133 @@
+#!/bin/sh
+# naviseerr's setup step. compose runs it (the `setup` service, as root) on every `docker compose up`,
+# before slskd and naviseerr, which only start once it exits 0. It:
+#   1. gives the shared folders to PUID:PGID, the one user slskd and naviseerr both run as;
+#   2. checks the Soulseek username from .env (the one thing you must choose);
+#   3. generates the other secrets once and keeps them in /config/secrets.env;
+#   4. writes slskd's config (/slskd/slskd.yml) from .env and those secrets;
+#   5. hands naviseerr slskd's API key (/config/naviseerr.properties).
+set -eu
+
+PUID=${PUID:-1000}
+PGID=${PGID:-1000}
+# Every file written below holds a secret: readable by its owner only.
+umask 077
+
+# 1. A fresh volume, or a library folder Docker had to create, belongs to root, and slskd and naviseerr
+# (not root) could not write into it.
+# naviseerr's own volumes: re-owned with everything in them whenever they are not PUID:PGID's, so a
+# changed PUID/PGID in .env takes effect (slskd will not start in a folder it cannot write).
+for d in /config /slskd /downloads /incomplete; do
+  if [ "$(stat -c %u:%g "$d")" != "$PUID:$PGID" ]; then chown -R "$PUID:$PGID" "$d"; fi
+done
+# Your library: only the folder itself and only while root still owns it: an existing library keeps
+# its owner, and nothing inside it is ever re-owned.
+if [ "$(stat -c %u /library)" = 0 ]; then chown "$PUID:$PGID" /library; fi
+
+# 2. Soulseek's rules: 1-30 printable ASCII characters, no space at either end.
+name=${SOULSEEK_USERNAME:-}
+problem=
+if [ -z "$name" ]; then
+  problem="SOULSEEK_USERNAME is not set."
+elif [ "$(printf '%s' "$name" | tr -d ' -~' | wc -c)" -ne 0 ]; then
+  problem="SOULSEEK_USERNAME has a character Soulseek does not accept (accents, emoji, tabs...)."
+elif [ "${#name}" -gt 30 ]; then
+  problem="SOULSEEK_USERNAME is longer than 30 characters."
+else
+  case $name in
+    " "* | *" ") problem="SOULSEEK_USERNAME starts or ends with a space." ;;
+  esac
+fi
+if [ -n "$problem" ]; then
+  cat >&2 <<EOF
+
+naviseerr setup: $problem
+
+Choose a Soulseek username and put it in the .env file next to compose.yaml, for example:
+
+    SOULSEEK_USERNAME=choose-your-own-name
+
+then run \`docker compose up -d\` again.
+
+- 1 to 30 characters: plain letters, digits and punctuation, no space at the start or end.
+- Pick something unique. The account is created the first time slskd logs in with it; if someone
+  else already has the name, slskd's log says "invalid username or password": choose another.
+- It cannot be made up for you: Soulseek's rules forbid automatically generated usernames.
+
+EOF
+  exit 1
+fi
+
+# 3. Letters and digits only: slskd has been seen to reject passwords with some punctuation.
+secrets=/config/secrets.env
+random() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
+stored() { if [ -f "$secrets" ]; then sed -n "s/^$1=//p" "$secrets"; fi; }
+soulseek_password=$(stored SOULSEEK_PASSWORD)
+api_key=$(stored SLSKD_API_KEY)
+web_password=$(stored SLSKD_WEB_PASSWORD)
+new_password=false
+if [ -z "$soulseek_password" ]; then soulseek_password=$(random 24); new_password=true; fi
+if [ -z "$api_key" ]; then api_key=$(random 32); fi
+if [ -z "$web_password" ]; then web_password=$(random 24); fi
+
+# Written to a temporary name first, so an interrupted run never leaves half a file behind. slskd can
+# write into /slskd, so nothing already there is trusted: a leftover .tmp is deleted, the new one is
+# only ever created, never opened through a link (set -C), and a link is never followed (-h, -T).
+write() {
+  rm -f "$1.tmp"
+  (set -C; cat >"$1.tmp")
+  chown -h "$PUID:$PGID" "$1.tmp"
+  mv -T "$1.tmp" "$1"
+}
+
+write "$secrets" <<EOF
+# Generated once by naviseerr's setup. Deleting this file makes new ones on the next start, and the
+# Soulseek account then no longer logs in (a Soulseek password cannot be reset).
+SOULSEEK_PASSWORD=$soulseek_password
+SLSKD_API_KEY=$api_key
+SLSKD_WEB_PASSWORD=$web_password
+EOF
+
+# Bringing an existing account: SOULSEEK_PASSWORD in .env wins; the generated one stays stored.
+password=${SOULSEEK_PASSWORD:-$soulseek_password}
+
+# 4. YAML single quotes take everything literally; a quote inside is written twice.
+q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
+
+write /slskd/slskd.yml <<EOF
+# Written by naviseerr's setup on every start from .env; edits are overwritten.
+soulseek:
+  username: $(q "$name")
+  password: $(q "$password")
+  listen_port: 50300
+directories:
+  downloads: /downloads
+  incomplete: /incomplete
+web:
+  https:
+    disabled: true
+  authentication:
+    password: $(q "$web_password")
+    api_keys:
+      naviseerr:
+        key: $(q "$api_key")
+        role: readwrite
+EOF
+
+# 5. Read by naviseerr through SPRING_CONFIG_IMPORT.
+write /config/naviseerr.properties <<EOF
+SLSKD_API_KEY=$api_key
+EOF
+
+if [ "$new_password" = true ] && [ -z "${SOULSEEK_PASSWORD:-}" ]; then
+  cat <<EOF
+
+Your Soulseek account:
+    username: $name
+    password: $soulseek_password
+Keep this somewhere: Soulseek passwords cannot be reset. It is also stored in naviseerr's config
+volume (secrets.env) and in slskd's config: docker compose exec slskd cat /app/slskd.yml
+
+EOF
+fi
+echo "naviseerr setup: done."

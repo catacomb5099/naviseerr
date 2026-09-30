@@ -1,3 +1,5 @@
 /gradlew text eol=lf
+# docker/setup.sh is mounted straight from the checkout; sh stops at the first Windows line ending.
+*.sh text eol=lf
 *.bat text eol=crlf
 *.jar binary
