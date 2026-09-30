@@ -19,7 +19,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -29,6 +31,7 @@ import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 @Slf4j
@@ -45,6 +48,13 @@ public class SearchService {
     static final int FIRST_PAGE = 20;
     /** The adapter's own ceiling (its {@code limit} is {@code le=100}); past it the adapter answers 422. */
     static final int MAX_LIMIT = 100;
+    /**
+     * How long each of All's searches gets per try. A healthy one answers in under a second (the
+     * slowest of 56 at limit 20 took 0.82 s, measured 30-09-2026); a stalled one hangs 5-10 s and
+     * then fails, and asking again usually answers at once. All waits for its slowest search, so
+     * without this one stall among six held the whole answer for 6-20 s.
+     */
+    static final Duration ALL_TRY = Duration.ofSeconds(3);
 
     private final YtMusicService ytMusicService;
 
@@ -56,9 +66,10 @@ public class SearchService {
      * Champagne Supernova). "Show more" on a shelf carries on with the same category search. See
      * docs/decisions/search-all-per-category-30-09-2026.md.
      *
-     * <p>The songs search is the canary: if it fails, the whole answer is an error, so an adapter
-     * that is down still reads "search failed" and never "no results". The mixed page and the other
-     * three categories each drop out on their own, and are named in
+     * <p>Each search gets {@link #ALL_TRY} per try. The songs search is the canary: it gets two more
+     * tries, and if it still fails the whole answer is an error, so an adapter that is down still
+     * reads "search failed" and never "no results". The mixed page and the other three categories
+     * get one more try, then drop out on their own and are named in
      * {@link SearchResponse#getUnavailable()} so the client can say "couldn't load albums" rather
      * than show no albums shelf, and still offer to fetch that category.
      */
@@ -70,14 +81,14 @@ public class SearchService {
             // they have all finished.
             Set<String> unavailable = ConcurrentHashMap.newKeySet();
             SearchResponse none = new SearchResponse(List.of(), List.of(), List.of(), List.of());
-            Mono<SearchResponse> top = orEmptyShelf("mixed", query, ytMusicService.getResults(query), none, unavailable);
-            Mono<List<Track>> tracks = ytMusicService.getResults(query, YtMusicSearchType.SONGS, FIRST_PAGE)
-                    .map(result -> orEmpty(result.getTracks()));
-            Mono<List<Album>> albums = orEmptyShelf("albums", query, ytMusicService.getResults(query, YtMusicSearchType.ALBUMS, FIRST_PAGE)
-                    .map(result -> orEmpty(result.getAlbums())), List.of(), unavailable);
-            Mono<List<Artist>> artists = orEmptyShelf("artists", query, ytMusicService.getResults(query, YtMusicSearchType.ARTISTS, FIRST_PAGE)
-                    .map(result -> orEmpty(result.getArtists())), List.of(), unavailable);
-            Mono<List<Playlist>> playlists = orEmptyShelf("playlists", query, playlists(query, FIRST_PAGE), List.of(), unavailable);
+            Mono<SearchResponse> top = orEmptyShelf("mixed", query, withTries(ytMusicService.getResults(query), ALL_TRY, 1), none, unavailable);
+            Mono<List<Track>> tracks = withTries(ytMusicService.getResults(query, YtMusicSearchType.SONGS, FIRST_PAGE)
+                    .map(result -> orEmpty(result.getTracks())), ALL_TRY, 2);
+            Mono<List<Album>> albums = orEmptyShelf("albums", query, withTries(ytMusicService.getResults(query, YtMusicSearchType.ALBUMS, FIRST_PAGE)
+                    .map(result -> orEmpty(result.getAlbums())), ALL_TRY, 1), List.of(), unavailable);
+            Mono<List<Artist>> artists = orEmptyShelf("artists", query, withTries(ytMusicService.getResults(query, YtMusicSearchType.ARTISTS, FIRST_PAGE)
+                    .map(result -> orEmpty(result.getArtists())), ALL_TRY, 1), List.of(), unavailable);
+            Mono<List<Playlist>> playlists = orEmptyShelf("playlists", query, playlists(query, FIRST_PAGE, ALL_TRY), List.of(), unavailable);
             return Mono.zip(top, tracks, albums, artists, playlists)
                     .map(all -> new SearchResponse(
                             topThenRest(orEmpty(all.getT1().getTracks()), all.getT2(), Track::getId),
@@ -95,7 +106,7 @@ public class SearchService {
     @GetMapping("/search/{query}/tracks")
     Mono<SearchResponse> searchTracks(@PathVariable String query, @RequestParam(defaultValue = "" + FIRST_PAGE) int limit) {
         log.info("Received YtMusic track search request for query='{}', limit={}", query, limit);
-        return ytMusicService.getResults(query, YtMusicSearchType.SONGS, clamp(limit))
+        return withTries(ytMusicService.getResults(query, YtMusicSearchType.SONGS, clamp(limit)), tryFor(clamp(limit)), 1)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic track search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic track search for query='{}': tracks={}", query, size(result.getTracks())))
                 .doOnError(error -> log.error("YtMusic track search failed for query='{}'", query, error));
@@ -104,7 +115,7 @@ public class SearchService {
     @GetMapping("/search/{query}/albums")
     Mono<SearchResponse> searchAlbums(@PathVariable String query, @RequestParam(defaultValue = "" + FIRST_PAGE) int limit) {
         log.info("Received YtMusic album search request for query='{}', limit={}", query, limit);
-        return ytMusicService.getResults(query, YtMusicSearchType.ALBUMS, clamp(limit))
+        return withTries(ytMusicService.getResults(query, YtMusicSearchType.ALBUMS, clamp(limit)), tryFor(clamp(limit)), 1)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic album search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic album search for query='{}': albums={}", query, size(result.getAlbums())))
                 .doOnError(error -> log.error("YtMusic album search failed for query='{}'", query, error));
@@ -113,7 +124,7 @@ public class SearchService {
     @GetMapping("/search/{query}/artists")
     Mono<SearchResponse> searchArtists(@PathVariable String query, @RequestParam(defaultValue = "" + FIRST_PAGE) int limit) {
         log.info("Received YtMusic artist search request for query='{}', limit={}", query, limit);
-        return ytMusicService.getResults(query, YtMusicSearchType.ARTISTS, clamp(limit))
+        return withTries(ytMusicService.getResults(query, YtMusicSearchType.ARTISTS, clamp(limit)), tryFor(clamp(limit)), 1)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic artist search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic artist search for query='{}': artists={}", query, size(result.getArtists())))
                 .doOnError(error -> log.error("YtMusic artist search failed for query='{}'", query, error));
@@ -132,22 +143,27 @@ public class SearchService {
     @GetMapping("/search/{query}/playlists")
     Mono<SearchResponse> searchPlaylists(@PathVariable String query, @RequestParam(defaultValue = "" + FIRST_PAGE) int limit) {
         log.info("Received YtMusic playlist search request for query='{}', limit={}", query, limit);
-        return playlists(query, clamp(limit))
+        return playlists(query, clamp(limit), tryFor(clamp(limit)))
                 .map(playlists -> new SearchResponse(List.of(), List.of(), List.of(), playlists))
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic playlist search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic playlist search for query='{}': playlists={}", query, size(result.getPlaylists())))
                 .doOnError(error -> log.error("YtMusic playlist search failed for query='{}'", query, error));
     }
 
-    private Mono<List<Playlist>> playlists(String query, int limit) {
+    /**
+     * Each half has its own time limit, so a stalled featured search (the bonus half) falls back to
+     * fan-made only after one {@code perTry} instead of holding, or failing, the fan-made answer.
+     */
+    private Mono<List<Playlist>> playlists(String query, int limit, Duration perTry) {
         Mono<List<Playlist>> featured = ytMusicService.getResults(query, YtMusicSearchType.FEATURED_PLAYLISTS)
                 .map(result -> orEmpty(result.getPlaylists()))
+                .timeout(perTry)
                 .onErrorResume(error -> {
                     log.warn("Featured playlist search failed for query='{}', showing fan-made playlists only: {}", query, error.toString());
                     return Mono.just(List.of());
                 });
-        Mono<List<Playlist>> fanMade = ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS, limit)
-                .map(result -> orEmpty(result.getPlaylists()));
+        Mono<List<Playlist>> fanMade = withTries(ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS, limit)
+                .map(result -> orEmpty(result.getPlaylists())), perTry, 1);
         return Mono.zip(featured, fanMade, (editorial, community) -> mix(editorial, community, ThreadLocalRandom.current()));
     }
 
@@ -183,6 +199,28 @@ public class SearchService {
         top.forEach(item -> merged.putIfAbsent(id.apply(item), item));
         rest.forEach(item -> merged.put(id.apply(item), item));
         return List.copyOf(merged.values());
+    }
+
+    /**
+     * How long one try of a category search may take: 2 s plus 1 s per 20 asked for, so 3 s for the
+     * first page and 7 s for 100. ytmusicapi fetches 20 at a time, one after another (100 healthy
+     * ones took 3.1-3.5 s on 30-09-2026), and any of those fetches can stall. A stall used to run its
+     * full 5-10 s before the adapter client's retry, up to three times over.
+     */
+    static Duration tryFor(int limit) {
+        return Duration.ofMillis(2000 + 50L * limit);
+    }
+
+    /**
+     * {@code search}, given {@code perTry} per try and {@code more} further tries after a try runs
+     * out of time. Only a slow try is repeated here; an adapter error has already had its own
+     * retries inside {@link YtMusicService}.
+     */
+    private static <T> Mono<T> withTries(Mono<T> search, Duration perTry, int more) {
+        return search.timeout(perTry)
+                .retryWhen(Retry.max(more).filter(TimeoutException.class::isInstance)
+                        .onRetryExhaustedThrow((spec, signal) -> new YtMusicUnavailableException(
+                                "ytmusic-adapter search took over " + perTry.toMillis() + " ms, " + (more + 1) + " times", signal.failure())));
     }
 
     private static <T> Mono<T> orEmptyShelf(String what, String query, Mono<T> shelf, T empty, Set<String> unavailable) {

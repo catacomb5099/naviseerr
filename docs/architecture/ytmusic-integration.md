@@ -85,6 +85,9 @@ Two-exception hierarchy, both extending `YtMusicException`
 | `404` **without** it — FastAPI's `{"detail":"Not Found"}` or an empty body: the running image has no such route | `YtMusicUnavailableException` ("…is the sidecar image up to date?") | Yes |
 | `429`, `502`, `504`, any other status | `YtMusicUnavailableException` | Yes |
 | client-side timeout / connection refused / decode failure | `YtMusicUnavailableException` | Yes |
+| `500` whose body is not JSON (a stall: YouTube held the call 5-10 s, then sent an empty body, and the adapter's unhandled `JSONDecodeError` became FastAPI's plain-text 500) | `YtMusicUnavailableException` ("…unreadable error body") | Yes |
+
+On top of this, every search route caps each try and asks again after a slow one; see "Stalls" below.
 
 Retries reuse [ReactivePoller.defaultBackoff](../../src/main/java/com/catacomb5099/naviseerr/util/networkcalls/ReactivePoller.java)
 (`Retry.backoff(...).jitter(0.2).transientErrors(true)`), filtered to `YtMusicUnavailableException`
@@ -166,8 +169,29 @@ Why both, measured 30-09-2026:
   the albums search has Discovery, then tribute albums. For a song title ("wonderwall") the two agree.
 - **Cost.** Each call returns its first 20 in about 0.5 s (the slowest of 56 healthy ones: 0.82 s)
   and they run together, so All takes about as long as the one mixed call did (0.5-1.1 s for six
-  queries tried). All waits for its slowest call, though, so a call YouTube is slow to answer holds
-  the whole answer.
+  queries tried). All waits for its slowest call, though; see "Stalls" below.
+
+### Stalls
+
+On the evening of 30-09-2026 YouTube started holding some searches for 5-10 s and then answering
+with an empty body: 16 of 72 calls sent six at a time, 6 of 30 sent one at a time, and 3 of 12 made
+straight through ytmusicapi with no adapter in between (so not our code; possibly YouTube reacting
+to a heavy review run from one laptop, possibly that laptop's TLS-inspecting proxy). The adapter
+client does retry such a call, but only once the stall has run its course, up to three times. All
+waits for the slowest of its six calls, so searches took 6-20 s.
+
+So `SearchService` caps each try and asks again; a second try almost always answers at once:
+
+- **All** (`ALL_TRY`, 3 s per try; the slowest of 56 healthy calls took 0.82 s). Songs get two more
+  tries, then the search fails, as the canary. The mixed page, albums, artists and fan-made
+  playlists get one more, then drop out into `unavailable`. The featured half of playlists gets one
+  try, then the shelf is fan-made only.
+- **Category routes** (`tryFor(limit)`: 2 s plus 1 s per 20 asked for, 3 s for 20, 7 s for 100;
+  100 healthy took 3.1-3.5 s). One more try, then a 502. Featured playlists: one try, then
+  fan-made only.
+
+Measured with YouTube still stalling, twelve artist searches on All: median 3.5 s, worst 6.6 s,
+every shelf full; with no stall 0.6-0.7 s.
 
 The adapter still truncates its own output with `items[:limit]` *before* grouping, and YouTube
 interleaves the mixed page (videos first, albums starting around index 12 for a typical query). So
@@ -240,7 +264,8 @@ Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/s
   asks again with a bigger `limit` and keeps what it has not shown yet. Measured 30-09-2026: 20
   results take ~0.5 s, 100 take ~3 s (ytmusicapi fetches 20 at a time, one after another); YouTube
   had hundreds of songs, albums and fan-made playlists for "oasis" but only 57 artists, and the
-  same song can appear twice across its pages. So the client merges what it gets rather than
+  same song can appear twice across its pages. Each try gets `SearchService.tryFor(limit)` (see
+  "Stalls" above). So the client merges what it gets rather than
   trusting positions: artists and playlists by id, songs and albums by title and artists (YouTube
   also carries one recording under several ids, which by id alone would show twice).
 - `GET /search/{query}/playlists?limit=` - two filtered adapter calls at once (`playlists` = fan-made,
@@ -331,5 +356,3 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   `TrackDto` carries no artwork; same picture the collection view uses for playlist tracks.
 - On All, songs that only the mixed page returned carry `Track.albumId` `""` (the mixed page gives
   no album); the rest come from the songs search and have one. See "All" above.
-- All waits for the slowest of its six calls, each with the adapter client's 15 s timeout and
-  retries, so one call YouTube is slow to answer holds the whole answer.
