@@ -22,11 +22,12 @@ YouTube credentials, no OAuth — and exposes a stable, versioned (`/v1/...`) JS
 carrying only a YouTube id learns what to search Soulseek for — plus `GET /v1/artists/{channelId}`,
 behind the read-only artist page, and `GET /v1/songs/{videoId}/details`, behind the song page.
 
-Wired into [compose.yaml](../../compose.yaml) as `ytmusic-adapter`, built from
+Wired into [compose.dev.yaml](../../compose.dev.yaml) as `ytmusic-adapter`, built from
 `build: ../ytmusic-adapter` — a path outside this repo. `./gradlew bootRun` (which auto-starts
-compose via `spring-boot-docker-compose`) therefore only works with both repos checked out side by
-side. The container's own `HEALTHCHECK` (in the adapter's Dockerfile) hits its liveness endpoint;
-`docker compose ps` reports `healthy` once it responds.
+compose.dev.yaml via `spring-boot-docker-compose`) therefore only works with both repos checked out
+side by side. The all-in-one [compose.yaml](../../compose.yaml) builds it from its GitHub repo
+(`catacomb5099/ytmusicapi`) instead. The container's own `HEALTHCHECK` (in the adapter's Dockerfile)
+hits its liveness endpoint; `docker compose ps` reports `healthy` once it responds.
 
 ## Client
 

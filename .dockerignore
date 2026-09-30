@@ -1,0 +1,9 @@
+# Allowlist: only what the Dockerfile copies enters the build context. Keeps .env (slskd API key,
+# curator token) and .local/ (a GitHub token) out of every image.
+*
+!gradlew
+!gradle
+!settings.gradle
+!build.gradle
+!src
+!certs

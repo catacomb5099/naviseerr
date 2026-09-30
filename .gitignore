@@ -50,3 +50,9 @@ out/
 .DS_Store
 
 .worktrees/
+
+### Extra root CAs for building behind a TLS-intercepting proxy (see certs/README.md) ###
+certs/*.pem
+
+### The all-in-one install's default music library (LIBRARY_DIR in .env) ###
+/library/

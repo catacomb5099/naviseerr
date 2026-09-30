@@ -5,6 +5,12 @@ spring:
   # real secret in a file this repo commits — see .env.example and README.md.
   config:
     import: "optional:file:.env[.properties]"
+  # The compose file `./gradlew bootRun` and IntelliJ start (spring-boot-docker-compose is
+  # developmentOnly, so this does nothing in the Docker image). Not compose.yaml: that is the
+  # all-in-one install, which would start a second naviseerr.
+  docker:
+    compose:
+      file: compose.dev.yaml
   application:
     name: naviseerr
   r2dbc:
@@ -42,7 +48,8 @@ last-fm-service:
     search-result-limit: 10
 
 yt-music-service:
-    # The sidecar ytmusic-adapter (see compose.yaml). Default matches the port compose publishes.
+    # The sidecar ytmusic-adapter. Default matches the port compose.dev.yaml publishes; the all-in-one
+    # compose.yaml sets YT_MUSIC_SERVICE_URL.
     url: ${YT_MUSIC_SERVICE_URL:http://localhost:8000}
     search-result-limit: 10
     # Mixed (unfiltered) search returns a single page of shelves -- ytmusicapi ignores `limit`
@@ -164,12 +171,12 @@ library:
   # Where the organised library goes: <root>/<Artist>/<Album or Title>/<file>.
   root: ${LIBRARY_ROOT:}
 
-# Playlist curator: the separate croissant service (see compose.yaml) builds a fresh "suggested
+# Playlist curator: the separate croissant service (in both compose files) builds a fresh "suggested
 # playlists" edition per category. naviseerr owns the clock: once a week it tells the curator to start,
 # then checks back every poll-interval until the run is done. OFF unless BOTH url and token are set -- an
 # install without a curator behaves exactly as before. See docs/decisions/curator-weekly-trigger-27-09-2026.md.
 curator:
-  # Where the curator is reachable. Default matches the port compose publishes.
+  # Where the curator is reachable. Default matches the port compose.dev.yaml publishes.
   url: ${CURATOR_URL:http://localhost:8010}
   # Shared secret. Must be the exact same value the curator is started with (its CURATOR_TOKEN);
   # generate one with `openssl rand -hex 32`. Empty = the weekly refresh is off.

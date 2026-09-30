@@ -47,11 +47,12 @@ Last.fm, so it has a placeholder default. `.env` is gitignored and loaded automa
 
 ## ytmusic-adapter
 
-`compose.yaml` includes a `ytmusic-adapter` service (a Python/FastAPI adapter around
+`compose.dev.yaml` includes a `ytmusic-adapter` service (a Python/FastAPI adapter around
 `ytmusicapi`) via `build: ../ytmusic-adapter`. That relative path means `./gradlew bootRun`
-(which auto-starts compose through `spring-boot-docker-compose`) only starts that service
-successfully if the sibling repo `../ytmusic-adapter` is checked out next to this one. It backs
-search (`GET /search/**`) via `YtMusicService` — see
+(which auto-starts compose.dev.yaml through `spring-boot-docker-compose`) only starts that service
+successfully if the sibling repo `../ytmusic-adapter` is checked out next to this one. The
+all-in-one `compose.yaml` builds it straight from GitHub instead, so it needs no second checkout. It
+backs search (`GET /search/**`) via `YtMusicService` — see
 [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md), and that
 repo's own README for its API surface.
 
