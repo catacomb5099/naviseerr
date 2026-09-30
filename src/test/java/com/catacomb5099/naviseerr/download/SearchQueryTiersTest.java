@@ -170,6 +170,21 @@ class SearchQueryTiersTest {
     }
 
     @Test
+    void trailingVideoTag_isRemoved_titlesThatStartWithVideoOrAreVideoAreNot() {
+        assertEquals("Sweetest Thing", SearchQueryTiers.of("Sweetest Thing Video - U2").getFirst());
+        assertEquals("Sweetest Thing - U2", SearchQueryTiers.pickerName("Sweetest Thing Video - U2"));
+        assertEquals("Every Breath You Take", SearchQueryTiers.of("Every Breath You Take Video - The Police").getFirst());
+        assertEquals("Wonderwall", SearchQueryTiers.of("Wonderwall Official Music Video - Oasis").getFirst());
+        assertEquals("Wonderwall", SearchQueryTiers.of("Wonderwall Official Audio - Oasis").getFirst());
+        assertEquals("Video Killed The Radio Star", SearchQueryTiers.of("Video Killed The Radio Star - The Buggles").getFirst());
+        assertEquals("Video", SearchQueryTiers.of("Video - India.Arie").getFirst());
+        // A middle part that is only noise is still dropped whole, not cut down to "Lyric".
+        assertEquals(List.of("Heat Waves", "Heat Waves - Glass Animals", "Waves Animals"),
+                SearchQueryTiers.of("Glass Animals - Heat Waves - Lyric Video - Glass Animals"));
+        assertEquals(List.of("Wonderwall", "Wonderwall - Oasis"), SearchQueryTiers.of("Wonderwall - Music Video - Oasis"));
+    }
+
+    @Test
     void byArtist_becomesItsOwnPart_songsWithByInTheTitleDoNot() {
         assertEquals(List.of("Tongue Tied", "Tongue Tied - Grouplove", "Tongue Grouplove"), SearchQueryTiers.of("Tongue Tied by Grouplove - Hyde"));
         assertEquals("Tongue Tied - Grouplove", SearchQueryTiers.pickerName("Tongue Tied by Grouplove - Hyde"));
