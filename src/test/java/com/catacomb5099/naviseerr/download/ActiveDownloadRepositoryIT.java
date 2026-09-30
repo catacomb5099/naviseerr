@@ -469,6 +469,58 @@ class ActiveDownloadRepositoryIT {
         assertEquals(empty.downloads(), nul.downloads());
     }
 
+    // The page lists downloads in the order they were asked for. Each download gets its own request
+    // time, inserted out of order, so neither insertion order nor the random id can pass for it.
+
+    @Test
+    void findAll_listsNewestRequestFirst_andARetryDoesNotMoveIt() {
+        UUID middle = insertDownload("PENDING", NOW.minus(Duration.ofHours(2)));
+        UUID oldest = insertDownload("PENDING", NOW.minus(Duration.ofHours(3)));
+        UUID newest = insertDownload("PENDING", NOW.minus(Duration.ofHours(1)));
+        for (UUID id : List.of(middle, oldest, newest)) {
+            admit(id, "song " + id);
+        }
+        // Finished in request order, so until the retry "last changed" and "asked for" agree.
+        finish(oldest, DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES);
+        finish(middle, DownloadStatus.SUCCEEDED, null);
+        finish(newest, DownloadStatus.SUCCEEDED, null);
+
+        // The retry is the newest write of the three, so a list sorted by "last changed" would put
+        // the oldest request on top.
+        assertEquals(1L, downloadService.retry(oldest, NOW).block());
+
+        assertEquals(List.of(newest, middle, oldest), allIds());
+    }
+
+    @Test
+    void findAll_aSongMakingProgressDoesNotMoveItsDownloadUp() {
+        UUID older = insertDownload("PENDING", NOW.minus(Duration.ofHours(2)));
+        UUID newer = insertDownload("PENDING", NOW.minus(Duration.ofHours(1)));
+        admit(older, "older song");
+        admit(newer, "newer song");
+        DownloadTask claimed = taskRepository
+                .claimDueTasks(10, "a", NOW, Duration.ofSeconds(60), true, 10)
+                .filter(task -> task.downloadId().equals(older)).blockFirst();
+        taskRepository.save(claimed.withPhase(DownloadPhase.DOWNLOAD_POLL, NOW)
+                .withProgress(new BigDecimal("43.00")), "a").block();
+
+        assertEquals(List.of(newer, older), allIds());
+    }
+
+    private UUID insertDownload(String status, Instant requestedAt) {
+        UUID id = insertDownload(status);
+        template.getDatabaseClient()
+                .sql("UPDATE downloads SET created_at = :at WHERE download_id = :id")
+                .bind("at", requestedAt).bind("id", id)
+                .fetch().rowsUpdated().block();
+        return id;
+    }
+
+    private List<UUID> allIds() {
+        return activeDownloadRepository.findAll(10, 1, List.of()).block()
+                .downloads().stream().map(ActiveDownloadView::downloadId).toList();
+    }
+
     // ---- metadata: title, artists, artwork come from media_items ------------------------------
 
     @Test
