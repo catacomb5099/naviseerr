@@ -703,6 +703,21 @@ class YtMusicServiceTest {
     }
 
     @Test
+    void getSongDetails_readsTheCombinedPlaysWording_besideThePerUploadViewCount() {
+        // Wonderwall hpSrLjc5SMs as the adapter answers it once it sends `plays`
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"videoId\":\"hpSrLjc5SMs\",\"viewCount\":97645262,\"plays\":\"1.7B plays\"}"));
+
+        StepVerifier.create(service.getSongDetails("hpSrLjc5SMs"))
+                .assertNext(d -> {
+                    assertEquals(97645262L, d.getViewCount());
+                    assertEquals("1.7B plays", d.getPlays());
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void getSongDetails_officialVideo_hasNullAlbumYearExplicit_andEmptyCredits() {
         server.enqueue(new MockResponse().setResponseCode(200)
                 .addHeader("Content-Type", "application/json")
