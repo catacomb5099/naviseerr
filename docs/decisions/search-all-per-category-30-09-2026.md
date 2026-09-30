@@ -58,6 +58,14 @@ page whatever `limit` says: about 6 songs, 3 albums, 6 artists and 6 playlists. 
    albums, artists and playlists failed and came back empty. The client shows "couldn't load
    albums" with a button that asks the albums search itself, rather than no albums shelf at all
    (AGENTS.md: report "no good match" distinctly from provider errors).
+5. **Every search caps each try and asks again.** Found by the review before merge: that evening
+   YouTube started holding some calls 5-10 s and then answering with an empty body (16 of 72 sent
+   six at a time, 6 of 30 one at a time, 3 of 12 straight through ytmusicapi). The adapter client
+   retries only after the stall has run, up to three times, and All waits for its slowest call, so
+   searches took 6-20 s. A second try usually answers at once. All's calls get 3 s per try (songs
+   3 tries, then the search fails; the rest 2, then `unavailable`); the category routes get 2 s plus
+   1 s per 20 asked for, then one more try, then a 502; the featured half of playlists gets one try,
+   then fan-made only. Measured afterwards, still stalling: All median 3.5 s, worst 6.6 s.
 
 Counts on All, before and after (songs / albums / artists / playlists):
 
@@ -89,7 +97,8 @@ did not also return. Artists stay low where YouTube knows few: "daft punk" has 9
 Six YouTube Music calls per All search instead of one, and up to 100-result calls on "Show more".
 For one person browsing this is fine; if the adapter starts seeing 429s, the first knob is
 `FIRST_PAGE` in `SearchService`. All waits for its slowest call, so a call YouTube is slow to
-answer now holds six shelves rather than one page.
+answer would hold six shelves rather than one page; point 5 caps that. When YouTube stalls, one All
+search can cost up to 12 calls.
 
 ## How to flip
 
@@ -100,4 +109,5 @@ answer now holds six shelves rather than one page.
 - Deeper "Show more": `SearchService.MAX_LIMIT`, together with the adapter's `le=100` on `limit` and
   the client's `MAX_RESULTS` (`src/lib/showMore.ts`), which stops asking at 100.
 - Category searches only, no mixed page on top: drop the `top` leg in `SearchService.search`.
+- Slower or faster give-up: `SearchService.ALL_TRY` (All) and `SearchService.tryFor` (category routes).
 - Back to one mixed call: revert this PR; the mixed-search decision explains what that costs.

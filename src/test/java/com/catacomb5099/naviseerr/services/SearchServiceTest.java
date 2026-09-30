@@ -15,11 +15,13 @@ import org.springframework.http.ResponseEntity;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -116,6 +118,103 @@ class SearchServiceTest {
                     assertEquals(List.of("mixed"), response.getUnavailable());
                 })
                 .verifyComplete();
+    }
+
+    /** A search that hangs on its first try and answers on the next, like a stalled YouTube call. */
+    private static <T> Mono<T> stallsOnceThen(T answer) {
+        AtomicInteger tries = new AtomicInteger();
+        return Mono.defer(() -> tries.getAndIncrement() == 0 ? Mono.never() : Mono.just(answer));
+    }
+
+    @Test
+    void search_aStalledTry_isAskedAgainAfterThreeSeconds_insteadOfHoldingTheWholeAnswer() {
+        stubEveryCategory("Oasis");
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.SONGS, 20)).thenReturn(stallsOnceThen(only(List.of(track()), List.of(), List.of(), List.of())));
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.ALBUMS, 20)).thenReturn(stallsOnceThen(only(List.of(), List.of(album()), List.of(), List.of())));
+
+        StepVerifier.withVirtualTime(() -> searchService.search("Oasis"))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(2999))
+                .thenAwait(Duration.ofMillis(1))
+                .assertNext(response -> {
+                    assertEquals(1, response.getTracks().size());
+                    assertEquals(1, response.getAlbums().size());
+                    assertEquals(List.of(), response.getUnavailable());
+                })
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void search_anOptionalSearchThatKeepsStalling_dropsOutAfterTwoTries_andTheRestStillArrives() {
+        stubEveryCategory("Oasis");
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.ALBUMS, 20)).thenReturn(Mono.never());
+
+        StepVerifier.withVirtualTime(() -> searchService.search("Oasis"))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(5999))
+                .thenAwait(Duration.ofMillis(1))
+                .assertNext(response -> {
+                    assertEquals(1, response.getTracks().size());
+                    assertTrue(response.getAlbums().isEmpty());
+                    assertEquals(1, response.getArtists().size());
+                    assertEquals(List.of("albums"), response.getUnavailable());
+                })
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void search_songsThatKeepStalling_failAfterThreeTries_asAnUnavailableProvider() {
+        stubEveryCategory("Oasis");
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.SONGS, 20)).thenReturn(Mono.never());
+
+        StepVerifier.withVirtualTime(() -> searchService.search("Oasis"))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(8999))
+                .thenAwait(Duration.ofMillis(1))
+                .expectError(YtMusicUnavailableException.class)
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void categorySearch_aStalledTry_isAskedAgain_afterTwoSecondsPlusOnePerTwentyAskedFor() {
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.ALBUMS, 100)).thenReturn(stallsOnceThen(only(List.of(), List.of(album()), List.of(), List.of())));
+
+        StepVerifier.withVirtualTime(() -> searchService.searchAlbums("Oasis", 100))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(6999))
+                .thenAwait(Duration.ofMillis(1))
+                .assertNext(response -> assertEquals(1, response.getAlbums().size()))
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+        assertEquals(Duration.ofSeconds(3), SearchService.tryFor(20));
+    }
+
+    @Test
+    void categorySearch_stallingTwice_isAnUnavailableProvider_notAHang() {
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.SONGS, 20)).thenReturn(Mono.never());
+
+        StepVerifier.withVirtualTime(() -> searchService.searchTracks("Oasis", 20))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(5999))
+                .thenAwait(Duration.ofMillis(1))
+                .expectError(YtMusicUnavailableException.class)
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void playlists_aFeaturedSearchThatStalls_fallsBackToFanMadeAfterOneTry_notAnError() {
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS, 20)).thenReturn(Mono.just(playlistsOnly(playlist("PL1", "Britpop Bangers"))));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.never());
+
+        StepVerifier.withVirtualTime(() -> searchService.searchPlaylists("Britpop", 20))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(2999))
+                .thenAwait(Duration.ofMillis(1))
+                .assertNext(response -> assertEquals(List.of("PL1"), ids(response.getPlaylists())))
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
     }
 
     @Test
