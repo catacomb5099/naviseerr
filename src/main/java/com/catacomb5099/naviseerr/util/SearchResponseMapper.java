@@ -31,7 +31,8 @@ public class SearchResponseMapper {
                 lastFMTrack.getName(),
                 List.of(lastFMTrack.getArtist()),
                 "lol",
-                0
+                0,
+                null
         );
     }
 

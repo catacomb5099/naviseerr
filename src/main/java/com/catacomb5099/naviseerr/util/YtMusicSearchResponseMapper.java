@@ -80,7 +80,8 @@ public class YtMusicSearchResponseMapper {
                 orEmpty(item.getTitle()),
                 mapArtistNames(item.getArtists()),
                 item.getAlbum() != null ? orEmpty(item.getAlbum().getBrowseId()) : "",
-                0 // song search items carry no year; Track.year has no reader in the client
+                0, // song search items carry no year; Track.year has no reader in the client
+                plays(item.getViews())
         );
     }
 
@@ -115,6 +116,19 @@ public class YtMusicSearchResponseMapper {
                 mapArtistNames(item.getArtists()),
                 item.getTrackCount() != null ? item.getTrackCount() : 0
         );
+    }
+
+    /**
+     * A play count in the wording album tracks already carry ("28M plays"), so every song row the
+     * client shows reads the same: a search item's bare "7.2M" gains the noun, an artist top song's
+     * "1.7B plays" is left alone, null stays null. Never parsed to a number: YouTube abbreviates it
+     * upstream, so a number would claim a precision it does not have.
+     */
+    public static String plays(String views) {
+        if (views == null || views.isBlank()) {
+            return null;
+        }
+        return views.endsWith("plays") ? views : views + " plays";
     }
 
     public static List<String> mapArtistNames(List<YtMusicSearchResponse.ArtistRef> artists) {

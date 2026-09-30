@@ -118,6 +118,7 @@ are load-bearing on the UI, not stylistic):
 | `Track.artists` / `Album.artists` | `artists[].name` | display **names**, never `channelId` — the client `join(', ')`s this directly |
 | `Track.streamURL` | `""` | the adapter exposes no streaming path by design; unread by the client either way |
 | `Track.albumId` | `album.browseId` | a real `MPREb_…` id — replaces the old hardcoded `"lol"` (see [gotchas.md](gotchas.md) #5) |
+| `Track.plays` | `views` + `" plays"`, else null | "7.2M" becomes "7.2M plays", the wording album tracks carry; never parsed (YouTube abbreviates it). Null on the Top result card |
 | `Album.year` | `year`, else `0` | song search items carry no year; only album items do |
 | `Playlist.id` | `playlistId`, else `browseId`, else `""` | bare `PL...` preferred over the `VL`-prefixed `browseId` -- see Endpoints below |
 | `Playlist.artists` | `artists[].name` | the adapter folds ytmusicapi's `author` string into `artists[0]` |

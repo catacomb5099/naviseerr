@@ -24,6 +24,8 @@ import java.util.Objects;
  * @param topSongs       {@code Track.albumId} is always {@code ""}: the adapter names a song's album
  *                       but gives no browseId for it. {@code iconURL} is YouTube's predictable
  *                       per-video thumbnail, since the adapter's artist answer carries no artwork for them.
+ *                       {@code plays} is YouTube's wording ("1.7B plays"), null from an adapter that
+ *                       sends none.
  * @param albums         {@code artists} is {@code [this artist's name]}: the shelf lists only the
  *                       artist's own releases and the adapter gives no per-album artists.
  * @param playlists      YouTube Music's own featured playlists that its search links to this artist,
@@ -47,7 +49,7 @@ public record ArtistView(String id, String name, String iconURL, String descript
                 .limit(MAX)
                 .map(track -> new Track(track.getVideoId(), YtMusicService.fallbackThumbnail(track.getVideoId()),
                         "", orEmpty(track.getTitle()), YtMusicSearchResponseMapper.mapArtistNames(track.getArtists()),
-                        "", 0))
+                        "", 0, YtMusicSearchResponseMapper.plays(track.getViews())))
                 .toList();
         List<Artist> similar = orEmpty(artist.getRelated()).stream()
                 .filter(related -> related.getBrowseId() != null)

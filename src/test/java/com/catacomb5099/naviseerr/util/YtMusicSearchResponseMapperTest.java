@@ -123,6 +123,33 @@ class YtMusicSearchResponseMapperTest {
     }
 
     @Test
+    void songs_plays_gainsTheNounAlbumTracksCarry_soEveryRowReadsTheSame() {
+        YtMusicSearchResponse.Item item = songItem().toBuilder().views("7.2M").build();
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item)).build());
+
+        assertEquals("7.2M plays", result.getTracks().get(0).getPlays());
+    }
+
+    @Test
+    void songs_plays_alreadyWorded_isLeftAlone() {
+        YtMusicSearchResponse.Item item = songItem().toBuilder().views("1.7B plays").build();
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item)).build());
+
+        assertEquals("1.7B plays", result.getTracks().get(0).getPlays());
+    }
+
+    @Test
+    void songs_noViews_playsIsNull_notAnInventedCount() {
+        // the Top result card row, and every item from an adapter older than the field
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(songItem())).build());
+
+        assertNull(result.getTracks().get(0).getPlays());
+    }
+
+    @Test
     void songs_albumId_comesFromAlbumBrowseId_notAudioPlaylistId() {
         SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
                 YtMusicSearchResponse.builder().items(List.of(songItem())).build());
