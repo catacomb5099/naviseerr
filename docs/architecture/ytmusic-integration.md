@@ -52,11 +52,9 @@ this codebase.
   only that one list populated (the adapter already filtered server-side).
 - `getResults(query)` - **one** unfiltered `GET /v1/search` call, passing
   `yt-music-service.mixed-search-limit` (`100`) as `limit`. `YtMusicSearchResponseMapper` partitions
-  the mixed response into all four lists in a single pass. This used to fan out the three typed
-  searches concurrently and fuse them with `Mono.zip(...)`, same shape as
-  `LastFMService.getResults(String)` did; that was changed to cut the provider calls a general
-  search makes from three to one — see the "Mixed (general) search" section below for the accepted
-  tradeoff.
+  the mixed response into all four lists in a single pass. Since 30-09-2026 it is the top of each
+  shelf on "All", with the category searches filling the rest; see "All: the mixed page on top, the
+  category searches below" below.
 
 Both overloads share one private `executeSearch(uriFunction, label, query)` helper for the
 request/response pipeline below (error translation, debug logging, timeout, retry) — they differ
@@ -128,7 +126,7 @@ are load-bearing on the UI, not stylistic):
 `YtMusicSearchResponseMapper.mapToSearchResponse(response)` classifies every item by `resultType`
 in a single pass and routes it into `tracks`/`albums`/`artists`/`playlists`; anything else (`video`, `episode`,
 `podcast`, `station`, `profile`, `null`) is dropped. This is what makes the mapper safe
-for both callers: a typed response (already filtered server-side) yields items of one kind, so three
+for any response: a typed response (already filtered server-side) yields items of one kind, so three
 of the four lists come back empty; a mixed response yields all four at once. It also replaces the
 old per-type defensive filter (three separate `"song".equals(...)` style checks) with one
 structural pass — defense against upstream shape drift leaking, e.g., a podcast into the artists
@@ -138,35 +136,47 @@ Do not filter artists on `browseId != null` — a bare-name query's "Top result"
 `browseId` entirely, and the adapter's own `map_search_item` falls back to `artists[0].id` for
 exactly this case (`ytmusic-adapter/AGENTS.md`).
 
-## Mixed (general) search: one request, fewer results
+## All: the mixed page on top, the category searches below
 
-`GET /v1/search` with no `type` returns YouTube Music's own mixed results page — the same page you
-get typing into the YTM search box — instead of a category-filtered page. Two constraints, both
-confirmed against the pinned `ytmusicapi` 1.12.2 source, shape what naviseerr can do with it:
+`GET /search/{query}` runs six adapter calls at once: the unfiltered mixed search, and the songs,
+albums, artists and playlists searches (20 each; playlists is itself two calls, fan-made and
+featured). Each shelf is the mixed page's items of that kind first, in YouTube's order, then the
+category search's items it does not already hold (`SearchService.topThenRest`, matched by YouTube
+id; an item in both keeps its mixed-page place but takes the category search's copy, whose song
+knows its album). Matching by id does not catch the same recording under a second id (the album
+cut and the greatest-hits cut of "Some Might Say" both come back); the client folds songs and
+albums that share a title and artists into one row. The songs search is the canary: when it fails
+the whole answer fails, so an adapter that is down reads as an error and never as "no results". The
+mixed page and the other three each drop out on their own and are named in the answer's
+`unavailable` list (`mixed`, `albums`, `artists`, `playlists`; empty when everything answered), so
+the client can show "couldn't load albums" with a way to try again instead of no albums shelf. The
+client's "Show more" on a shelf asks the same category route with a bigger `limit`, so a shelf on
+All carries on where it stopped.
 
-- **`limit` is dead when unfiltered.** In `ytmusicapi/mixins/search.py`, the continuation loop that
-  paginates until `limit` results are collected only runs `if internal_filter:`. With no filter,
-  that block never executes, so the call returns exactly one page of shelves regardless of the
-  `limit` requested — `limit=100` and `limit=1` are byte-identical.
-- **Categories cannot be excluded.** The adapter's `filter` query param maps to a single-valued
-  `Literal` in `ytmusicapi`; there is no way to ask for "songs, albums, artists but not videos".
+Why both, measured 30-09-2026:
+
+- **The mixed page is one page.** ytmusicapi's continuation loop only runs `if internal_filter:`, so
+  an unfiltered search returns exactly one page of shelves whatever `limit` says (`limit=100` and
+  `limit=1` are byte-identical): about 6 songs / 3 albums / 6 artists / 6 playlists, songs with
+  `album: null`. It cannot be asked for more, and categories cannot be excluded (the filter is a
+  single-valued `Literal`).
+- **The category searches rank worse at the top.** For "oasis" the mixed page's songs are
+  Champagne Supernova, She's Electric, Morning Glory; the songs search leads with Liam Gallagher,
+  Roberta Flack and J Balvin. For "daft punk" the mixed albums are Discovery and Human After All;
+  the albums search has Discovery, then tribute albums. For a song title ("wonderwall") the two agree.
+- **Cost.** Each call returns its first 20 in about 0.5 s (the slowest of 56 healthy ones: 0.82 s)
+  and they run together, so All takes about as long as the one mixed call did (0.5-1.1 s for six
+  queries tried). All waits for its slowest call, though, so a call YouTube is slow to answer holds
+  the whole answer.
 
 The adapter still truncates its own output with `items[:limit]` *before* grouping, and YouTube
 interleaves the mixed page (videos first, albums starting around index 12 for a typical query). So
-`mixed-search-limit` is set to the adapter's ceiling (`100`) purely to avoid that truncation
-starving the categories that appear late — at `limit=10` a mixed page can return zero albums.
+`mixed-search-limit` stays at the adapter's ceiling (`100`) purely to avoid that truncation starving
+the categories that appear late; at `limit=10` a mixed page can return zero albums.
 
-Even at `limit=100`, a mixed page has noticeably fewer results per category than three typed calls
-at `search-result-limit=10` would: recorded against the `Oasis Wonderwall` fixture, mixed search
-returns roughly 6 songs / 3 albums / 6 artists versus ~10 / 6 / 10 from the typed routes. It also
-returns songs with `album: null` and `durationSeconds: null` — YouTube only populates those on
-category-filtered searches — so `Track.albumId` on the general endpoint is always `""`, unlike the
-typed `/search/{query}/tracks` route, which still returns a real `MPREb_…` id. This was accepted
-deliberately in exchange for cutting the general endpoint from three provider calls to one; see
-[docs/decisions/ytmusic-mixed-search-20-08-2026.md](../decisions/ytmusic-mixed-search-20-08-2026.md).
-
-The three typed calls this replaced already ran concurrently via `Mono.zip`, so this change reduces
-provider load and adapter semaphore occupancy — it is not a user-visible latency improvement.
+Until 30-09-2026 the mixed page was all of All; see
+[docs/decisions/search-all-per-category-30-09-2026.md](../decisions/search-all-per-category-30-09-2026.md),
+which supersedes [the mixed-search decision](../decisions/ytmusic-mixed-search-20-08-2026.md).
 
 ## Metadata lookups (the download pipeline's use of this provider)
 
@@ -222,8 +232,8 @@ load … Try again" and the log says to rebuild the image.
 Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/services/SearchService.java),
 `@GetMapping` (was `@RequestMapping`, which accepted every HTTP verb):
 
-- `GET /search/{query}` - mixed (one unfiltered adapter call; see above). Fills all four lists,
-  `playlists` included -- the mixed page always carried `playlist` items, the mapper used to drop them.
+- `GET /search/{query}` - "All": the mixed page on top of each shelf, the four category searches
+  below it (20 each), all at once (see "All: the mixed page on top, the category searches below").
 - `GET /search/{query}/tracks` | `/albums` | `/artists` `?limit=` - typed (one filtered adapter call
   each). `limit` defaults to `20` and is pulled into `1..100` (the adapter refuses more than 100).
   This is how the client's "Show more" works: YouTube Music has no "next page" we can ask for, so it
@@ -305,8 +315,8 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   featured-playlists half of `/search/{query}/playlists`. The category routes take theirs from the
   request (`SearchService.FIRST_PAGE`, `20`, when absent).
 - `mixed-search-limit` - the `limit` sent on the general/unfiltered route. Kept at the adapter's
-  ceiling (`100`) even though `ytmusicapi` ignores `limit` unfiltered — see "Mixed (general) search"
-  above for why lowering it is a silent regression, not a simple tuning knob.
+  ceiling (`100`) even though `ytmusicapi` ignores `limit` unfiltered — see "All" above for why
+  lowering it is a silent regression, not a simple tuning knob.
 - `timeout-ms`, `retry-count`, `first-back-off-duration-ms` - see Error handling above.
 
 ## Known gaps
@@ -319,5 +329,7 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   an adapter image older than that field leaves them `""`, no error. Rebuild the adapter image.
 - Top songs on the artist page use YouTube's predictable per-video thumbnail because the adapter's
   `TrackDto` carries no artwork; same picture the collection view uses for playlist tracks.
-- General search returns fewer results per category than the typed routes, and blanks
-  `Track.albumId` — see "Mixed (general) search" above.
+- On All, songs that only the mixed page returned carry `Track.albumId` `""` (the mixed page gives
+  no album); the rest come from the songs search and have one. See "All" above.
+- All waits for the slowest of its six calls, each with the adapter client's 15 s timeout and
+  retries, so one call YouTube is slow to answer holds the whole answer.

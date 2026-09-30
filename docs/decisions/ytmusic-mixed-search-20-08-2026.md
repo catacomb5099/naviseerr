@@ -2,6 +2,9 @@
 
 - **Date:** 20-08-2026
 - **Topic:** ytmusic-mixed-search
+- **Superseded 30-09-2026** by [search-all-per-category-30-09-2026.md](search-all-per-category-30-09-2026.md):
+  "All" asks each category separately again, because one mixed page cannot give enough results to browse.
+  The mixed page stays as the top of each shelf.
 
 ---
 

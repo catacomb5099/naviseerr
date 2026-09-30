@@ -46,22 +46,111 @@ class SearchServiceTest {
         return new Playlist("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", "https://example.com/p.jpg", "Britpop Essentials", List.of("YouTube Music"), 42);
     }
 
+    private static SearchResponse only(List<Track> tracks, List<Album> albums, List<Artist> artists, List<Playlist> playlists) {
+        return new SearchResponse(tracks, albums, artists, playlists);
+    }
+
+    /** Every search "All" makes, answered with one item each (the mixed page with nothing) unless a test overrides one. */
+    private void stubEveryCategory(String query) {
+        when(ytMusicService.getResults(query)).thenReturn(Mono.just(only(List.of(), List.of(), List.of(), List.of())));
+        when(ytMusicService.getResults(query, YtMusicSearchType.SONGS, 20)).thenReturn(Mono.just(only(List.of(track()), List.of(), List.of(), List.of())));
+        when(ytMusicService.getResults(query, YtMusicSearchType.ALBUMS, 20)).thenReturn(Mono.just(only(List.of(), List.of(album()), List.of(), List.of())));
+        when(ytMusicService.getResults(query, YtMusicSearchType.ARTISTS, 20)).thenReturn(Mono.just(only(List.of(), List.of(), List.of(artist()), List.of())));
+        when(ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS, 20)).thenReturn(Mono.just(only(List.of(), List.of(), List.of(), List.of(playlist()))));
+        when(ytMusicService.getResults(query, YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.just(only(List.of(), List.of(), List.of(), List.of(playlist("RDCLAK5uy_1", "Cool Britannia")))));
+    }
+
     @Test
-    void search_combinesTracksAlbumsAndArtists_fromCombinedGetResults() {
-        SearchResponse combined = new SearchResponse(List.of(track()), List.of(album()), List.of(artist()), List.of(playlist()));
-        when(ytMusicService.getResults("Oasis")).thenReturn(Mono.just(combined));
+    void search_asksTheMixedPageAndEachCategory_twentyOfEach_andFillsEveryShelf() {
+        stubEveryCategory("Oasis");
 
         StepVerifier.create(searchService.search("Oasis"))
                 .assertNext(response -> {
-                    assertTrue(response.getTracks().size() == 1);
-                    assertTrue(response.getAlbums().size() == 1);
-                    assertTrue(response.getArtists().size() == 1);
-                    assertTrue(response.getPlaylists().size() == 1);
+                    assertEquals(1, response.getTracks().size());
+                    assertEquals(1, response.getAlbums().size());
+                    assertEquals(1, response.getArtists().size());
+                    assertEquals(List.of("RDCLAK5uy_1", "PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx"), ids(response.getPlaylists()));
+                    assertEquals(List.of(), response.getUnavailable());
                 })
                 .verifyComplete();
 
         verify(ytMusicService).getResults("Oasis");
-        verify(ytMusicService, never()).getResults(anyString(), any());
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.SONGS, 20);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ALBUMS, 20);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ARTISTS, 20);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.PLAYLISTS, 20);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.FEATURED_PLAYLISTS);
+    }
+
+    @Test
+    void search_putsTheMixedPageOnTopOfEachShelf_thenTheCategorySearches_eachItemOnce() {
+        stubEveryCategory("Oasis");
+        Track hit = new Track("hit", "", "", "Champagne Supernova", List.of("Oasis"), "", 0, null);
+        Track sameSongFromMixed = new Track("vid1", "", "", "Wonderwall", List.of("Oasis"), "", 0, null);
+        Artist oasisFromMixed = new Artist("UC1", "", "Oasis");
+        when(ytMusicService.getResults("Oasis")).thenReturn(Mono.just(only(
+                List.of(hit, sameSongFromMixed), List.of(), List.of(oasisFromMixed), List.of())));
+
+        StepVerifier.create(searchService.search("Oasis"))
+                .assertNext(response -> {
+                    assertEquals(List.of("hit", "vid1"), response.getTracks().stream().map(Track::getId).toList());
+                    // Wonderwall is in both: it keeps the mixed page's place, but the songs search's copy, which knows its album.
+                    assertEquals("MPREb_1", response.getTracks().get(1).getAlbumId());
+                    assertEquals(1, response.getArtists().size());
+                    assertEquals(1, response.getAlbums().size());
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void search_mixedPageFailing_stillShowsTheCategorySearches() {
+        stubEveryCategory("Oasis");
+        when(ytMusicService.getResults("Oasis")).thenReturn(Mono.error(new YtMusicUnavailableException("mixed down")));
+
+        StepVerifier.create(searchService.search("Oasis"))
+                .assertNext(response -> {
+                    assertEquals(1, response.getTracks().size());
+                    assertEquals(1, response.getAlbums().size());
+                    assertEquals(1, response.getArtists().size());
+                    assertEquals(2, response.getPlaylists().size());
+                    assertEquals(List.of("mixed"), response.getUnavailable());
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void topThenRest_keepsTopOrder_appendsOnlyNewOnes_andTakesRestsCopyOfASharedOne() {
+        List<String> merged = SearchService.topThenRest(List.of("b1", "a1"), List.of("a2", "c2", "b2", "c3"), s -> s.substring(0, 1));
+        assertEquals(List.of("b2", "a2", "c3"), merged);
+        assertEquals(List.of("x"), SearchService.topThenRest(List.of(), List.of("x"), s -> s));
+        assertEquals(List.of("x"), SearchService.topThenRest(List.of("x"), List.of(), s -> s));
+    }
+
+    @Test
+    void search_oneShelfFailing_stillShowsTheOthers() {
+        stubEveryCategory("Oasis");
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.ALBUMS, 20)).thenReturn(Mono.error(new YtMusicUnavailableException("albums down")));
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.PLAYLISTS, 20)).thenReturn(Mono.error(new YtMusicUnavailableException("playlists down")));
+
+        StepVerifier.create(searchService.search("Oasis"))
+                .assertNext(response -> {
+                    assertEquals(1, response.getTracks().size());
+                    assertTrue(response.getAlbums().isEmpty());
+                    assertEquals(1, response.getArtists().size());
+                    assertTrue(response.getPlaylists().isEmpty());
+                    // Named, so the client can say "couldn't load albums" rather than show none.
+                    assertEquals(List.of("albums", "playlists"), response.getUnavailable());
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void search_songSearchFailing_isAnError_soADownAdapterNeverReadsAsNoResults() {
+        stubEveryCategory("Oasis");
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.SONGS, 20)).thenReturn(Mono.error(new YtMusicUnavailableException("provider down")));
+
+        StepVerifier.create(searchService.search("Oasis"))
+                .verifyError(YtMusicUnavailableException.class);
     }
 
     @Test
@@ -243,6 +332,8 @@ class SearchServiceTest {
     @Test
     void search_zeroResults_yieldsEmptyListsNotAnError() {
         SearchResponse empty = new SearchResponse(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+        when(ytMusicService.getResults(eq("zzzzzzzznotarealthing"), any(), anyInt())).thenReturn(Mono.just(empty));
+        when(ytMusicService.getResults(eq("zzzzzzzznotarealthing"), any())).thenReturn(Mono.just(empty));
         when(ytMusicService.getResults("zzzzzzzznotarealthing")).thenReturn(Mono.just(empty));
 
         StepVerifier.create(searchService.search("zzzzzzzznotarealthing"))
@@ -250,16 +341,9 @@ class SearchServiceTest {
                     assertTrue(response.getTracks().isEmpty());
                     assertTrue(response.getAlbums().isEmpty());
                     assertTrue(response.getArtists().isEmpty());
+                    assertTrue(response.getPlaylists().isEmpty());
                 })
                 .verifyComplete();
-    }
-
-    @Test
-    void search_providerFailure_propagatesAsError_notSwallowed() {
-        when(ytMusicService.getResults("Oasis")).thenReturn(Mono.error(new RuntimeException("provider down")));
-
-        StepVerifier.create(searchService.search("Oasis"))
-                .verifyError(RuntimeException.class);
     }
 
     @Test

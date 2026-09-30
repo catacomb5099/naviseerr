@@ -17,5 +17,16 @@ public class SearchResponse {
     List<Artist> artists;
     @Nullable
     List<Playlist> playlists;
+    /**
+     * General search only: the parts that failed and came back empty, any of {@code mixed},
+     * {@code albums}, {@code artists}, {@code playlists}, so the client can tell "none found" from
+     * "could not ask". Empty when all answered; null on the category routes.
+     */
+    @Nullable
+    List<String> unavailable;
+
+    public SearchResponse(List<Track> tracks, List<Album> albums, List<Artist> artists, List<Playlist> playlists) {
+        this(tracks, albums, artists, playlists, null);
+    }
 }
 
