@@ -45,7 +45,7 @@ Prefer putting genuinely new state in a new table over altering an existing one.
 
 ## Current Implementation State
 
-The durable state machine described in "Download Manager Architecture" below is now built, not just targeted. Collection downloads landed on 14-09-2026 — see [the ADR](docs/decisions/collection-downloads-14-09-2026.md). Download metadata (a `media_items` table, artwork, lifecycle timestamps, and the per-song view `GET /downloads/{id}`) landed on 25-09-2026 — see [that ADR](docs/decisions/download-metadata-25-09-2026.md). Cancel and retry landed on 28-09-2026 — see [that ADR](docs/decisions/retry-and-cancel-28-09-2026.md). Remaining gaps (SSE) are called out explicitly below.
+The durable state machine described in "Download Manager Architecture" below is now built, not just targeted. Collection downloads landed on 14-09-2026 — see [the ADR](docs/decisions/collection-downloads-14-09-2026.md). Download metadata (a `media_items` table, artwork, lifecycle timestamps, and the per-song view `GET /downloads/{id}`) landed on 25-09-2026 — see [that ADR](docs/decisions/download-metadata-25-09-2026.md). Cancel and retry landed on 28-09-2026 — see [that ADR](docs/decisions/retry-and-cancel-28-09-2026.md). The all-in-one install (one `compose.yaml` with naviseerr's own slskd, a generated Soulseek account and the web app; developers use `compose.dev.yaml`) landed on 30-09-2026 — see [that ADR](docs/decisions/all-in-one-install-30-09-2026.md). Remaining gaps (SSE) are called out explicitly below.
 
 The current application is a small Java REST/WebFlux service that:
 
