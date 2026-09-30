@@ -82,9 +82,14 @@ public final class SearchQueryTiers {
     /** Never more than this many searches (about 10 s of slskd time each) for one song. */
     private static final int MAX_TIERS = 4;
 
-    /** "Such Great Heights Lyrics", "Anyone Else But You w/ Lyrics": lyric uploads tag the title itself. */
-    private static final Pattern TRAILING_LYRICS = Pattern.compile(
-            "\\s+(?:w/|with)?\\s*lyrics$", Pattern.CASE_INSENSITIVE);
+    /**
+     * "Such Great Heights Lyrics", "Anyone Else But You w/ Lyrics", "Sweetest Thing Video": uploads
+     * that tag the title itself, no brackets. The lab's 771 songs had three "... Video" titles (U2, The
+     * Police), the only ones whose first search was not the bare song name.
+     */
+    private static final Pattern TRAILING_TAG = Pattern.compile(
+            "\\s+(?:(?:w/|with)?\\s*lyrics|(?:official\\s+)?(?:music\\s+|lyric\\s+)?video|official\\s+audio)$",
+            Pattern.CASE_INSENSITIVE);
 
     /**
      * "Tongue Tied by Grouplove": a lower-case "by" followed by a capitalised name is a credit, so the
@@ -275,7 +280,7 @@ public final class SearchQueryTiers {
 
     /**
      * Every bracket gone (kept as qualifiers when more than platform noise), straight quotes gone
-     * (they kill a Soulseek search outright), noise-only middle parts gone, a trailing "Lyrics" gone,
+     * (they kill a Soulseek search outright), noise-only middle parts gone, a trailing "Lyrics", "Video" or "Official Audio" tag gone,
      * a "by Artist" credit made the artist, a "ft. Guest" credit gone from the title, the artist's
      * channel suffix gone, the artist's echo removed from the title, and every version phrase moved
      * out of the title into the qualifiers. One part when there is no artist; empty when nothing
@@ -288,7 +293,7 @@ public final class SearchQueryTiers {
 
         List<String> segments = new ArrayList<>(Arrays.stream(SEGMENT.split(stripped))
                 .map(SearchQueryTiers::collapse)
-                .map(SearchQueryTiers::withoutTrailingLyrics)
+                .map(SearchQueryTiers::withoutTrailingTag)
                 .filter(segment -> !segment.isEmpty())
                 .toList());
         if (segments.size() > 2) {
@@ -381,9 +386,16 @@ public final class SearchQueryTiers {
         return text;
     }
 
-    /** Only when something is left: "Lyrics - Someone" keeps its title. */
-    private static String withoutTrailingLyrics(String segment) {
-        String cut = TRAILING_LYRICS.matcher(segment).replaceFirst("");
+    /**
+     * Only when something is left: "Lyrics - Someone" keeps its title. A part that is nothing but
+     * noise ("Heat Waves - Lyric Video - Glass Animals") is left whole for the noise-only removal in
+     * {@link #clean}; cut to "Lyric" it would survive as a word in every search.
+     */
+    private static String withoutTrailingTag(String segment) {
+        if (stripNoise(segment).isEmpty()) {
+            return segment;
+        }
+        String cut = TRAILING_TAG.matcher(segment).replaceFirst("");
         return cut.isEmpty() ? segment : cut;
     }
 
