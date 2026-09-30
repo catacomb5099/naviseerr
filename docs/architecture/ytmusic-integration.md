@@ -46,7 +46,8 @@ this codebase.
   (the adapter's typed sugar routes; `type` is [YtMusicSearchType](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicSearchType.java),
   the LastFM-era `LastFMAPIMethod`'s replacement), passing `yt-music-service.search-result-limit`
   (`10`) as `limit`. `getResults(query, type, limit)` is the same call with a caller-chosen page
-  size, for the artist page's featured-playlist search, which filters the answer afterwards. The
+  size: the category search routes pass the client's `?limit=` through it, and the artist page's
+  featured-playlist search uses it because it filters the answer afterwards. The
   response is mapped through `YtMusicSearchResponseMapper`, which yields a `SearchResponse` with
   only that one list populated (the adapter already filtered server-side).
 - `getResults(query)` - **one** unfiltered `GET /v1/search` call, passing
@@ -223,11 +224,21 @@ Exposed by [SearchService.java](../../src/main/java/com/catacomb5099/naviseerr/s
 
 - `GET /search/{query}` - mixed (one unfiltered adapter call; see above). Fills all four lists,
   `playlists` included -- the mixed page always carried `playlist` items, the mapper used to drop them.
-- `GET /search/{query}/tracks` | `/albums` | `/artists` - typed (one filtered adapter call each)
-- `GET /search/{query}/playlists` - two filtered adapter calls at once (`playlists` = fan-made,
+- `GET /search/{query}/tracks` | `/albums` | `/artists` `?limit=` - typed (one filtered adapter call
+  each). `limit` defaults to `20` and is pulled into `1..100` (the adapter refuses more than 100).
+  This is how the client's "Show more" works: YouTube Music has no "next page" we can ask for, so it
+  asks again with a bigger `limit` and keeps what it has not shown yet. Measured 30-09-2026: 20
+  results take ~0.5 s, 100 take ~3 s (ytmusicapi fetches 20 at a time, one after another); YouTube
+  had hundreds of songs, albums and fan-made playlists for "oasis" but only 57 artists, and the
+  same song can appear twice across its pages. So the client merges what it gets rather than
+  trusting positions: artists and playlists by id, songs and albums by title and artists (YouTube
+  also carries one recording under several ids, which by id alone would show twice).
+- `GET /search/{query}/playlists?limit=` - two filtered adapter calls at once (`playlists` = fan-made,
   `featured_playlists` = YouTube Music's own), merged by `SearchService.mix`: top two of each pinned
   in YouTube's order (featured first), the rest of both shuffled. A failing featured call degrades
-  to fan-made only; the fan-made call keeps the usual error handling.
+  to fan-made only; the fan-made call keeps the usual error handling. `limit` grows the fan-made
+  call only; the featured one stays at `search-result-limit`, because past its first one or two
+  relevant rows it is unrelated filler.
 
 And by [SongInfoController.java](../../src/main/java/com/catacomb5099/naviseerr/services/SongInfoController.java):
 
@@ -290,8 +301,9 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
 
 - `url` - adapter base URL, env-var-backed (`${YT_MUSIC_SERVICE_URL:http://localhost:8000}`) — no
   secret is needed since the adapter is anonymous.
-- `search-result-limit` - per-type result cap for the typed routes, passed through as the adapter's
-  `limit` query param.
+- `search-result-limit` - the `limit` for a typed search whose caller names none: today only the
+  featured-playlists half of `/search/{query}/playlists`. The category routes take theirs from the
+  request (`SearchService.FIRST_PAGE`, `20`, when absent).
 - `mixed-search-limit` - the `limit` sent on the general/unfiltered route. Kept at the adapter's
   ceiling (`100`) even though `ytmusicapi` ignores `limit` unfiltered — see "Mixed (general) search"
   above for why lowering it is a silent regression, not a simple tuning knob.

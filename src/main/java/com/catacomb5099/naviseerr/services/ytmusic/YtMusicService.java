@@ -64,8 +64,9 @@ public class YtMusicService {
     }
 
     /**
-     * Same typed search with a caller-chosen page size, for the one caller that filters the answer
-     * down afterwards and so needs more than a page's worth to have anything left.
+     * Same typed search with a caller-chosen page size: the category search routes pass the client's
+     * {@code ?limit=} (already pulled into 1..100) through here, and the artist page's featured search
+     * asks for more than a page because it filters the answer down afterwards.
      */
     public Mono<SearchResponse> getResults(String query, YtMusicSearchType type, int limit) {
         return executeSearch(

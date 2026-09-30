@@ -67,9 +67,9 @@ class SearchServiceTest {
     @Test
     void searchTracks_delegatesToYtMusicServiceWithSongsType_andPopulatesOnlyTracks() {
         SearchResponse tracksOnly = new SearchResponse(List.of(track()), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
-        when(ytMusicService.getResults("Oasis", YtMusicSearchType.SONGS)).thenReturn(Mono.just(tracksOnly));
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.SONGS, 20)).thenReturn(Mono.just(tracksOnly));
 
-        StepVerifier.create(searchService.searchTracks("Oasis"))
+        StepVerifier.create(searchService.searchTracks("Oasis", 20))
                 .assertNext(response -> {
                     assertTrue(response.getTracks().size() == 1);
                     assertTrue(response.getAlbums().isEmpty());
@@ -77,15 +77,15 @@ class SearchServiceTest {
                 })
                 .verifyComplete();
 
-        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.SONGS);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.SONGS, 20);
     }
 
     @Test
     void searchAlbums_delegatesToYtMusicServiceWithAlbumsType_andPopulatesOnlyAlbums() {
         SearchResponse albumsOnly = new SearchResponse(Collections.emptyList(), List.of(album()), Collections.emptyList(), Collections.emptyList());
-        when(ytMusicService.getResults("Definitely Maybe", YtMusicSearchType.ALBUMS)).thenReturn(Mono.just(albumsOnly));
+        when(ytMusicService.getResults("Definitely Maybe", YtMusicSearchType.ALBUMS, 20)).thenReturn(Mono.just(albumsOnly));
 
-        StepVerifier.create(searchService.searchAlbums("Definitely Maybe"))
+        StepVerifier.create(searchService.searchAlbums("Definitely Maybe", 20))
                 .assertNext(response -> {
                     assertTrue(response.getAlbums().size() == 1);
                     assertTrue(response.getTracks().isEmpty());
@@ -93,15 +93,15 @@ class SearchServiceTest {
                 })
                 .verifyComplete();
 
-        verify(ytMusicService).getResults("Definitely Maybe", YtMusicSearchType.ALBUMS);
+        verify(ytMusicService).getResults("Definitely Maybe", YtMusicSearchType.ALBUMS, 20);
     }
 
     @Test
     void searchArtists_delegatesToYtMusicServiceWithArtistsType_andPopulatesOnlyArtists() {
         SearchResponse artistsOnly = new SearchResponse(Collections.emptyList(), Collections.emptyList(), List.of(artist()), Collections.emptyList());
-        when(ytMusicService.getResults("Oasis", YtMusicSearchType.ARTISTS)).thenReturn(Mono.just(artistsOnly));
+        when(ytMusicService.getResults("Oasis", YtMusicSearchType.ARTISTS, 20)).thenReturn(Mono.just(artistsOnly));
 
-        StepVerifier.create(searchService.searchArtists("Oasis"))
+        StepVerifier.create(searchService.searchArtists("Oasis", 20))
                 .assertNext(response -> {
                     assertTrue(response.getArtists().size() == 1);
                     assertTrue(response.getTracks().isEmpty());
@@ -109,7 +109,49 @@ class SearchServiceTest {
                 })
                 .verifyComplete();
 
-        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ARTISTS);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ARTISTS, 20);
+    }
+
+    @Test
+    void categorySearches_passTheAskedForLimitThrough_soShowMoreCanGetALongerList() {
+        SearchResponse none = new SearchResponse(List.of(), List.of(), List.of(), List.of());
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(none));
+
+        searchService.searchTracks("Oasis", 60).block();
+        searchService.searchAlbums("Oasis", 40).block();
+        searchService.searchArtists("Oasis", 80).block();
+
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.SONGS, 60);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ALBUMS, 40);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ARTISTS, 80);
+    }
+
+    @Test
+    void categorySearches_limitOutsideWhatTheAdapterAccepts_isPulledIntoRange() {
+        SearchResponse none = new SearchResponse(List.of(), List.of(), List.of(), List.of());
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(none));
+
+        searchService.searchTracks("Oasis", 5000).block();
+        searchService.searchAlbums("Oasis", 0).block();
+        searchService.searchArtists("Oasis", -3).block();
+
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.SONGS, 100);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ALBUMS, 1);
+        verify(ytMusicService).getResults("Oasis", YtMusicSearchType.ARTISTS, 1);
+    }
+
+    @Test
+    void searchPlaylists_biggerLimit_growsTheFanMadeSearchOnly_notTheFeaturedFiller() {
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS, 60)).thenReturn(Mono.just(playlistsOnly(playlist("PL1", "Britpop Bangers"))));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(playlist("RDCLAK5uy_1", "Cool Britannia"))));
+
+        StepVerifier.create(searchService.searchPlaylists("Britpop", 60))
+                .assertNext(response -> assertEquals(2, response.getPlaylists().size()))
+                .verifyComplete();
+
+        verify(ytMusicService).getResults("Britpop", YtMusicSearchType.PLAYLISTS, 60);
+        verify(ytMusicService).getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS);
+        verify(ytMusicService, never()).getResults(eq("Britpop"), eq(YtMusicSearchType.FEATURED_PLAYLISTS), anyInt());
     }
 
     private static Playlist playlist(String id, String name) {
@@ -128,10 +170,10 @@ class SearchServiceTest {
     void searchPlaylists_asksForFanMadeAndFeaturedPlaylists_andReturnsBoth() {
         Playlist fanMade = playlist("PL1", "Britpop Bangers");
         Playlist featured = playlist("RDCLAK5uy_1", "Cool Britannia");
-        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(fanMade)));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS, 20)).thenReturn(Mono.just(playlistsOnly(fanMade)));
         when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(featured)));
 
-        StepVerifier.create(searchService.searchPlaylists("Britpop"))
+        StepVerifier.create(searchService.searchPlaylists("Britpop", 20))
                 .assertNext(response -> {
                     assertEquals(List.of("RDCLAK5uy_1", "PL1"), ids(response.getPlaylists()));
                     assertTrue(response.getTracks().isEmpty());
@@ -140,26 +182,26 @@ class SearchServiceTest {
                 })
                 .verifyComplete();
 
-        verify(ytMusicService).getResults("Britpop", YtMusicSearchType.PLAYLISTS);
+        verify(ytMusicService).getResults("Britpop", YtMusicSearchType.PLAYLISTS, 20);
         verify(ytMusicService).getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS);
     }
 
     @Test
     void searchPlaylists_featuredSearchFailing_stillReturnsFanMadePlaylists() {
-        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(playlist("PL1", "Britpop Bangers"))));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS, 20)).thenReturn(Mono.just(playlistsOnly(playlist("PL1", "Britpop Bangers"))));
         when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.error(new YtMusicUnavailableException("no such route")));
 
-        StepVerifier.create(searchService.searchPlaylists("Britpop"))
+        StepVerifier.create(searchService.searchPlaylists("Britpop", 20))
                 .assertNext(response -> assertEquals(List.of("PL1"), ids(response.getPlaylists())))
                 .verifyComplete();
     }
 
     @Test
     void searchPlaylists_fanMadeSearchFailing_isStillAnError() {
-        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS)).thenReturn(Mono.error(new YtMusicUnavailableException("down")));
+        when(ytMusicService.getResults("Britpop", YtMusicSearchType.PLAYLISTS, 20)).thenReturn(Mono.error(new YtMusicUnavailableException("down")));
         when(ytMusicService.getResults("Britpop", YtMusicSearchType.FEATURED_PLAYLISTS)).thenReturn(Mono.just(playlistsOnly(playlist("RDCLAK5uy_1", "Cool Britannia"))));
 
-        StepVerifier.create(searchService.searchPlaylists("Britpop"))
+        StepVerifier.create(searchService.searchPlaylists("Britpop", 20))
                 .expectError(YtMusicUnavailableException.class)
                 .verify();
     }
