@@ -1,7 +1,10 @@
 package com.catacomb5099.naviseerr.services;
 
+import com.catacomb5099.naviseerr.schema.response.Album;
+import com.catacomb5099.naviseerr.schema.response.Artist;
 import com.catacomb5099.naviseerr.schema.response.Playlist;
 import com.catacomb5099.naviseerr.schema.response.SearchResponse;
+import com.catacomb5099.naviseerr.schema.response.Track;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicSearchType;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
@@ -19,9 +22,14 @@ import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 @Slf4j
 @RestController
@@ -40,10 +48,44 @@ public class SearchService {
 
     private final YtMusicService ytMusicService;
 
+    /**
+     * "All": YouTube Music's own mixed page at the top of each shelf, then the category searches
+     * ({@value #FIRST_PAGE} of each) for depth, all run at once. The mixed page alone is about 6
+     * songs, 3 albums, 6 artists and 6 playlists whatever the limit; the category searches alone
+     * rank worse (for "oasis" the songs search leads with Roberta Flack, the mixed page with
+     * Champagne Supernova). "Show more" on a shelf carries on with the same category search. See
+     * docs/decisions/search-all-per-category-30-09-2026.md.
+     *
+     * <p>The songs search is the canary: if it fails, the whole answer is an error, so an adapter
+     * that is down still reads "search failed" and never "no results". The mixed page and the other
+     * three categories each drop out on their own, and are named in
+     * {@link SearchResponse#getUnavailable()} so the client can say "couldn't load albums" rather
+     * than show no albums shelf, and still offer to fetch that category.
+     */
     @GetMapping("/search/{query}")
     Mono<SearchResponse> search(@PathVariable String query) {
         log.info("Received YtMusic general search request for query='{}'", query);
-        return ytMusicService.getResults(query)
+        return Mono.defer(() -> {
+            // Per request: the drop-outs below record themselves here, and the zip reads it once
+            // they have all finished.
+            Set<String> unavailable = ConcurrentHashMap.newKeySet();
+            SearchResponse none = new SearchResponse(List.of(), List.of(), List.of(), List.of());
+            Mono<SearchResponse> top = orEmptyShelf("mixed", query, ytMusicService.getResults(query), none, unavailable);
+            Mono<List<Track>> tracks = ytMusicService.getResults(query, YtMusicSearchType.SONGS, FIRST_PAGE)
+                    .map(result -> orEmpty(result.getTracks()));
+            Mono<List<Album>> albums = orEmptyShelf("albums", query, ytMusicService.getResults(query, YtMusicSearchType.ALBUMS, FIRST_PAGE)
+                    .map(result -> orEmpty(result.getAlbums())), List.of(), unavailable);
+            Mono<List<Artist>> artists = orEmptyShelf("artists", query, ytMusicService.getResults(query, YtMusicSearchType.ARTISTS, FIRST_PAGE)
+                    .map(result -> orEmpty(result.getArtists())), List.of(), unavailable);
+            Mono<List<Playlist>> playlists = orEmptyShelf("playlists", query, playlists(query, FIRST_PAGE), List.of(), unavailable);
+            return Mono.zip(top, tracks, albums, artists, playlists)
+                    .map(all -> new SearchResponse(
+                            topThenRest(orEmpty(all.getT1().getTracks()), all.getT2(), Track::getId),
+                            topThenRest(orEmpty(all.getT1().getAlbums()), all.getT3(), Album::getId),
+                            topThenRest(orEmpty(all.getT1().getArtists()), all.getT4(), Artist::getId),
+                            topThenRest(orEmpty(all.getT1().getPlaylists()), all.getT5(), Playlist::getId),
+                            unavailable.stream().sorted().toList()));
+        })
             .doOnSubscribe(subscription -> log.debug("Starting YtMusic general search for query='{}' (subscription={})", query, subscription))
             .doOnSuccess(result -> log.info("Completed YtMusic general search for query='{}': tracks={}, albums={}, artists={}, playlists={}",
                     query, size(result.getTracks()), size(result.getAlbums()), size(result.getArtists()), size(result.getPlaylists())))
@@ -90,19 +132,23 @@ public class SearchService {
     @GetMapping("/search/{query}/playlists")
     Mono<SearchResponse> searchPlaylists(@PathVariable String query, @RequestParam(defaultValue = "" + FIRST_PAGE) int limit) {
         log.info("Received YtMusic playlist search request for query='{}', limit={}", query, limit);
+        return playlists(query, clamp(limit))
+                .map(playlists -> new SearchResponse(List.of(), List.of(), List.of(), playlists))
+                .doOnSubscribe(subscription -> log.debug("Starting YtMusic playlist search for query='{}' (subscription={})", query, subscription))
+                .doOnSuccess(result -> log.info("Completed YtMusic playlist search for query='{}': playlists={}", query, size(result.getPlaylists())))
+                .doOnError(error -> log.error("YtMusic playlist search failed for query='{}'", query, error));
+    }
+
+    private Mono<List<Playlist>> playlists(String query, int limit) {
         Mono<List<Playlist>> featured = ytMusicService.getResults(query, YtMusicSearchType.FEATURED_PLAYLISTS)
                 .map(result -> orEmpty(result.getPlaylists()))
                 .onErrorResume(error -> {
                     log.warn("Featured playlist search failed for query='{}', showing fan-made playlists only: {}", query, error.toString());
                     return Mono.just(List.of());
                 });
-        Mono<List<Playlist>> fanMade = ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS, clamp(limit))
+        Mono<List<Playlist>> fanMade = ytMusicService.getResults(query, YtMusicSearchType.PLAYLISTS, limit)
                 .map(result -> orEmpty(result.getPlaylists()));
-        return Mono.zip(featured, fanMade, (editorial, community) -> mix(editorial, community, ThreadLocalRandom.current()))
-                .map(playlists -> new SearchResponse(List.of(), List.of(), List.of(), playlists))
-                .doOnSubscribe(subscription -> log.debug("Starting YtMusic playlist search for query='{}' (subscription={})", query, subscription))
-                .doOnSuccess(result -> log.info("Completed YtMusic playlist search for query='{}': playlists={}", query, size(result.getPlaylists())))
-                .doOnError(error -> log.error("YtMusic playlist search failed for query='{}'", query, error));
+        return Mono.zip(featured, fanMade, (editorial, community) -> mix(editorial, community, ThreadLocalRandom.current()));
     }
 
     /**
@@ -127,8 +173,28 @@ public class SearchService {
         return Math.max(1, Math.min(MAX_LIMIT, limit));
     }
 
-    private static List<Playlist> orEmpty(List<Playlist> playlists) {
-        return playlists == null ? List.of() : playlists;
+    /**
+     * {@code top} in its own order, then whatever in {@code rest} it does not hold yet. An item in
+     * both keeps its place in {@code top} but takes {@code rest}'s copy: a category search's song
+     * knows its album, the mixed page's does not.
+     */
+    static <T> List<T> topThenRest(List<T> top, List<T> rest, Function<T, String> id) {
+        Map<String, T> merged = new LinkedHashMap<>();
+        top.forEach(item -> merged.putIfAbsent(id.apply(item), item));
+        rest.forEach(item -> merged.put(id.apply(item), item));
+        return List.copyOf(merged.values());
+    }
+
+    private static <T> Mono<T> orEmptyShelf(String what, String query, Mono<T> shelf, T empty, Set<String> unavailable) {
+        return shelf.onErrorResume(error -> {
+            log.warn("General search: {} search failed for query='{}', showing the rest without it: {}", what, query, error.toString());
+            unavailable.add(what);
+            return Mono.just(empty);
+        });
+    }
+
+    private static <T> List<T> orEmpty(List<T> items) {
+        return items == null ? List.of() : items;
     }
 
     private static int size(List<?> list) {

@@ -80,12 +80,13 @@ public class YtMusicService {
     }
 
     /**
-     * Issues one unfiltered search and partitions the mixed response into tracks/albums/artists
-     * ({@link YtMusicSearchResponseMapper}) -- replaces the previous three-leg
-     * {@code Mono.zip} of typed searches. This trades result volume (YouTube Music returns one
-     * page of shelves for a mixed search, not up to {@code searchResultLimit} per type) and
-     * blanks {@code Track.albumId} (song items in a mixed response carry no {@code album} field)
-     * for a third of the provider load -- see docs/decisions/ytmusic-mixed-search-20-08-2026.md.
+     * One unfiltered search -- the page YouTube Music's own search box shows -- partitioned into
+     * all four lists ({@link YtMusicSearchResponseMapper}). It is one page whatever the limit (about
+     * 6 songs, 3 albums, 6 artists, 6 playlists) and its songs carry no album, but it is YouTube's
+     * best guess at what the query means: for an artist's name its songs are that artist's hits,
+     * where the songs-only search mixes in anything with the word in it. General search puts these
+     * at the top of each shelf and fills the rest from the category searches; see
+     * docs/decisions/search-all-per-category-30-09-2026.md.
      */
     public Mono<SearchResponse> getResults(String query) {
         return executeSearch(
