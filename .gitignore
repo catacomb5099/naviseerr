@@ -56,3 +56,6 @@ certs/*.pem
 
 ### The all-in-one install's default music library (LIBRARY_DIR in .env) ###
 /library/
+
+### Your own additions to compose.yaml (see its comments); ignored so `git pull` keeps working ###
+/compose.override.yaml
