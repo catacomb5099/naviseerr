@@ -276,7 +276,10 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
-    void upsertMedia_storesAnAlbumsYearAndType_andALessCompleteAnswerKeepsThem() {
+    void upsertMedia_fillsAnAlbumsYearAndTypeOnAnOlderRow_andALessCompleteAnswerKeepsThem() {
+        // The album row an earlier download wrote before V12: no year, no type.
+        repository.upsertMedia(List.of(new MediaItem("MPREb_Hl8XJR59OrY", "Definitely Maybe", List.of("Oasis"),
+                List.of("UC-oasis"), null, null, 10))).block();
         repository.upsertMedia(List.of(new MediaItem("MPREb_Hl8XJR59OrY", "Definitely Maybe", List.of("Oasis"),
                 List.of("UC-oasis"), null, null, 11, 1994, "Album"))).block();
         // A row written without them (a song request for the same id, or an older instance).
