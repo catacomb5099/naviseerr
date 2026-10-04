@@ -47,9 +47,17 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
   album searches first (`CLAIM_DUE_ALBUM_SEARCHES_SQL`, starts limited to the free slots) and gives the
   songs only the slots left; `COUNT_ACTIVE_SEARCHES_SQL` counts both tables. Starting the album search
   runs inside the same one-at-a-time section as song searches (slskd answers overlapping starts with 429).
-- **Wordings.** "Title - Artist" (the cleaned pair a song uses), then the title alone only when the first
-  found nobody at all (Soulseek drops every search naming certain artists). A compilation ("Various
-  Artists") searches its title only.
+- **Wordings.** "Title - Artist", then the title alone whenever the first found no sharer with the whole
+  album (the owner's call of 04-10-2026; until then only when it found nobody at all). The title loses
+  what a song's does (brackets, quotes, version words such as "Live" or "Remastered 2009") plus a
+  trailing edition ("Deluxe Edition", "30th Anniversary Super Deluxe"); both names are split at
+  punctuation with one-letter pieces dropped ("(What's the Story) Morning Glory?" searches "Morning
+  Glory - Oasis", then "Morning Glory"; "AC/DC" is "AC DC"; "R.E.M." is left out). A wrong album from the
+  broader search is still turned away: the folder must name the album artist and match every song. The
+  second search costs about 10 s of the shared search slot. A part folder the first wording found is
+  not kept: the title alone finds every folder the pair did unless slskd's response cap fills with
+  other albums (`ponytail:` in `AlbumSearchStep.judge`). A compilation ("Various Artists") searches its
+  title only.
 - **The step** (`AlbumSearchStep`): start the search; poll the batched search list; when the search is
   complete or has used `search-budget-ms`, fetch its responses once and judge them with
   `AlbumFolderPicker`.
@@ -103,7 +111,8 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 |---|---|
 | Whole album first at all | `DownloadTaskRunner.gatherMetadata`: pass no hold for `ALBUM` and albums behave as before |
 | How long songs wait (2 × `search-budget-ms`) | `AlbumSearchStep.holdUntil` |
-| Wordings and their order | `AlbumSearch.wordings` |
+| Wordings and their order, title clean-up | `AlbumSearch.wordings`, `AlbumSearch.EDITION`, `AlbumSearch.plain` |
+| When the title alone is tried (no whole folder) | `whole` in `AlbumSearchStep.judge`; `folders.isEmpty()` there is the old "nobody had anything" rule |
 | Candidates per song (3, other sharers) | `AlbumSearchStep.CANDIDATES_PER_SONG`, `AlbumFolderPicker.candidates` |
 | Last-track allowance, 30 s floor | `AlbumFolderPicker.lengthGap` |
 | Words that mark another take | `AlbumFolderPicker.OTHER_TAKE`, `PLAIN_VERSION` |

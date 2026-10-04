@@ -4,8 +4,11 @@ import lombok.Builder;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * One {@code album_searches} row (P5): an album download's own search for a sharer holding the whole
@@ -35,18 +38,40 @@ public record AlbumSearch(UUID downloadId, DownloadPhase phase, int searchTier, 
     }
 
     /**
-     * "Title - Artist" first, the same pair a song searches with (brackets, quotes and version words
-     * gone, see {@link SearchQueryTiers}); then the title alone, used only when that found nobody at all
-     * -- Soulseek drops every search naming certain artists. A compilation searches its title only:
-     * nobody's folder says "Various Artists".
+     * "Deluxe Edition", "30th Anniversary Super Deluxe", "Expanded Edition" left at the end of a title
+     * once its brackets are gone: the shared folder is usually just the album's name.
+     */
+    private static final Pattern EDITION = Pattern.compile(
+            "\\s+(?:\\d+(?:st|nd|rd|th)\\s+)?(?:anniversary\\s+)?(?:super\\s+)?"
+                    + "(?:deluxe|expanded|special|collector'?s|legacy|anniversary)(?:\\s+(?:edition|version))?$",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * "Title - Artist" first, then the title alone whenever that found no sharer with the whole album
+     * (the owner's call of 04-10-2026): Soulseek drops every search naming certain artists, and a
+     * folder can spell the artist differently. The title loses its brackets, quotes and version words
+     * as a song's does ({@link SearchQueryTiers}) and a trailing edition; both names are then
+     * {@link #plain}. A compilation searches its title only: nobody's folder says "Various Artists".
      */
     public List<String> wordings() {
+        String cleanTitle = EDITION.matcher(SearchQueryTiers.of(title).getFirst()).replaceFirst("");
+        String plainTitle = plain(cleanTitle).isEmpty() ? cleanTitle : plain(cleanTitle);
         String artist = artists == null || artists.isEmpty() ? "" : artists.getFirst();
-        if (artist.isBlank() || artist.equalsIgnoreCase("Various Artists")) {
-            return List.of(SearchQueryTiers.of(title).getFirst());
-        }
-        List<String> song = SearchQueryTiers.of(title + " - " + artist);
-        return song.size() < 2 ? song : List.of(song.get(1), song.get(0));
+        String plainArtist = artist.equalsIgnoreCase("Various Artists") ? "" : plain(artist);
+        return plainArtist.isEmpty() ? List.of(plainTitle) : List.of(plainTitle + " - " + plainArtist, plainTitle);
+    }
+
+    /**
+     * A name as a shared folder is likely to spell it: every word split at punctuation, one-letter
+     * pieces left out ("Morning Glory?" is "Morning Glory", "Sgt. Pepper's" is "Sgt Pepper", "AC/DC"
+     * is "AC DC"). Soulseek must match every word, and a Windows folder cannot even hold a "?". Empty
+     * when no word is left ("R.E.M.": that artist is then left out of the search, and a title such as
+     * "4" is searched as it is).
+     */
+    static String plain(String name) {
+        return Arrays.stream(name.split("[^\\p{L}\\p{N}]+"))
+                .filter(word -> word.length() > 1)
+                .collect(Collectors.joining(" "));
     }
 
     public String searchQuery() {
