@@ -18,6 +18,7 @@ import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -38,7 +39,13 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *   song              root/&lt;primary artist&gt;/&lt;song title&gt;/&lt;file as downloaded&gt;
  *   album track       root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;
  *   playlist track    filed exactly like a song; the playlist itself is one .m3u8 in root/Playlists/
+ *   song or playlist track with a trusted YouTube Music album ({@link SongAlbumResolver})
+ *                     root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;, like that album's tracks
  * </pre>
+ *
+ * <p>Just before the move, {@link SongTagger} writes YouTube Music's details into the file's tags. A
+ * song whose album track the library already has is not moved at all: it points at that file and the
+ * new copy is removed ({@link Job#filedCopy}).
  *
  * <p>Pure path logic (locating, sanitising, choosing a target) is in static methods so it can be
  * tested without a filesystem; the two entry points {@link #file} and {@link #deletePartials} do the
@@ -51,6 +58,12 @@ public class LibraryOrganiser {
 
     /** A finished song whose file has not turned up in slskd's downloads folder by then is given up on. */
     static final Duration GIVE_UP_AFTER = Duration.ofMinutes(10);
+    /**
+     * How long a finished song or playlist track waits for its album lookup before it is filed by its
+     * own name. The lookup normally answers while the song is still downloading; this covers a busy or
+     * slow YouTube.
+     */
+    static final Duration ALBUM_LOOKUP_GRACE = Duration.ofMinutes(2);
 
     private static final Pattern SEPARATORS = Pattern.compile("[\\\\/]+");
     private static final Pattern DRIVE = Pattern.compile("^[A-Za-z]:$");
@@ -63,10 +76,33 @@ public class LibraryOrganiser {
     /** Where a download's playlist file goes: a folder of nothing but .m3u8s, so Jellyfin never sees it as an album. */
     static final String PLAYLISTS_FOLDER = "Playlists";
 
-    /** One finished song to file, joined with the names its folders are built from. */
+    /**
+     * One finished song to file, joined with the names its folders are built from. {@code albumTitle}
+     * and {@code albumArtists} are the trusted YouTube Music album of a song or playlist track; null and
+     * empty when it has none, and always for an album download's track. {@code tags} is what the file's
+     * tags are written from; null writes none. {@code filedCopy} is the library's file of this same
+     * song, when it already has one; null otherwise. Two jobs with one {@code copyKey} are copies of one
+     * song: only one is filed per pass. {@code pickSize} is the picked file's size as the sharer listed
+     * it, null when unknown.
+     */
     public record Job(UUID taskId, DownloadType type, String slskdFilename, Instant finishedAt,
                       String songTitle, List<String> songArtists,
-                      String collectionTitle, List<String> collectionArtists) {}
+                      String collectionTitle, List<String> collectionArtists,
+                      String albumTitle, List<String> albumArtists, SongTagger.Tags tags,
+                      String filedCopy, String copyKey, Long pickSize) {
+
+        /** A song the library does not have yet. */
+        public Job(UUID taskId, DownloadType type, String slskdFilename, Instant finishedAt,
+                   String songTitle, List<String> songArtists,
+                   String collectionTitle, List<String> collectionArtists,
+                   String albumTitle, List<String> albumArtists, SongTagger.Tags tags) {
+            this(taskId, type, slskdFilename, finishedAt, songTitle, songArtists, collectionTitle,
+                    collectionArtists, albumTitle, albumArtists, tags, null, null, null);
+        }
+    }
+
+    /** A file the library already has for the song at {@code position} (1-based) of a download being admitted. */
+    public record FiledCopy(int position, String libraryPath) {}
 
     /** One finished download whose songs are all filed, ready for its playlist file. */
     public record Collection(UUID downloadId, DownloadType type, String title) {}
@@ -78,14 +114,17 @@ public class LibraryOrganiser {
     private final Path incompleteDir;
     private final Path root;
     private final Duration loopInterval;
+    private final SongTagger tagger;
     private final boolean enabled;
 
     public LibraryOrganiser(
             @Value("${library.slskd-downloads-dir:}") String downloadsDir,
             @Value("${library.slskd-incomplete-dir:}") String incompleteDir,
             @Value("${library.root:}") String root,
-            @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval) {
+            @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
+            SongTagger tagger) {
         this.loopInterval = loopInterval;
+        this.tagger = tagger;
         if (downloadsDir.isBlank() || root.isBlank()) {
             this.downloadsDir = null;
             this.incompleteDir = null;
@@ -122,15 +161,23 @@ public class LibraryOrganiser {
         return now.minus(GIVE_UP_AFTER);
     }
 
+    /** Songs that finished before this instant no longer wait for their album lookup. */
+    public Instant albumCutoff(Instant now) {
+        return now.minus(ALBUM_LOOKUP_GRACE);
+    }
+
     /**
-     * Moves one song's file into the library.
+     * Tags one song's file and moves it into the library. The album cover is fetched first (once per
+     * album, see {@link SongTagger#cover}); a song without one is filed all the same.
      *
      * @return the file's new absolute path, or empty when the file is not in the downloads folder
      *         (slskd may still be moving it out of incomplete; the row is left for the next pass)
      */
     public Mono<Path> file(Job job, Instant now) {
-        return Mono.fromCallable(() -> fileBlocking(job, now))
-                .subscribeOn(Schedulers.boundedElastic());
+        return tagger.cover(job.tags())
+                .defaultIfEmpty(SongTagger.NO_COVER)
+                .flatMap(cover -> Mono.fromCallable(() -> fileBlocking(job, cover, now))
+                        .subscribeOn(Schedulers.boundedElastic()));
     }
 
     /**
@@ -161,6 +208,24 @@ public class LibraryOrganiser {
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
+    /**
+     * For each of {@code count} songs being admitted, the first of its {@code copies} (newest first)
+     * that is still a file in the library, else null. A file deleted since, or outside the library
+     * root, does not count, so that song is downloaded again.
+     */
+    public Mono<List<String>> stillFiled(int count, List<FiledCopy> copies) {
+        return Mono.fromCallable(() -> {
+            String[] paths = new String[count];
+            for (FiledCopy copy : copies) {
+                int i = copy.position() - 1;
+                if (paths[i] == null && inLibrary(copy.libraryPath())) {
+                    paths[i] = copy.libraryPath();
+                }
+            }
+            return Arrays.asList(paths);
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
     // ---- blocking I/O ----------------------------------------------------------------------------
 
     Path writePlaylistBlocking(String title, List<Entry> entries) throws IOException {
@@ -183,7 +248,7 @@ public class LibraryOrganiser {
         return target;
     }
 
-    Path fileBlocking(Job job, Instant now) throws IOException {
+    Path fileBlocking(Job job, byte[] cover, Instant now) throws IOException {
         Path source = locate(job.slskdFilename());
         if (source == null) {
             // ponytail: "one WARN" assumes a regular loop cadence; a pass slower than the interval
@@ -199,6 +264,26 @@ public class LibraryOrganiser {
             }
             return null;
         }
+        if (inLibrary(job.filedCopy())) {
+            // The library has this song already (the recording's other YouTube id, a song request
+            // filed into the album's folder first, the same single asked for twice): one file per
+            // song, so nothing is listed twice. The new copy is removed only when its size is the
+            // picked file's: two songs can share a folder and file name, and the other's must stay.
+            if (job.pickSize() != null && Files.size(source) == job.pickSize()) {
+                Files.delete(source);
+                deleteIfEmpty(source.getParent(), downloadsDir);
+                log.info("Song {} is already in the library as {}; removed the new copy {}", job.taskId(),
+                        job.filedCopy(), source);
+            } else {
+                log.info("Song {} is already in the library as {}; left {} alone, it may be another song's",
+                        job.taskId(), job.filedCopy(), source);
+            }
+            return Path.of(job.filedCopy());
+        }
+        // Tagged where it lies, complete and outside the library, so a scanner never reads it mid-write
+        // and the real extension picks the format. A move that fails after this tags it again next
+        // pass, which changes nothing the second time.
+        tagger.tag(source, job.tags(), cover);
         Path folder = targetFolder(job);
         Files.createDirectories(folder);
         String name = sanitiseFileName(baseName(job.slskdFilename()));
@@ -294,6 +379,10 @@ public class LibraryOrganiser {
         if (job.type() == DownloadType.ALBUM) {
             artist = first(job.collectionArtists(), "Unknown Artist");
             folder = orElse(job.collectionTitle(), "Unknown Album");
+        } else if (job.albumTitle() != null && !job.albumTitle().isBlank()) {
+            // Its album's folder, so it joins that album's other songs: Jellyfin makes one album per folder.
+            artist = first(job.albumArtists(), "Unknown Artist");
+            folder = job.albumTitle();
         } else {
             // A song, or one track of a playlist. Playlist tracks are NOT kept together in one folder:
             // Jellyfin would show that folder as an album named after whichever track came first.
@@ -318,6 +407,15 @@ public class LibraryOrganiser {
                 return candidate;
             }
         }
+    }
+
+    /** A regular file (never a symlink) inside the library root. */
+    private boolean inLibrary(String path) {
+        if (path == null) {
+            return false;
+        }
+        Path file = Path.of(path).normalize();
+        return file.startsWith(root) && Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS);
     }
 
     /** @return true if the directory was empty and is now gone */

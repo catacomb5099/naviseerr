@@ -32,7 +32,8 @@ public class TrackMatchingService {
     /**
      * DJ-pool signatures: radio-edit packs with intro/outro cuts, Clean/Dirty flags, key+BPM tags like "12A 125" and
      * promo-site stamps. They are the single largest class of wrong files (2,239 in the lab) and never what a
-     * listener wants.
+     * listener wants, unless the request itself carries the word: "Intro - The xx", "Clean - Taylor Swift" and
+     * "Rather Be - Clean Bandit" are songs, not DJ edits (see {@link #isDjPoolEdit}).
      */
     private static final Pattern DJ_POOL = Pattern.compile(
             "\\b(clean|dirty|intro|outro|transition|redrum|refix|quick hit|hype)\\b|\\b\\d{1,2}[ab]\\s+\\d{2,3}\\b|dj-?promo|dj ?pool",
@@ -118,18 +119,20 @@ public class TrackMatchingService {
     }
 
     private static boolean artistInPath(String request, String path) {
-        Set<String> pathTokens = tokens(path);
-        String squashedPath = squash(path);
-        for (String name : artistNames(request)) {
-            Set<String> words = tokens(name);
-            words.remove("the");
-            String squashed = squash(name);
-            if (!words.isEmpty() && pathTokens.containsAll(words)
-                    || squashed.length() >= 5 && squashedPath.contains(squashed)) {
-                return true;
-            }
-        }
-        return false;
+        return artistNames(request).stream().anyMatch(name -> nameInPath(name, path));
+    }
+
+    /**
+     * One artist name somewhere in a path, by the rules {@link #grade(String, String, String)} describes:
+     * every word but "the", or the name run together. Also what the whole-album picker uses to check a
+     * folder is the album artist's.
+     */
+    public static boolean nameInPath(String name, String path) {
+        Set<String> words = tokens(name);
+        words.remove("the");
+        String squashed = squash(name);
+        return !words.isEmpty() && tokens(path).containsAll(words)
+                || squashed.length() >= 5 && squash(path).contains(squashed);
     }
 
     /**
@@ -142,7 +145,7 @@ public class TrackMatchingService {
         // Extract just the filename from the path
         String filename = extractFilename(torrentFilePath);
 
-        if (DJ_POOL.matcher(filename).find() || !titleInLastSegment(cleanTitle, filename)) {
+        if (isDjPoolEdit(cleanTitle, filename) || !titleInLastSegment(cleanTitle, filename)) {
             return Match.NONE;
         }
 
@@ -171,6 +174,35 @@ public class TrackMatchingService {
         boolean requestedVersion = !hasUnrequestedVersionWord(cleanTitle, filename)
                 && hasRequestedVersionWord(cleanTitle, filename);
         return requestedVersion ? Match.EXACT : Match.OTHER_VERSION;
+    }
+
+    /**
+     * The filename carries a {@link #DJ_POOL} signature that is not one of the request's own words: "01 - Intro.flac"
+     * answers "Intro - The xx", but "Wonderwall (Clean Intro DJ Edit).mp3" still fails "Wonderwall - Oasis", and
+     * "Clean (Dirty Intro).mp3" still fails "Clean - Taylor Swift". A word in the filename's brackets is a DJ flag,
+     * excused only by the request's own brackets ("Smack That (Clean) - Akon"); otherwise "Style (Clean).mp3" would
+     * pass for "Clean - Taylor Swift", the flag standing in for the title.
+     */
+    private static boolean isDjPoolEdit(String request, String filename) {
+        return hasForeignDjWord(BRACKETED.matcher(filename).replaceAll(" "), tokens(request))
+                || hasForeignDjWord(bracketText(filename), tokens(bracketText(request)));
+    }
+
+    private static boolean hasForeignDjWord(String text, Set<String> requested) {
+        Matcher m = DJ_POOL.matcher(text);
+        while (m.find()) {
+            if (!requested.containsAll(tokens(m.group()))) return true;
+        }
+        return false;
+    }
+
+    private static String bracketText(String text) {
+        StringBuilder out = new StringBuilder();
+        Matcher m = BRACKETED.matcher(text);
+        while (m.find()) {
+            out.append(m.group(1)).append(' ');
+        }
+        return out.toString();
     }
 
     /** True when the filename names a version (live, remix, ...) that the request did not ask for. */
@@ -274,7 +306,8 @@ public class TrackMatchingService {
         return i < 0 ? "" : request.substring(i + 3);
     }
 
-    private static Set<String> tokens(String text) {
+    /** The lower-case, accent-free words of a text. */
+    public static Set<String> tokens(String text) {
         Set<String> out = new HashSet<>();
         if (text == null) return out;
         Matcher m = TOKEN.matcher(fold(text));
@@ -290,7 +323,7 @@ public class TrackMatchingService {
     }
 
     /** Letters and digits only, so "Lady Gaga" is found inside "LadyGaga" and "lady_gaga". */
-    private static String squash(String text) {
+    public static String squash(String text) {
         return fold(text).replaceAll("[^a-z0-9]", "");
     }
 

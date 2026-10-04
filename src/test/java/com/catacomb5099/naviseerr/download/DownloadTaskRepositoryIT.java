@@ -9,15 +9,20 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
 import reactor.core.publisher.Mono;
 import reactor.util.function.Tuple2;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static com.catacomb5099.naviseerr.support.TaskFinishing.finish;
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,14 +35,17 @@ class DownloadTaskRepositoryIT {
     @Autowired R2dbcEntityTemplate template;
     @Autowired DownloadTaskRepository repository;
     @Autowired DownloadService downloadService;
+    @Autowired PostgreSQLContainer<?> postgres;
 
     private static final Instant NOW = Instant.parse("2026-08-13T12:00:00Z");
 
     @BeforeEach
     void clean() {
+        template.getDatabaseClient().sql("DELETE FROM album_searches").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM media_items").fetch().rowsUpdated().block();
+        template.getDatabaseClient().sql("DELETE FROM song_albums").fetch().rowsUpdated().block();
     }
 
     private UUID insertDownload(String status) {
@@ -45,11 +53,17 @@ class DownloadTaskRepositoryIT {
     }
 
     private UUID insertDownload(String status, String type) {
+        return insertDownload(status, type, null);
+    }
+
+    /** @param youtubeId the requested id, e.g. an album's; null for a made-up one */
+    private UUID insertDownload(String status, String type, String youtubeId) {
         UUID id = UUID.randomUUID();
         template.getDatabaseClient()
                 .sql("INSERT INTO downloads (download_id, youtube_id, download_type, status, created_at) "
                         + "VALUES (:id, :ytId, :type, :status, now())")
-                .bind("id", id).bind("ytId", "yt-" + id).bind("type", type).bind("status", status)
+                .bind("id", id).bind("ytId", youtubeId == null ? "yt-" + id : youtubeId).bind("type", type)
+                .bind("status", status)
                 .fetch().rowsUpdated().block();
         return id;
     }
@@ -156,6 +170,66 @@ class DownloadTaskRepositoryIT {
         assertEquals(List.of("zeta", "alpha", "mid"), byPosition);
     }
 
+    @Test
+    void createTasks_storesEachRowsOwnTitleNumberAndLength_evenWhenTwoRowsShareAnId() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        // Tracks 21 and 24 of the live 30th Anniversary page share one video id; a playlist row has
+        // no album number.
+        repository.createTasks(id, List.of(
+                track(id, "h7-BHdjeEY0", "Up In The Sky (Sawmills Outtake)", 21, 273),
+                track(id, "h7-BHdjeEY0", "Cigarettes & Alcohol (Sawmills Outtake)", 24, 307),
+                track(id, "v-pl", "Wonderwall", null, null)), NOW).block();
+
+        assertEquals(List.of(
+                        List.of("Up In The Sky (Sawmills Outtake)", "21", "273", "1"),
+                        List.of("Cigarettes & Alcohol (Sawmills Outtake)", "24", "307", "2"),
+                        Arrays.asList("Wonderwall", null, null, "3")),
+                trackColumnsOf(id), "position stays list order beside YouTube's own number");
+        // The claim hands them back, so the task in memory is the whole row.
+        List<DownloadTask> claimed = repository
+                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10).collectList().block();
+        DownloadTask outtake = claimed.stream()
+                .filter(t -> "Cigarettes & Alcohol (Sawmills Outtake)".equals(t.trackTitle())).findFirst().orElseThrow();
+        assertEquals(24, outtake.trackNumber());
+        assertEquals(307, outtake.durationSeconds());
+    }
+
+    @Test
+    void aTaskRowWrittenWithoutTheV12Columns_keepsThemNull_andIsStillClaimed() {
+        UUID id = insertDownload("IN_PROGRESS", "ALBUM");
+        // What every row from before V12 looks like, and what an older instance still writes.
+        template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, position, "
+                        + "phase, phase_entered_at, next_attempt_at) "
+                        + "VALUES (gen_random_uuid(), :id, 'v-old', 'Old - Band', 1, 'SEARCH_INIT', :now, :now)")
+                .bind("id", id).bind("now", NOW).fetch().rowsUpdated().block();
+
+        assertEquals(List.of(Arrays.asList(null, null, null, "1")), trackColumnsOf(id));
+        DownloadTask claimed = repository
+                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10).blockFirst();
+        assertEquals("Old - Band", claimed.songName());
+        assertNull(claimed.trackTitle());
+        assertNull(claimed.trackNumber());
+        assertNull(claimed.durationSeconds());
+    }
+
+    private static DownloadTask track(UUID downloadId, String youtubeId, String title, Integer number,
+                                      Integer seconds) {
+        return DownloadTask.initial(downloadId, youtubeId, title + " - Oasis", NOW).toBuilder()
+                .trackTitle(title).trackNumber(number).durationSeconds(seconds).build();
+    }
+
+    /** title, number, length and position of every row of one download, in position order, as text. */
+    private List<List<String>> trackColumnsOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT track_title, track_number::text AS n, duration_seconds::text AS d, position::text AS p "
+                        + "FROM download_tasks WHERE download_id = :id ORDER BY position")
+                .bind("id", downloadId)
+                .map((row, meta) -> Arrays.asList(row.get("track_title", String.class), row.get("n", String.class),
+                        row.get("d", String.class), row.get("p", String.class)))
+                .all().collectList().block();
+    }
+
     // ---- media_items ---------------------------------------------------------------------------
 
     @Test
@@ -213,6 +287,24 @@ class DownloadTaskRepositoryIT {
                 new MediaItem("v1", "Twice", List.of(), List.of(), null, null, null))).block());
 
         assertEquals("Once", mediaField("v1", "title"));
+    }
+
+    @Test
+    void upsertMedia_fillsAnAlbumsYearAndTypeOnAnOlderRow_andALessCompleteAnswerKeepsThem() {
+        // The album row an earlier download wrote before V12: no year, no type.
+        repository.upsertMedia(List.of(new MediaItem("MPREb_Hl8XJR59OrY", "Definitely Maybe", List.of("Oasis"),
+                List.of("UC-oasis"), null, null, 10))).block();
+        repository.upsertMedia(List.of(new MediaItem("MPREb_Hl8XJR59OrY", "Definitely Maybe", List.of("Oasis"),
+                List.of("UC-oasis"), null, null, 11, 1994, "Album"))).block();
+        // A row written without them (a song request for the same id, or an older instance).
+        repository.upsertMedia(List.of(new MediaItem("MPREb_Hl8XJR59OrY", "Definitely Maybe", List.of("Oasis"),
+                List.of("UC-oasis"), null, null, null))).block();
+
+        assertEquals(List.of(1994, 11), template.getDatabaseClient()
+                .sql("SELECT year, track_count FROM media_items WHERE youtube_id = 'MPREb_Hl8XJR59OrY'")
+                .map((row, meta) -> List.of(row.get("year", Integer.class), row.get("track_count", Integer.class)))
+                .one().block());
+        assertEquals("Album", mediaField("MPREb_Hl8XJR59OrY", "album_type"));
     }
 
     @Test
@@ -428,9 +520,12 @@ class DownloadTaskRepositoryIT {
         UUID album = insertDownload("SUCCEEDED", "ALBUM");
         media("yt-" + album, "Doolittle", "Pixies");
         media("song-1", "Debaser", "Pixies", "Someone");
+        // The same song also requested on its own once, and looked up: the album track must ignore that.
+        media("MPREb_doolittle_deluxe", "Doolittle (Deluxe)", "Pixies");
+        songAlbum("song-1", "MPREb_doolittle_deluxe", 1, NOW);
         UUID taskId = succeededSong(album, "song-1", "music\\Pixies\\Doolittle\\01 - Debaser.flac", NOW);
 
-        List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600))
+        List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW.minusSeconds(120))
                 .collectList().block();
 
         assertEquals(1, jobs.size());
@@ -443,6 +538,175 @@ class DownloadTaskRepositoryIT {
         assertEquals(List.of("Pixies", "Someone"), job.songArtists());
         assertEquals("Doolittle", job.collectionTitle());
         assertEquals(List.of("Pixies"), job.collectionArtists());
+        assertNull(job.albumTitle(), "an album download's track never waits for, or uses, a song album");
+    }
+
+    private void songAlbum(String youtubeId, String albumId, Integer trackNumber, Instant resolvedAt) {
+        repository.saveSongAlbum(youtubeId, albumId, trackNumber, resolvedAt).block();
+    }
+
+    @Test
+    void tasksToOrganise_aSongWaitsForItsAlbumLookup_withinTheGrace_withoutFillingTheBatch() {
+        UUID playlist = insertDownload("IN_PROGRESS", "PLAYLIST");
+        for (int i = 0; i < 3; i++) {
+            succeededSong(playlist, "waiting-" + i, "x\\w" + i + ".flac", NOW.minusSeconds(30 + i));
+        }
+        UUID album = insertDownload("IN_PROGRESS", "ALBUM");
+        UUID albumTrack = succeededSong(album, "track", "x\\t.flac", NOW);
+        UUID lateSong = succeededSong(playlist, "late", "x\\late.flac", NOW.minusSeconds(121));
+
+        // LIMIT 2 with three older songs waiting: the wait is in the WHERE, so the ready ones still come.
+        List<UUID> ready = repository.tasksToOrganise(2, NOW.minusSeconds(600), NOW.minusSeconds(120))
+                .map(LibraryOrganiser.Job::taskId).collectList().block();
+
+        assertEquals(List.of(lateSong, albumTrack), ready,
+                "the album track never waits; the song past its two minutes is filed by its own name");
+    }
+
+    @Test
+    void tasksToOrganise_aSongWithAnAlbumAnswer_isReadyAtOnce_andCarriesItsAlbumsNames() {
+        UUID playlist = insertDownload("IN_PROGRESS", "PLAYLIST");
+        repository.upsertMedia(List.of(new MediaItem("MPREb_dm", "Definitely Maybe", List.of("Oasis"), List.of(),
+                null, null, 11, 1994, "Album"))).block();
+        songAlbum("supersonic", "MPREb_dm", 6, NOW);
+        songAlbum("lose-yourself", null, null, NOW);
+        UUID joined = succeededSong(playlist, "supersonic", "x\\s.flac", NOW);
+        UUID none = succeededSong(playlist, "lose-yourself", "x\\l.flac", NOW);
+
+        List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW.minusSeconds(120))
+                .collectList().block();
+
+        assertEquals(java.util.Set.of(joined, none),
+                jobs.stream().map(LibraryOrganiser.Job::taskId).collect(java.util.stream.Collectors.toSet()));
+        LibraryOrganiser.Job supersonic = jobs.stream().filter(j -> j.taskId().equals(joined)).findFirst().orElseThrow();
+        assertEquals("Definitely Maybe", supersonic.albumTitle());
+        assertEquals(List.of("Oasis"), supersonic.albumArtists());
+        LibraryOrganiser.Job loseYourself = jobs.stream().filter(j -> j.taskId().equals(none)).findFirst().orElseThrow();
+        assertNull(loseYourself.albumTitle(), "looked, nothing trusted: filed by its own name, without waiting");
+    }
+
+    @Test
+    void tasksToOrganise_carriesWhatTheTagsAreWrittenFrom_theAlbumDownloadsOwnAlbum_orTheSongsTrustedOne() {
+        // An album download's track: its own row's title and number (the 30th Anniversary edition lists
+        // h7-BHdjeEY0 as tracks 21 and 24), the album's artists, year, count and art; never a song album.
+        UUID album = insertDownload("SUCCEEDED", "ALBUM");
+        repository.upsertMedia(List.of(
+                new MediaItem("yt-" + album, "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"),
+                        List.of(), "https://yt3.googleusercontent.com/dm30=w544-h544-l90-rj", null, 44, 2024, "Album"),
+                new MediaItem("MPREb_dm", "Definitely Maybe", List.of("Oasis"), List.of(),
+                        "https://yt3.googleusercontent.com/dm=w544-h544-l90-rj", null, 11, 1994, "Album"),
+                new MediaItem("h7-BHdjeEY0", "Up In The Sky", List.of("Oasis"), List.of(),
+                        "https://i.ytimg.com/vi/h7-BHdjeEY0/hqdefault.jpg", 268, null),
+                new MediaItem("supersonic", "Supersonic", List.of("Oasis"), List.of(), null, 283, null),
+                new MediaItem("lose-yourself", "Lose Yourself", List.of("Eminem"), List.of(),
+                        "https://yt3.googleusercontent.com/ly=w544-h544-l90-rj", 326, null))).block();
+        songAlbum("h7-BHdjeEY0", "MPREb_dm", 4, NOW);
+        UUID albumTrack = succeededSong(album, "h7-BHdjeEY0", "x\\24.flac", NOW);
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET track_title = 'Up In The Sky (Sawmills Outtake)', track_number = 24 "
+                        + "WHERE task_id = :task")
+                .bind("task", albumTrack).fetch().rowsUpdated().block();
+        // A playlist's track with a trusted album, and one without.
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        songAlbum("supersonic", "MPREb_dm", 6, NOW);
+        songAlbum("lose-yourself", null, null, NOW);
+        UUID joined = succeededSong(playlist, "supersonic", "x\\s.flac", NOW);
+        UUID none = succeededSong(playlist, "lose-yourself", "x\\l.flac", NOW);
+
+        java.util.Map<UUID, SongTagger.Tags> tags = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW.minusSeconds(120))
+                .collectMap(LibraryOrganiser.Job::taskId, LibraryOrganiser.Job::tags).block();
+
+        assertEquals(new SongTagger.Tags("Up In The Sky (Sawmills Outtake)", List.of("Oasis"),
+                "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"), 2024, 24, 44,
+                "https://yt3.googleusercontent.com/dm30=w544-h544-l90-rj"), tags.get(albumTrack));
+        assertEquals(new SongTagger.Tags("Supersonic", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"),
+                1994, 6, 11, "https://yt3.googleusercontent.com/dm=w544-h544-l90-rj"), tags.get(joined));
+        assertEquals(new SongTagger.Tags("Lose Yourself", List.of("Eminem"), null, List.of(), null, null, null,
+                "https://yt3.googleusercontent.com/ly=w544-h544-l90-rj"), tags.get(none),
+                "no trusted album: no album tags, and the song's own picture only fills a gap");
+    }
+
+    // ---- album lookup ----------------------------------------------------------------------------
+
+    private UUID task(UUID downloadId, String youtubeId, String phase, Instant finishedAt) {
+        UUID taskId = UUID.randomUUID();
+        var insert = template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, duration_seconds, "
+                        + "phase, phase_entered_at, next_attempt_at, finished_at) "
+                        + "VALUES (:task, :dl, :yt, :name, 200, :phase, :now, :now, :finished)")
+                .bind("task", taskId).bind("dl", downloadId).bind("yt", youtubeId).bind("name", youtubeId + " - Artist")
+                .bind("phase", phase).bind("now", NOW);
+        (finishedAt == null ? insert.bindNull("finished", Instant.class) : insert.bind("finished", finishedAt))
+                .fetch().rowsUpdated().block();
+        return taskId;
+    }
+
+    private List<String> toResolve(int limit) {
+        return repository.songsToResolve(limit, NOW.minusSeconds(600), NOW.minus(Duration.ofDays(7)))
+                .map(SongAlbumResolver.Song::youtubeId).collectList().block();
+    }
+
+    @Test
+    void songsToResolve_isSongsAndPlaylistTracksStillDownloadingOrJustFinished_neverAlbumTracksOrHistory() {
+        UUID song = insertDownload("IN_PROGRESS", "SONG");
+        UUID playlist = insertDownload("IN_PROGRESS", "PLAYLIST");
+        UUID curated = insertDownload("IN_PROGRESS", "CURATED");
+        UUID album = insertDownload("IN_PROGRESS", "ALBUM");
+        task(song, "searching", "SEARCH_INIT", null);
+        task(playlist, "just-finished", "SUCCEEDED", NOW);
+        task(curated, "downloading", "DOWNLOAD_POLL", null);
+        task(album, "album-track", "SEARCH_INIT", null);
+        task(playlist, "history", "SUCCEEDED", NOW.minusSeconds(601));
+        UUID filed = task(playlist, "filed", "SUCCEEDED", NOW);
+        repository.setLibraryPath(filed, "/music/a.flac").block();
+        task(playlist, "failed", "FAILED", NOW);
+
+        assertEquals(java.util.Set.of("searching", "just-finished", "downloading"), java.util.Set.copyOf(toResolve(10)));
+        SongAlbumResolver.Song curatedSong = repository.songsToResolve(10, NOW.minusSeconds(600), NOW)
+                .filter(s -> s.youtubeId().equals("downloading")).blockFirst();
+        assertEquals(DownloadType.CURATED, curatedSong.type());
+        assertEquals("yt-" + curated, curatedSong.downloadYoutubeId(), "the curator category, for its album hint");
+        assertEquals("downloading - Artist", curatedSong.songName());
+        assertEquals(200, curatedSong.durationSeconds());
+    }
+
+    @Test
+    void songsToResolve_asksOncePerId_oldestRequestFirst_andAgainOnlyForAWeekOldNone() {
+        UUID older = insertDownload("IN_PROGRESS", "PLAYLIST");
+        UUID newer = insertDownload("IN_PROGRESS", "SONG");
+        template.getDatabaseClient().sql("UPDATE downloads SET created_at = :at WHERE download_id = :id")
+                .bind("at", NOW.minusSeconds(60)).bind("id", older).fetch().rowsUpdated().block();
+        task(newer, "twice", "SEARCH_INIT", null);
+        task(older, "twice", "SEARCH_INIT", null);
+        task(older, "trusted", "SEARCH_INIT", null);
+        task(older, "fresh-none", "SEARCH_INIT", null);
+        task(older, "old-none", "SEARCH_INIT", null);
+        songAlbum("trusted", "MPREb_x", 1, NOW);
+        songAlbum("fresh-none", null, null, NOW.minus(Duration.ofDays(6)));
+        songAlbum("old-none", null, null, NOW.minus(Duration.ofDays(8)));
+
+        List<String> due = toResolve(10);
+
+        assertEquals(2, due.size(), "one row per id; answered ids are not asked again");
+        assertEquals(java.util.Set.of("twice", "old-none"), java.util.Set.copyOf(due));
+        assertEquals(1, toResolve(1).size());
+
+        songAlbum("old-none", "MPREb_y", 3, NOW);
+        assertEquals(List.of("twice"), toResolve(10), "the upsert replaced the old answer");
+    }
+
+    @Test
+    void songsToResolve_ordersByRequestTime() {
+        UUID first = insertDownload("IN_PROGRESS", "SONG");
+        UUID second = insertDownload("IN_PROGRESS", "SONG");
+        template.getDatabaseClient().sql("UPDATE downloads SET created_at = :at WHERE download_id = :id")
+                .bind("at", NOW.minusSeconds(60)).bind("id", first).fetch().rowsUpdated().block();
+        template.getDatabaseClient().sql("UPDATE downloads SET created_at = :at WHERE download_id = :id")
+                .bind("at", NOW.minusSeconds(30)).bind("id", second).fetch().rowsUpdated().block();
+        task(second, "b", "SEARCH_INIT", null);
+        task(first, "a", "SEARCH_INIT", null);
+
+        assertEquals(List.of("a", "b"), toResolve(10));
     }
 
     @Test
@@ -456,7 +720,8 @@ class DownloadTaskRepositoryIT {
                 DownloadFailureCode.NO_CANDIDATES, NOW);
         UUID wanted = succeededSong(dl, "new", "a\\new.flac", NOW);
 
-        List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600))
+        // Album lookup grace over (album cutoff NOW): no song waits for one here.
+        List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW)
                 .collectList().block();
 
         assertEquals(List.of(wanted), jobs.stream().map(LibraryOrganiser.Job::taskId).toList());
@@ -464,6 +729,212 @@ class DownloadTaskRepositoryIT {
         // than being silently never filed.
         assertNull(jobs.getFirst().songTitle());
         assertEquals(List.of(), jobs.getFirst().songArtists());
+    }
+
+    // ---- songs the library already has -----------------------------------------------------------
+
+    /** A song an earlier download filed: its row's own title and number, its pick's grade, its file. */
+    private void filed(UUID downloadId, String youtubeId, String title, Integer trackNumber, String grade, String path) {
+        var insert = template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, track_title, "
+                        + "track_number, candidates, candidate_index, phase, phase_entered_at, next_attempt_at, "
+                        + "finished_at, library_path) VALUES (gen_random_uuid(), :dl, :yt, 'q', :title, :n, "
+                        + ":candidates, 0, 'SUCCEEDED', :at, :at, :at, :path)")
+                .bind("dl", downloadId).bind("yt", youtubeId).bind("title", title)
+                .bind("candidates", "[{\"grade\":\"" + grade + "\"}]").bind("at", NOW.minusSeconds(3600));
+        insert = trackNumber == null ? insert.bindNull("n", Integer.class) : insert.bind("n", trackNumber);
+        insert = path == null ? insert.bindNull("path", String.class) : insert.bind("path", path);
+        insert.fetch().rowsUpdated().block();
+    }
+
+    private static DownloadTask wanted(String youtubeId, String title, Integer trackNumber) {
+        return DownloadTask.initial(UUID.randomUUID(), youtubeId, title, NOW).toBuilder()
+                .trackTitle(title).trackNumber(trackNumber).build();
+    }
+
+    private List<String> copies(DownloadType type, String downloadYoutubeId, DownloadTask... tasks) {
+        return repository.filedCopies(type, downloadYoutubeId, List.of(tasks))
+                .map(c -> c.position() + " " + c.libraryPath()).collectList().block();
+    }
+
+    @Test
+    void filedCopies_forAnAlbum_isTheSameAlbumTrack_neverTheSameIdFromElsewhere() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        filed(album, "supersonic-atv", "Supersonic", 6, "EXACT", "/music/Oasis/DM/06.flac");
+        // A Deluxe edition shares the plain album's ids; its files must not be taken for this album's.
+        UUID deluxe = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm_deluxe");
+        filed(deluxe, "live-forever", "Live Forever", 5, "EXACT", "/music/Oasis/DMD/05.flac");
+
+        assertEquals(List.of("1 /music/Oasis/DM/06.flac"), copies(DownloadType.ALBUM, "MPREb_dm",
+                wanted("supersonic-other-id", "Supersonic", 6), wanted("live-forever", "Live Forever", 5)));
+    }
+
+    @Test
+    void filedCopies_forASongOrPlaylist_isTheSameIdWithTheSameTitle_orItsTrustedAlbumTrack() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        filed(album, "supersonic-atv", "Supersonic", 6, "EXACT", "/music/Oasis/DM/06.flac");
+        UUID song = insertDownload("SUCCEEDED", "SONG");
+        filed(song, "wonderwall", "Wonderwall", null, "EXACT", "/music/Oasis/Wonderwall/w.flac");
+        songAlbum("supersonic-omv", "MPREb_dm", 6, NOW);
+
+        assertEquals(List.of("1 /music/Oasis/DM/06.flac", "2 /music/Oasis/Wonderwall/w.flac"),
+                copies(DownloadType.PLAYLIST, "VL-britpop",
+                        wanted("supersonic-omv", "Supersonic (Official Video)", null),
+                        wanted("wonderwall", "wonderwall", null),
+                        wanted("wonderwall", "Wonderwall (Live)", null)),
+                "the video's twin by its album track; the same id only with the same title");
+    }
+
+    @Test
+    void filedCopies_neverCountsAStandInPick_orASongThatWasNotFiled() {
+        UUID song = insertDownload("SUCCEEDED", "SONG");
+        filed(song, "a", "A", null, "TITLE_ONLY", "/music/a.flac");
+        filed(song, "b", "B", null, "EXACT", null);
+
+        assertEquals(List.of(), copies(DownloadType.SONG, "a", wanted("a", "A", null), wanted("b", "B", null)));
+    }
+
+    @Test
+    void filedCopies_neverTakesASongForAnAlbumTrack_byAnAlbumAnswerThatCameAfterItWasFiled() {
+        // Filed by its own name (no answer within the organiser's wait), then looked up late: the file
+        // is in its own folder, so the album still needs its own copy of the track.
+        UUID song = insertDownload("SUCCEEDED", "SONG");
+        filed(song, "supersonic", "Supersonic", null, "EXACT", "/music/Oasis/Supersonic/s.flac");
+        songAlbum("supersonic", "MPREb_dm", 6, NOW);
+
+        assertEquals(List.of(), copies(DownloadType.ALBUM, "MPREb_dm", wanted("supersonic", "Supersonic", 6)));
+        assertEquals(List.of("1 /music/Oasis/Supersonic/s.flac"), copies(DownloadType.SONG, "supersonic",
+                wanted("supersonic", "Supersonic", null)), "asked for as a song, it is still the same song");
+    }
+
+    @Test
+    void createTasks_createsASongTheLibraryHasFinished_soNothingSearchesForIt() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        List<DownloadTask> tasks = List.of(
+                DownloadTask.initial(id, "have", "have", NOW).toBuilder().libraryPath("/music/x/have.flac").build(),
+                DownloadTask.initial(id, "want", "want", NOW));
+
+        assertEquals(2L, repository.createTasks(id, tasks, NOW).block());
+
+        assertEquals(List.of("SUCCEEDED", "SEARCH_INIT"), phasesOf(id));
+        UUID have = taskIdsOf(id).getFirst();
+        assertEquals("/music/x/have.flac", taskField(have, "library_path"));
+        assertEquals(NOW, template.getDatabaseClient()
+                .sql("SELECT finished_at FROM download_tasks WHERE task_id = :id").bind("id", have)
+                .map((row, meta) -> row.get("finished_at", Instant.class)).one().block());
+        assertEquals(0, new java.math.BigDecimal(100).compareTo(template.getDatabaseClient()
+                .sql("SELECT progress_percent FROM download_tasks WHERE task_id = :id").bind("id", have)
+                .map((row, meta) -> row.get("progress_percent", java.math.BigDecimal.class)).one().block()));
+        assertEquals(0L, repository.concludeDownloads().block(), "the download still has a song to fetch");
+    }
+
+    @Test
+    void tasksToOrganise_givesASongItsAlbumTracksFileInTheLibrary() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        filed(album, "supersonic-atv", "Supersonic", 6, "EXACT", "/music/Oasis/DM/06.flac");
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        songAlbum("supersonic-omv", "MPREb_dm", 6, NOW);
+        songAlbum("live-forever", "MPREb_dm", 3, NOW);
+        UUID twin = succeededSong(playlist, "supersonic-omv", "x\\s.mp3", NOW);
+        UUID fresh = succeededSong(playlist, "live-forever", "x\\l.mp3", NOW);
+
+        java.util.Map<UUID, String> copies = new java.util.HashMap<>();
+        repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW)
+                .doOnNext(job -> copies.put(job.taskId(), job.filedCopy())).blockLast();
+
+        assertEquals("/music/Oasis/DM/06.flac", copies.get(twin));
+        assertTrue(copies.containsKey(fresh));
+        assertNull(copies.get(fresh), "an album track the library does not have yet is filed as usual");
+    }
+
+    @Test
+    void tasksToOrganise_givesAnAlbumTrackTheFileASongRequestPutInItsFolderFirst() {
+        UUID song = insertDownload("SUCCEEDED", "SONG");
+        songAlbum("supersonic", "MPREb_dm", 6, NOW.minusSeconds(3600));
+        filed(song, "supersonic", "Supersonic", null, "EXACT", "/music/Oasis/DM/Supersonic.flac");
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        UUID track = UUID.randomUUID();
+        template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, track_number, phase, "
+                        + "phase_entered_at, next_attempt_at, finished_at, slskd_username, slskd_filename) "
+                        + "VALUES (:task, :dl, 'supersonic', 'q', 6, 'SUCCEEDED', :at, :at, :at, 'bob', 'x\\06.flac')")
+                .bind("task", track).bind("dl", album).bind("at", NOW)
+                .fetch().rowsUpdated().block();
+
+        LibraryOrganiser.Job job = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW).blockFirst();
+
+        assertEquals(track, job.taskId());
+        assertEquals("/music/Oasis/DM/Supersonic.flac", job.filedCopy());
+    }
+
+    private UUID succeededPick(UUID downloadId, String youtubeId, String title, String grade) {
+        UUID taskId = succeededSong(downloadId, youtubeId, "x\\" + youtubeId + ".mp3", NOW);
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET track_title = :title, candidates = :c, candidate_index = 0 WHERE task_id = :id")
+                .bind("title", title).bind("c", "[{\"grade\":\"" + grade + "\"}]").bind("id", taskId)
+                .fetch().rowsUpdated().block();
+        return taskId;
+    }
+
+    private java.util.Map<UUID, String> filedCopies() {
+        java.util.Map<UUID, String> copies = new java.util.HashMap<>();
+        repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW)
+                .doOnNext(job -> copies.put(job.taskId(), job.filedCopy())).blockLast();
+        return copies;
+    }
+
+    @Test
+    void tasksToOrganise_givesASingleAskedForTwiceTheFirstOnesFile_byIdAndTitle() {
+        UUID first = insertDownload("SUCCEEDED", "SONG");
+        filed(first, "blinding", "Blinding Lights", null, "EXACT", "/music/The Weeknd/Blinding Lights/b.flac");
+        UUID again = insertDownload("SUCCEEDED", "PLAYLIST");
+        UUID twin = succeededPick(again, "blinding", "Blinding Lights", "EXACT");
+        UUID other = succeededPick(again, "blinding", "Blinding Lights (Live)", "EXACT");
+
+        java.util.Map<UUID, String> copies = filedCopies();
+
+        assertEquals("/music/The Weeknd/Blinding Lights/b.flac", copies.get(twin));
+        assertNull(copies.get(other), "the same id under another title is another song");
+    }
+
+    @Test
+    void tasksToOrganise_aStandInNeverPilesUpNextToAnother_butTheRealSongIsStillFiled() {
+        UUID first = insertDownload("SUCCEEDED", "SONG");
+        filed(first, "w", "Wonderwall", null, "OTHER_VERSION", "/music/Oasis/Wonderwall/live.flac");
+        UUID again = insertDownload("SUCCEEDED", "SONG");
+        UUID standIn = succeededPick(again, "w", "Wonderwall", "OTHER_VERSION");
+        UUID real = succeededPick(again, "w", "Wonderwall", "EXACT");
+
+        java.util.Map<UUID, String> copies = filedCopies();
+
+        assertEquals("/music/Oasis/Wonderwall/live.flac", copies.get(standIn));
+        assertNull(copies.get(real), "an exact pick is filed beside a stand-in, never thrown away for it");
+        assertEquals(List.of(), copies(DownloadType.SONG, "w", wanted("w", "Wonderwall", null)),
+                "asking again still searches for the real song");
+    }
+
+    @Test
+    void tasksToOrganise_namesTwoCopiesOfOneSongAlike_soOnlyOneIsFiledPerPass() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        songAlbum("supersonic-omv", "MPREb_dm", 6, NOW);
+        UUID track = UUID.randomUUID();
+        template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, track_number, phase, "
+                        + "phase_entered_at, next_attempt_at, finished_at, slskd_username, slskd_filename) "
+                        + "VALUES (:task, :dl, 'supersonic-atv', 'q', 6, 'SUCCEEDED', :at, :at, :at, 'bob', 'x\\06.flac')")
+                .bind("task", track).bind("dl", album).bind("at", NOW)
+                .fetch().rowsUpdated().block();
+        UUID twin = succeededSong(playlist, "supersonic-omv", "x\\s.mp3", NOW);
+        UUID single = succeededSong(playlist, "blinding", "x\\b.mp3", NOW);
+
+        java.util.Map<UUID, String> keys = new java.util.HashMap<>();
+        repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW)
+                .doOnNext(job -> keys.put(job.taskId(), job.copyKey())).blockLast();
+
+        assertEquals("MPREb_dm#6", keys.get(track));
+        assertEquals(keys.get(track), keys.get(twin), "the album's track and its video twin are one song");
+        assertEquals("blinding", keys.get(single));
     }
 
     @Test
@@ -694,6 +1165,228 @@ class DownloadTaskRepositoryIT {
         assertEquals(0, repository.cancelTasks(id, null, NOW).collectList().block().size());
     }
 
+    // ---- whole album first (P5) ------------------------------------------------------------------
+
+    private static final Instant HOLD = NOW.plusSeconds(240);
+
+    /** An album download admitted the way the runner admits one: its search row, its songs held. */
+    private UUID admitAlbum(String... songNames) {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        repository.createTasks(id, Arrays.stream(songNames)
+                .map(name -> DownloadTask.initial(id, "yt-" + name, name, NOW)).toList(), NOW, HOLD).block();
+        media("yt-" + id, "Laughing Stock", "Talk Talk");
+        return id;
+    }
+
+    private String albumField(UUID downloadId, String column) {
+        return template.getDatabaseClient()
+                .sql("SELECT " + column + "::text AS v FROM album_searches WHERE download_id = :id").bind("id", downloadId)
+                .map((row, meta) -> Optional.ofNullable(row.get("v", String.class))).one()
+                .blockOptional().flatMap(v -> v).orElse(null);
+    }
+
+    private Instant nextAttemptOf(UUID taskId) {
+        return template.getDatabaseClient()
+                .sql("SELECT next_attempt_at FROM download_tasks WHERE task_id = :id").bind("id", taskId)
+                .map((row, meta) -> row.get("next_attempt_at", Instant.class)).one().block();
+    }
+
+    private void setTask(UUID taskId, String assignments) {
+        template.getDatabaseClient().sql("UPDATE download_tasks SET " + assignments + " WHERE task_id = :id")
+                .bind("id", taskId).fetch().rowsUpdated().block();
+    }
+
+    @Test
+    void createTasks_forAnAlbum_startsItsAlbumSearch_andHoldsItsSongs() {
+        UUID id = admitAlbum("1 Myrrhman", "2 Ascension Day");
+
+        assertEquals("SEARCH_INIT", albumField(id, "phase"));
+        assertTrue(repository.claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10)
+                .collectList().block().isEmpty(), "the songs wait for the album search");
+        assertEquals(2, repository.claimDueTasks(10, "x", HOLD, Duration.ofSeconds(60), true, 10)
+                .collectList().block().size(), "and search on their own once the hold runs out");
+    }
+
+    @Test
+    void createTasks_forAnAlbumWithASongTheLibraryHas_holdsOnlyTheOthers_andTheSearchLeavesItAlone() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        repository.createTasks(id, List.of(
+                DownloadTask.initial(id, "yt-1", "1 Myrrhman", NOW).toBuilder().libraryPath("/music/T/L/1.flac").build(),
+                DownloadTask.initial(id, "yt-2", "2 Ascension Day", NOW)), NOW, HOLD).block();
+        List<UUID> songs = taskIdsOf(id);
+
+        assertEquals(List.of("SUCCEEDED", "SEARCH_INIT"), phasesOf(id));
+        assertEquals(HOLD, nextAttemptOf(songs.get(1)));
+        assertEquals(List.of(songs.get(1)), repository.waitingAlbumSongs(id, NOW).map(DownloadTask::taskId)
+                .collectList().block(), "the album search only plans the song still to fetch");
+    }
+
+    @Test
+    void createTasks_forASongOrPlaylist_startsNoAlbumSearch() {
+        UUID id = insertDownload("PENDING", "PLAYLIST");
+        admit(id, "a", "b");
+
+        assertNull(albumField(id, "phase"));
+        assertEquals(2, repository.claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10)
+                .collectList().block().size());
+    }
+
+    @Test
+    void claimDueAlbumSearches_startsAtMostTheFreeSlots_withALease_andTheAlbumsName() {
+        admitAlbum("1 a");
+        admitAlbum("1 b");
+
+        assertTrue(repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 0)
+                .collectList().block().isEmpty(), "no free search slot, no album search starts");
+        List<AlbumSearch> claimed = repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 1)
+                .collectList().block();
+
+        assertEquals(1, claimed.size());
+        assertEquals(DownloadPhase.SEARCH_INIT, claimed.getFirst().phase());
+        assertEquals("Laughing Stock", claimed.getFirst().title());
+        assertEquals(List.of("Talk Talk"), claimed.getFirst().artists());
+        assertEquals("me", albumField(claimed.getFirst().downloadId(), "lease_owner"));
+        assertEquals(1, repository.claimDueAlbumSearches(10, "other", NOW.plusSeconds(1), Duration.ofSeconds(60), 2)
+                .collectList().block().size(), "a live lease is skipped: only the other album is claimed");
+    }
+
+    @Test
+    void countActiveSearches_countsRunningAlbumSearchesToo() {
+        UUID id = admitAlbum("1 a");
+        AlbumSearch claimed = repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+
+        repository.saveAlbumSearch(claimed.toBuilder().phase(DownloadPhase.SEARCH_POLL).searchId("s1").build(),
+                "me", NOW, HOLD.plusSeconds(60)).block();
+
+        assertEquals(1L, repository.countActiveSearches().block());
+        assertEquals("s1", albumField(id, "search_id"));
+    }
+
+    @Test
+    void saveAlbumSearch_startingAWording_holdsTheWaitingSongsLonger_butNotOnesAlreadySearchingOnTheirOwn() {
+        UUID id = admitAlbum("1 waiting", "2 fell due", "3 retrying its second wording");
+        List<UUID> songs = taskIdsOf(id);
+        setTask(songs.get(1), "next_attempt_at = '" + NOW.minusSeconds(1) + "'");
+        setTask(songs.get(2), "search_tier = 1, next_attempt_at = '" + NOW.plusSeconds(2) + "'");
+        AlbumSearch claimed = repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+
+        assertEquals(1L, repository.saveAlbumSearch(claimed.toBuilder().phase(DownloadPhase.SEARCH_POLL).searchId("s1")
+                .build(), "me", NOW, HOLD.plusSeconds(60)).block());
+
+        assertEquals(HOLD.plusSeconds(60), nextAttemptOf(songs.get(0)));
+        assertEquals(NOW.minusSeconds(1), nextAttemptOf(songs.get(1)));
+        assertEquals(NOW.plusSeconds(2), nextAttemptOf(songs.get(2)), "the release will not touch it, so neither may the hold");
+        AlbumSearch polling = repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+        assertEquals(1L, repository.saveAlbumSearch(polling.toBuilder().nextAttemptAt(NOW.plusSeconds(2)).build(),
+                "me", NOW, null).block());
+        assertEquals(HOLD.plusSeconds(60), nextAttemptOf(songs.get(0)), "a poll's save holds nobody");
+        assertEquals(0L, repository.saveAlbumSearch(claimed, "me", NOW, null).block(), "the save cleared the lease");
+    }
+
+    @Test
+    void releaseAlbumSongs_handsTheFolderSongsTheirFiles_andLeavesEverySongThatAlreadyMovedOnAlone() {
+        UUID id = admitAlbum("1 picked", "2 unpicked", "3 cancelled", "4 between wordings", "5 leased", "6 lease expired");
+        List<UUID> songs = taskIdsOf(id);
+        repository.cancelTasks(id, songs.get(2), NOW).blockLast();
+        setTask(songs.get(3), "search_tier = 1"); // its first wording found nothing worth keeping
+        setTask(songs.get(4), "lease_owner = 'busy', lease_expires_at = '" + NOW.plusSeconds(30) + "'");
+        setTask(songs.get(5), "lease_owner = 'gone', lease_expires_at = '" + NOW.minusSeconds(1) + "'");
+        repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+
+        Long released = repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.WHOLE_FOLDER,
+                java.util.Map.of(songs.get(0), DownloadTaskFixtures.albumFolderCandidates("Baron53", "Nilkse")),
+                NOW.plusSeconds(10)).block();
+
+        assertEquals(3L, released, "picked, unpicked and the one whose lease had run out");
+        assertEquals("DONE", albumField(id, "phase"));
+        assertEquals("WHOLE_FOLDER", albumField(id, "outcome"));
+        assertEquals("DOWNLOAD_INIT", taskField(songs.get(0), "phase"));
+        assertEquals("SEARCH_INIT", taskField(songs.get(1), "phase"));
+        assertEquals("FAILED", taskField(songs.get(2), "phase"), "a cancelled song stays cancelled");
+        assertEquals(HOLD, nextAttemptOf(songs.get(3)), "a song between wordings keeps its own clock");
+        assertEquals("SEARCH_INIT", taskField(songs.get(3), "phase"));
+        assertEquals("busy", taskField(songs.get(4), "lease_owner"), "a song a live lease holds is not touched");
+        assertNull(taskField(songs.get(5), "lease_owner"), "a stale step can no longer save over the release");
+
+        // Both released songs are due now, and the folder files come back with their mark.
+        List<DownloadTask> due = repository.claimDueTasks(10, "x", NOW.plusSeconds(10), Duration.ofSeconds(60), true, 10)
+                .collectList().block();
+        DownloadTask picked = due.stream().filter(t -> t.taskId().equals(songs.get(0))).findFirst().orElseThrow();
+        assertEquals(List.of("Baron53", "Nilkse"), picked.candidates().stream().map(DownloadCandidate::username).toList());
+        assertEquals(DownloadCandidate.ALBUM_FOLDER, picked.candidates().getFirst().source());
+        assertEquals(NOW.plusSeconds(10), picked.phaseEnteredAt());
+        assertTrue(due.stream().anyMatch(t -> t.taskId().equals(songs.get(1))));
+    }
+
+    @Test
+    void releaseAlbumSongs_byAStepThatLostItsLease_orASecondTime_releasesNothing() {
+        UUID id = admitAlbum("1 a");
+        repository.claimDueAlbumSearches(10, "dead", NOW, Duration.ofSeconds(60), 2).blockFirst();
+        repository.claimDueAlbumSearches(10, "alive", NOW.plusSeconds(61), Duration.ofSeconds(60), 2).blockFirst();
+
+        assertEquals(0L, repository.releaseAlbumSongs(id, "dead", AlbumSearch.Outcome.NO_WHOLE_FOLDER,
+                java.util.Map.of(), NOW.plusSeconds(62)).block());
+        assertEquals("SEARCH_INIT", albumField(id, "phase"));
+        assertEquals(HOLD, repository.waitingAlbumSongs(id, NOW).blockFirst().nextAttemptAt(), "still held");
+
+        assertEquals(1L, repository.releaseAlbumSongs(id, "alive", AlbumSearch.Outcome.NO_WHOLE_FOLDER,
+                java.util.Map.of(), NOW.plusSeconds(62)).block());
+        assertEquals(0L, repository.releaseAlbumSongs(id, "alive", AlbumSearch.Outcome.NO_WHOLE_FOLDER,
+                java.util.Map.of(), NOW.plusSeconds(63)).block());
+    }
+
+    @Test
+    void cancellingTheWholeAlbum_endsItsSearch_soItCanNoLongerHandOutFiles_butCancellingOneSongDoesNot() {
+        UUID id = admitAlbum("1 a", "2 b");
+        repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+
+        repository.cancelTasks(id, taskIdsOf(id).getFirst(), NOW).blockLast();
+        assertEquals("SEARCH_INIT", albumField(id, "phase"));
+
+        repository.cancelTasks(id, null, NOW).blockLast();
+        assertEquals("DONE", albumField(id, "phase"));
+        assertEquals("CANCELLED", albumField(id, "outcome"));
+        // A retry reopens the songs; the album search must not hand them files: they search on their own.
+        repository.concludeDownloads().block();
+        repository.retry(id, NOW.plusSeconds(1)).block();
+        assertEquals(0L, repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.WHOLE_FOLDER,
+                java.util.Map.of(taskIdsOf(id).getFirst(), DownloadTaskFixtures.albumFolderCandidates("x")), NOW.plusSeconds(2)).block());
+        assertEquals(List.of("SEARCH_INIT", "SEARCH_INIT"), phasesOf(id));
+    }
+
+    @Test
+    void cancellingTheWholeAlbum_locksItsSearchBeforeItsSongs_asTheReleaseDoes_soTheTwoCannotDeadlock() throws Exception {
+        UUID id = admitAlbum("1 a", "2 b");
+        try (Connection release = DriverManager.getConnection(
+                postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
+            // A release that has just marked the search done and is about to hand out the songs.
+            release.setAutoCommit(false);
+            release.createStatement().execute("SELECT 1 FROM album_searches WHERE download_id = '" + id + "' FOR UPDATE");
+            CompletableFuture<List<DownloadTask>> cancel = repository.cancelTasks(id, null, NOW).collectList().toFuture();
+            Instant deadline = Instant.now().plusSeconds(10);
+            while (template.getDatabaseClient().sql("SELECT count(*) AS n FROM pg_stat_activity "
+                            + "WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE album_searches%'")
+                    .map((row, meta) -> row.get("n", Long.class)).one().block() == 0) {
+                assertTrue(Instant.now().isBefore(deadline), "the cancel never waited for the album row");
+                Thread.sleep(20);
+            }
+            // The cancel is waiting for the album row while holding no song, so the release can take them.
+            release.createStatement().execute("SELECT 1 FROM download_tasks WHERE download_id = '" + id + "' FOR UPDATE NOWAIT");
+            release.commit();
+            assertEquals(2, cancel.get(10, TimeUnit.SECONDS).size());
+        }
+        assertEquals("CANCELLED", albumField(id, "outcome"));
+    }
+
+    @Test
+    void waitingAlbumSongs_areTheUntouchedOnes_inTrackOrder() {
+        UUID id = admitAlbum("b second", "a first", "c started");
+        setTask(taskIdsOf(id).get(2), "search_id = 's9'");
+
+        assertEquals(List.of("b second", "a first"), repository.waitingAlbumSongs(id, NOW)
+                .map(DownloadTask::songName).collectList().block());
+    }
+
     // ---- retry ---------------------------------------------------------------------------------
 
     /** A finished single-song download whose song failed. */
@@ -836,13 +1529,13 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
-    void countActiveTransfers_doesNotCountDownloadInitRows_thisIsTheDeadlockRegressionGuard() {
+    void transfersInFlight_doesNotListDownloadInitRows_thisIsTheDeadlockRegressionGuard() {
         // Reproduces the durable deadlock: if DOWNLOAD_INIT counted against the transfer cap, then
         // once max-concurrent-transfers worth of downloads landed in DOWNLOAD_INIT together, the cap
         // would be "full" of rows that CLAIM_DUE_SQL simultaneously refuses to claim (since
         // transferSlotsFree would be false) -- those rows could then never advance out of
         // DOWNLOAD_INIT, so the count could never drop, and the gate would stay closed forever, even
-        // across a restart, because it is backed by the DB. This wires the REAL countActiveTransfers()
+        // across a restart, because it is backed by the DB. This wires the REAL transfersInFlight()
         // to prove DOWNLOAD_INIT rows never contribute to that count in the first place.
         int maxConcurrentTransfers = 20;
         for (int i = 0; i < maxConcurrentTransfers; i++) {
@@ -851,9 +1544,23 @@ class DownloadTaskRepositoryIT {
 
         assertEquals(maxConcurrentTransfers, countTaskRowsInPhase("DOWNLOAD_INIT"),
                 "sanity check: every row really is sitting in DOWNLOAD_INIT");
-        assertEquals(0L, repository.countActiveTransfers().block(),
+        assertEquals(0L, repository.transfersInFlight().count().block(),
                 "DOWNLOAD_INIT rows must never count against the transfer cap -- otherwise the cap "
                         + "closes on rows that can never be claimed while it is closed, and never reopens");
+    }
+
+    @Test
+    void transfersInFlight_listsEachDownloadPollRow_withTheSharerItIsWith() {
+        UUID polling = admitOneSong("PENDING");
+        moveToPhase(polling, DownloadPhase.DOWNLOAD_POLL);
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET slskd_username = 'alice', slskd_transfer_id = 't1' "
+                        + "WHERE download_id = :id")
+                .bind("id", polling).fetch().rowsUpdated().block();
+        moveToPhase(admitOneSong("PENDING"), DownloadPhase.DOWNLOAD_INIT);
+
+        assertEquals(List.of(new DownloadTaskRepository.TransferInFlight("alice", "t1")),
+                repository.transfersInFlight().collectList().block());
     }
 
     @Test

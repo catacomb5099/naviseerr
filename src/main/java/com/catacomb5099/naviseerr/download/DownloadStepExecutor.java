@@ -8,6 +8,7 @@ import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 import java.time.Clock;
@@ -19,7 +20,8 @@ import java.util.Map;
  * The I/O shell around {@link DownloadStateMachine}. {@code SEARCH_POLL} and {@code DOWNLOAD_POLL}
  * make no slskd call of their own — they read from {@code searchesById}/{@code transfersById}, which
  * {@link DownloadTaskRunner} fetches once per pass via the two batched slskd calls. {@code SEARCH_INIT}
- * and {@code DOWNLOAD_INIT} are not batchable in slskd's API, so those two still call directly.
+ * and {@code DOWNLOAD_INIT} are not batchable in slskd's API, so those two still call directly --
+ * except a {@code DOWNLOAD_INIT} held back by {@link SharerLoad}, which calls nothing.
  *
  * <p>Never returns an error signal — an slskd failure is a decision too, so the caller always has
  * something to write.
@@ -44,17 +46,25 @@ public class DownloadStepExecutor {
     }
 
     public Mono<DownloadDecision> execute(DownloadTask task, Map<String, SearchState> searchesById,
-                                          Map<String, TransferedFile> transfersById) {
+                                          Map<String, TransferedFile> transfersById, SharerLoad sharers) {
         Instant now = clock.instant();
-        return step(task, searchesById, transfersById, now)
+        return step(task, searchesById, transfersById, sharers, now)
                 .onErrorResume(error -> {
-                    log.warn("Step {} for download {} failed", task.phase(), task.downloadId(), error);
+                    // slskd saying no already says why; its stack trace is 50 lines of nothing more,
+                    // 31 times per song while Soulseek is offline (04-10-2026). Anything else keeps it.
+                    if (error instanceof WebClientResponseException) {
+                        log.warn("Step {} for download {} failed: slskd answered {}", task.phase(),
+                                task.downloadId(), DownloadStateMachine.describe(error));
+                    } else {
+                        log.warn("Step {} for download {} failed", task.phase(), task.downloadId(), error);
+                    }
                     return Mono.just(stateMachine.onCallFailed(task, error, now));
                 });
     }
 
     private Mono<DownloadDecision> step(DownloadTask task, Map<String, SearchState> searchesById,
-                                        Map<String, TransferedFile> transfersById, Instant now) {
+                                        Map<String, TransferedFile> transfersById, SharerLoad sharers,
+                                        Instant now) {
         return switch (task.phase()) {
             case SEARCH_INIT -> slskdService.searchResults(task.searchQuery())
                     .map(state -> stateMachine.afterSearchInit(task, state, now));
@@ -72,15 +82,21 @@ public class DownloadStepExecutor {
             // synchronous throw here (e.g. IndexOutOfBoundsException from a corrupt/out-of-range
             // candidateIndex) would escape execute() before the onErrorResume below ever sees it,
             // aborting the whole pass exactly like the row-mapping bug this defer is paired with.
-            case DOWNLOAD_INIT -> Mono.defer(() -> slskdService.enqueueDownload(
-                            task.currentCandidate().username(), task.currentCandidate().toSearchFile())
-                    .map(response -> stateMachine.afterDownloadInit(task, response, now)));
+            case DOWNLOAD_INIT -> Mono.defer(() -> {
+                DownloadCandidate candidate = task.currentCandidate();
+                return stateMachine.beforeDownloadInit(task, sharers.take(candidate.username()), now)
+                        .map(Mono::just)
+                        .orElseGet(() -> slskdService
+                                .enqueueDownload(candidate.username(), candidate.toSearchFile())
+                                .map(response -> stateMachine.afterDownloadInit(task, response, now)));
+            });
 
             // Same "missing means still running" handling as SEARCH_POLL, via TransferedFileUtil's
             // existing null-safety — see the Javadoc on DownloadStateMachine.afterDownloadPoll.
             case DOWNLOAD_POLL -> Mono.fromSupplier(() -> {
                 TransferedFile file = transfersById.get(task.slskdTransferId());
-                DownloadDecision decision = stateMachine.afterDownloadPoll(task, file, now);
+                DownloadDecision decision =
+                        stateMachine.afterDownloadPoll(task, file, sharers.delivering(), now);
                 cancelIfAbandoned(task, file, decision);
                 return decision;
             });
@@ -136,9 +152,11 @@ public class DownloadStepExecutor {
                 // search. Never the raw name: "Neon Indian - Polish Girl -
                 // toomainstream" made the picker read "Neon Indian" as the title and reject all 300
                 // files Soulseek offered (post-mortem of 28-09-2026). The wording goes along too: when
-                // it did not name the artist, the picker requires the artist in the file's path.
+                // it did not name the artist, the picker requires the artist in the file's path. An
+                // album's song also holds the files to the album track's length (P6).
                 .flatMap(full -> searchResultProcessor.selectBestFiles(full,
-                                SearchQueryTiers.pickerName(task.songName()), task.searchQuery())
+                                SearchQueryTiers.pickerName(task.songName()), task.searchQuery(),
+                                task.albumTrackSeconds())
                         .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
                         .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
     }

@@ -214,9 +214,11 @@ YouTube id at admission time, via the first three of these methods on
 |---|---|---|
 | `getSongInfo(videoId)` | `GET /v1/songs/{videoId}` | `YoutubeSongInfo` |
 | `getAlbumInfo(browseId)` | `GET /v1/albums/{browseId}` | `YoutubeCollectionInfo` |
+| `getAlbum(browseId)` | `GET /v1/albums/{browseId}` | `YtMusicDetailResponse.Collection`, the adapter shape with `type`, every track's `trackNumber` and `otherVersions[]` (only the album lookup, `SongAlbumResolver`, reads it; `getAlbumInfo` maps it) |
+| `searchSongRows(query, limit)` | `GET /v1/search/songs?q&limit` | `List<YtMusicSearchResponse.Item>`, the rows unmapped, each with its album id and length (only the album lookup reads it) |
 | `getPlaylistInfo(playlistId)` | `GET /v1/playlists/{playlistId}` | `YoutubeCollectionInfo` |
 | `getArtistInfo(channelId)` | `GET /v1/artists/{channelId}` | `YtMusicDetailResponse.Artist` |
-| `getSongDetails(videoId)` | `GET /v1/songs/{videoId}/details` | `YtMusicDetailResponse.SongDetails` (adapter shape; only `SongInfoView.from` reads it) |
+| `getSongDetails(videoId)` | `GET /v1/songs/{videoId}/details` | `YtMusicDetailResponse.SongDetails` (adapter shape; read by `SongInfoView.from` and, for its album, by the album lookup) |
 | `getSongViewCount(videoId)` | `GET /v1/songs/{videoId}` | `Long`, that one upload's exact `viewCount`; empty when none (only `GET /songs/views` reads it) |
 | `getRadioInfo(seedId)` | `GET /v1/radio/{seedId}?limit={radio-size}` | `YoutubeCollectionInfo`, playlist-mapped (each song its own thumbnail), named after the seed; only `RadioController` calls it, and saves the answer, because the adapter returns a different list each time |
 
@@ -229,12 +231,18 @@ the same shape:
 - **An album reports `browseId` and an `artists[]`; a playlist reports `id` and a single `author`.**
   One `YoutubeCollectionInfo` covers both — they are one title plus one track list as far as the
   download pipeline is concerned, and splitting them would mean two types and a switch at every use
-  site for one nullable field's worth of difference (`year`, which only albums have).
+  site for a few nullable fields' worth of difference (`year`, `type` and each track's
+  `trackNumber`, which only albums have).
+- **An album track's `trackNumber` is YouTube's own number, not its index.** It is carried on
+  `YoutubeSongInfo.trackNumber` (null for playlist rows), next to the album's `type`
+  (`Album`/`EP`/`Single`), its `trackCount` and its `year` (an `Integer`) on `YoutubeCollectionInfo`.
+  Admission stores them (V12). Album track ids are often the official-video id, and one id can appear
+  on two rows of one album, so each row's own title and length are kept with it.
 - **A track with `isAvailable: false` is dropped.** It is region-blocked or deleted, so a task row
   for it would spend a whole search budget to fail. Only an explicit `false` counts — album
   responses omit the field entirely, and treating null as unavailable would drop every album track.
 
-All five go through the same `execute` pipeline as search — one timeout, typed error translation,
+Every one of them goes through the same `execute` pipeline as search — one timeout, typed error translation,
 retry on availability failures only — rather than reimplementing it. That pipeline was extracted from
 `executeSearch` for exactly this reason.
 

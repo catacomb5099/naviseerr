@@ -10,7 +10,9 @@ import reactor.core.publisher.Mono;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static reactor.netty.http.HttpConnectionLiveness.log;
@@ -34,7 +36,7 @@ public class SlskdSearchResultProcessor {
     // history. So: can they start at all, then how many people are ahead of you, then speed.
     private static final Comparator<SearchResponseItem> BY_AVAILABILITY =
             Comparator
-                    .comparing((SearchResponseItem peer) -> !Boolean.TRUE.equals(peer.getHasFreeUploadsSlot()))
+                    .comparing((SearchResponseItem peer) -> !Boolean.TRUE.equals(peer.getHasFreeUploadSlot()))
                     .thenComparingInt(SearchResponseItem::getQueueLength)
                     .thenComparingInt(peer -> -peer.getUploadSpeed());
 
@@ -60,6 +62,21 @@ public class SlskdSearchResultProcessor {
      * @param wording what was actually searched
      */
     public Mono<List<Pick>> selectBestFiles(SearchState state, String query, String wording) {
+        return selectBestFiles(state, query, wording, null);
+    }
+
+    /**
+     * The same, for an album's song searching on its own (P6): a file whose length slskd gives and that
+     * is not within {@link #lengthTolerance} of the album track's is dropped before anything else is
+     * judged, whatever its name says. "Live at Town Hall/03 - Mr. Jones.flac" is graded the requested
+     * version (the name carries no "live"), and only its 379 s against the album's 270 s gives it away.
+     * A file with no length (3.5% of them) is no evidence either way and stays.
+     *
+     * @param albumTrackSeconds the album row's length; null for a song or playlist track, which keeps
+     *                          any length
+     */
+    public Mono<List<Pick>> selectBestFiles(SearchState state, String query, String wording,
+                                            Integer albumTrackSeconds) {
         return Mono.fromCallable(() -> {
             // Null rather than empty when the caller handed us a search fetched without
             // includeResponses. Degrade to "no candidates" instead of an NPE, so the failure reads as
@@ -68,10 +85,22 @@ public class SlskdSearchResultProcessor {
                     state.getResponses() == null ? List.of() : state.getResponses();
             List<Pick> candidates = responses.stream()
                     .flatMap(item -> item.getFiles().stream()
-                            .filter(this::isFlacAndHighBitrate)
+                            .filter(this::isLosslessOrHighBitRate)
                             .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename(), wording))))
                     .filter(pick -> pick.grade() != TrackMatchingService.Match.NONE)
                     .toList();
+            if (albumTrackSeconds != null) {
+                List<Pick> sameLength = candidates.stream()
+                        .filter(pick -> pick.file().getLength()
+                                .map(seconds -> Math.abs(seconds - albumTrackSeconds) <= lengthTolerance(albumTrackSeconds))
+                                .orElse(true))
+                        .toList();
+                if (sameLength.size() < candidates.size()) {
+                    log.info("query='{}': {} file(s) dropped for not lasting the album track's {} s", query,
+                            candidates.size() - sameLength.size(), albumTrackSeconds);
+                }
+                candidates = sameLength;
+            }
             long unverified = candidates.stream().filter(pick -> pick.grade() == TrackMatchingService.Match.UNVERIFIED).count();
             if (unverified < candidates.size()) {
                 candidates = candidates.stream().filter(pick -> pick.grade() != TrackMatchingService.Match.UNVERIFIED).toList();
@@ -146,14 +175,42 @@ public class SlskdSearchResultProcessor {
         return spread;
     }
 
+    /**
+     * How far a file's length may be from the YouTube track's and still be the same recording:
+     * max(10 s, 3%). Per track, 90% of the album folders measured 04-10-2026 were within 1-12 s of the
+     * usual length; a live take or another edit is usually further off. Also the whole-album picker's rule.
+     */
+    public static int lengthTolerance(int expectedSeconds) {
+        return Math.max(10, (int) Math.round(expectedSeconds * 0.03));
+    }
+
     /** No slot for us now and a long line ahead of us: the profile of a sharer that never serves. */
-    private boolean isOverloaded(SearchResponseItem sharer) {
-        return !Boolean.TRUE.equals(sharer.getHasFreeUploadsSlot())
+    public boolean isOverloaded(SearchResponseItem sharer) {
+        return !Boolean.TRUE.equals(sharer.getHasFreeUploadSlot())
                 && sharer.getQueueLength() > maxSharerQueue;
     }
 
-    private boolean isFlacAndHighBitrate(SearchFile file) {
-        return (file.getBitRate().isPresent() && file.getBitRate().get() >= minBitRate) || file.getExtension().equals("flac");
+    private static final Set<String> LOSSLESS = Set.of("flac", "wav", "aif", "aiff", "ape", "wv");
+
+    /**
+     * Lossless files always pass; slskd reports no bit rate for them (13,845 of 14,188 FLAC files on
+     * 04-10-2026), so the bit-rate rule is for lossy files only. The whole-album picker applies the same rule.
+     */
+    public boolean isLosslessOrHighBitRate(SearchFile file) {
+        return LOSSLESS.contains(format(file)) || file.getBitRate().filter(bitRate -> bitRate >= minBitRate).isPresent();
+    }
+
+    /**
+     * The format, lower-cased, from the file name's suffix. Not slskd's {@code extension} field: it is
+     * blank on most files (8,972 of 14,188 FLAC files on 04-10-2026) and sometimes wrong (218 FLAC files
+     * claimed "mp3"). Falls back to that field only for a name with no suffix.
+     */
+    private static String format(SearchFile file) {
+        String name = file.getFilename() == null ? "" : file.getFilename();
+        String leaf = name.substring(Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/')) + 1);
+        int dot = leaf.lastIndexOf('.');
+        String format = dot >= 0 ? leaf.substring(dot + 1) : file.getExtension();
+        return format == null ? "" : format.toLowerCase(Locale.ROOT);
     }
 
 }

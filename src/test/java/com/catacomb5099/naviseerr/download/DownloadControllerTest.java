@@ -53,7 +53,7 @@ class DownloadControllerTest {
     private static DownloadSongView song() {
         return new DownloadSongView(UUID.randomUUID(), "vid-1", 1, "song", List.of("artist"),
                 List.of("UC-artist"), "https://img/1.jpg", 200, DownloadStage.DOWNLOADING, new BigDecimal("43.00"), null,
-                NOW, NOW, null, 3, 0, 0, "alice", "music/alice/song.flac", null);
+                NOW, NOW, null, 3, 0, 0, "alice", "music/alice/song.flac", null, null);
     }
 
     // ---- cancel ----------------------------------------------------------------------------------

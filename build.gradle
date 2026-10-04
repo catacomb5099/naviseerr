@@ -34,6 +34,9 @@ dependencies {
 	// stays entirely on r2dbc-postgresql.
 	runtimeOnly 'org.postgresql:postgresql'
 	implementation 'me.xdrop:fuzzywuzzy:1.4.0'
+	// Reads and writes song tags (MP3, FLAC, M4A, OGG, WAV, AIFF, WMA; not Opus, APE or WavPack).
+	// LGPL. The only maintained Java tagger on Maven Central; 3.0.1 is its latest release.
+	implementation 'net.jthink:jaudiotagger:3.0.1'
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'

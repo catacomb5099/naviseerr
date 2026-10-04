@@ -34,8 +34,11 @@ logging:
   level:
     # DEBUG here surfaces the per-pass slskd call log ("slskd calls this pass: GET /searches=...,
     # GET /transfers/downloads=..."), which is the direct measure of the slskd request rate — count
-    # those lines over a minute rather than inferring it from the intervals below.
+    # those lines over a minute rather than inferring it from the intervals below. The all-in-one
+    # compose.yaml turns this down to INFO (LOG_LEVEL in .env).
     com.catacomb5099.naviseerr.download: DEBUG
+    # The tag library (SongTagger) logs routine steps at SEVERE, dozens of lines per file.
+    org.jaudiotagger: OFF
 
 # Dormant since 10-08-2026: search runs through yt-music-service below and nothing calls Last.fm.
 # LastFMService is still a @Service with an @Value on the key, so it is read at startup even though it
@@ -103,7 +106,8 @@ download-task:
   # while our search-budget-ms clock (which starts at submission) ran out. Measured 27-09-2026: 26 of
   # 50 searches were "timed out" by us and then completed fine in slskd a few minutes later. Matching
   # slskd's own slot count (2, hard-coded in slskd 0.24+) means our budget only ever covers a search's
-  # real runtime. Counts SEARCH_POLL rows; gates only SEARCH_INIT (starting a search), never polling.
+  # real runtime. Counts SEARCH_POLL rows, songs' and album searches' alike; gates only starting a
+  # search, never polling. Album searches are given the free slots first.
   max-concurrent-searches: 2
   # Searches finish in seconds; transfers run for minutes to hours. Polling both at one cadence
   # is waste, so they get separate intervals.
@@ -148,6 +152,13 @@ download-task:
   # (58 transfers stuck at 0%; 23 songs each lost ten minutes on one of them before succeeding
   # elsewhere), while a sharer that was merely busy is worth asking again the next day.
   stalling-sharer-cooldown-ms: 21600000
+  # How many of our transfers one sharer may hold at once. A song whose sharer is at the cap waits for
+  # one of them to finish (same sharer, no call to slskd) instead of joining that sharer's queue. With
+  # 2, a sharer holds one file it is sending us and one waiting its turn; a file waiting in the queue
+  # of a sharer that is sending us another is neither stalling nor timed out (its clock restarts at
+  # every poll while that lasts). So an album from one sharer arrives one song after another instead
+  # of every song past the tenth minute being given up on. A very large value switches the cap off.
+  max-transfers-per-sharer: 2
   # A sharer that advertises no free upload slot AND more than this many files already queued is
   # ranked behind every other candidate, even those whose file length differs from the majority.
   # High on purpose: "busy" alone should not lose a sharer its place, only "will not reach us within
