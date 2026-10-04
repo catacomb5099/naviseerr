@@ -6,7 +6,8 @@ WORKDIR /src
 # Optional extra root CAs (certs/*.pem, gitignored) for a TLS-intercepting proxy, imported into this
 # stage's JDK so the Gradle wrapper and Maven Central downloads verify. keytool keeps only the first
 # certificate of a file, hence the split. No .pem files = nothing imported. Build stage only: the
-# running app makes no HTTPS calls.
+# running app's one HTTPS call of its own is album covers (SongTagger); behind such a proxy they fail
+# and songs are filed without one.
 COPY certs/ /tmp/certs/
 RUN set -e; cd /tmp/certs; \
     for pem in *.pem; do \

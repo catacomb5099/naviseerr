@@ -200,7 +200,7 @@ class DownloadTaskRunnerTest {
 
     private static LibraryOrganiser.Job job(UUID taskId) {
         return new LibraryOrganiser.Job(taskId, DownloadType.SONG, "music\\a\\c.flac", T0.minusSeconds(5),
-                "c", List.of("A"), null, List.of(), null, List.of());
+                "c", List.of("A"), null, List.of(), null, List.of(), null);
     }
 
     @Test

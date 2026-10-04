@@ -107,13 +107,42 @@ name again; the lookup then only feeds the tags.
 
 ### Tags (P1, P2, P10: B2)
 
-Under a trusted album (and always for an album download) ALBUM, ALBUM ARTIST, the release date in every
-field the format has, TRACK, TRACK TOTAL and DISC 1/1 are written from YouTube Music, and the tags that
-split an album in Navidrome and Jellyfin are cleared (MusicBrainz release-level ids, compilation
-flags, album version, original date, stale Vorbis YEAR/TOTALTRACKS/TOTALDISCS, label and catalogue
-number). Everything else, and every album tag without a trusted album, is fill-only: kept when the
-file has it, filled when it is empty. Opus, APE and WavPack files are filed untagged; a tagging failure
-never stops a file being filed.
+`SongTagger` (jaudiotagger 3.0.1, LGPL: the only maintained Java tagger on Maven Central) writes the
+tags into the file still in slskd's downloads folder, just before the organiser moves it: the file is
+complete and outside the library there, so no scanner reads it mid-write, and its real extension picks
+the format (the tag library reads by extension; a FLAC named `.mp3` fails cleanly and is left alone).
+
+- **Under a trusted album (P1)**, and always for an album download: ALBUM, ALBUM ARTIST, the year in
+  every field Navidrome reads as the release date (MP3 TDRL, which needs ID3v2.4, so MP3 tags are
+  converted to it; Vorbis RELEASEDATE; M4A ©day), TRACK, TRACK TOTAL, DISC 1/1 and the album's cover are
+  written over the file's. Removed: MusicBrainz release-level ids (Navidrome takes that id alone as the
+  album; Jellyfin a majority vote of them), compilation flags, album version and disc subtitle, original
+  date, sort and plural album-artist forms, label, catalogue number, barcode, and the free-form
+  leftovers other taggers write (ffmpeg's TXXX:compilation, a Vorbis YEAR beside DATE, TOTALTRACKS).
+  Album artist and release date are removed when YouTube has none, so every song of the album agrees;
+  track numbers are only set when known. Several artists are written "A / B", which Navidrome splits.
+- **Everything else is fill-only (P2):** title (the album or playlist row's own title, else the song's)
+  and artist are written only when the file has none; genre, lyrics, composer, ReplayGain and
+  track-level MusicBrainz ids are never touched. Without a trusted album no album tag is touched.
+- **Cover:** YouTube Music album art only (`lh3`/`yt3.googleusercontent.com`, asked for at
+  `=w1200-h1200-l90-rj`: 1200 px JPEG, about 450 KB), never an `i.ytimg.com` video frame. It replaces
+  the file's picture under P1 and fills a file with none otherwise (the song's own picture then). Fetched
+  once per album and kept in memory (the last 16 albums); a failed fetch files the song without one. No
+  `cover.jpg` is written (Navidrome would prefer it to every file's own picture).
+- **Never blocks filing (P10):** Opus, APE and WavPack (no writer in the library), broken and
+  mislabelled files are logged and filed exactly as they came. Tagging twice gives the same file, so a
+  move retried next pass is harmless.
+- One file at a time process-wide: the library's options are one global and its M4A writer keeps state
+  between calls. It logs routine steps at SEVERE; `logging.level.org.jaudiotagger: OFF`.
+
+Checked in a real Navidrome scan (04-10-2026): an MP3, a FLAC and an M4A tagged as three other editions
+("(Remastered)" 2014 with a MusicBrainz id, "[Deluxe]" with RELEASEDATE 2014-05-19, a 2004 compilation)
+in three folders became one "Definitely Maybe" album, 3 songs, 1994, not a compilation, each with the
+cover; the untouched copies showed as two albums under the wrong names.
+
+*Flip:* P1 to fill-only too: in `SongTagger.plan`, `fill` the album fields instead of `set`/`setOrDelete`
+and skip `SPLITS_AN_ALBUM` (Navidrome then keeps splitting mixed sources). No tagging at all: return
+early in `SongTagger.tag`. A smaller cover: `SongTagger.COVER_SIZE` `=w544-h544-l90-rj` (167 KB).
 
 ### Already owned (P7: B3)
 
@@ -130,7 +159,12 @@ trusted song whose album and track number are already filed points at the existi
   (From "8 Mile" Soundtrack)", a different title by the rule above.
 - Until B3, a song requested again after its album was downloaded whole lands in that album's folder
   as a second copy, so Jellyfin shows it twice in the album (before, a one-song album of its own).
-- Navidrome groups by tags, not folders: until B2 writes them it shows the same albums as before.
+- Navidrome groups by tags, not folders: from B2 the songs of one trusted album agree on every field
+  its album key reads, so they show as one album there too. Files filed before B2 keep their tags (P8:
+  no backfill).
+- A file tagged in place in slskd's folder can be left damaged if the process dies mid-write (M4A and
+  FLAC are rewritten in place); the song is then filed with a broken file. Not seen; the write takes
+  milliseconds.
 - An older naviseerr on the same database files songs and playlist tracks at once, by their own name.
 - A week-old "nothing trusted" answer counts as an answer for filing; a song re-requested after a week
   whose lookup has not re-run by the time it finishes is filed by its own name (`ponytail:` in

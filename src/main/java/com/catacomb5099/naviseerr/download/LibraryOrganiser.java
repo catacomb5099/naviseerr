@@ -42,6 +42,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *                     root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;, like that album's tracks
  * </pre>
  *
+ * <p>Just before the move, {@link SongTagger} writes YouTube Music's details into the file's tags.
+ *
  * <p>Pure path logic (locating, sanitising, choosing a target) is in static methods so it can be
  * tested without a filesystem; the two entry points {@link #file} and {@link #deletePartials} do the
  * blocking I/O on {@code boundedElastic}. Nothing here ever fails a download: a filing problem is
@@ -74,12 +76,13 @@ public class LibraryOrganiser {
     /**
      * One finished song to file, joined with the names its folders are built from. {@code albumTitle}
      * and {@code albumArtists} are the trusted YouTube Music album of a song or playlist track; null and
-     * empty when it has none, and always for an album download's track.
+     * empty when it has none, and always for an album download's track. {@code tags} is what the file's
+     * tags are written from; null writes none.
      */
     public record Job(UUID taskId, DownloadType type, String slskdFilename, Instant finishedAt,
                       String songTitle, List<String> songArtists,
                       String collectionTitle, List<String> collectionArtists,
-                      String albumTitle, List<String> albumArtists) {}
+                      String albumTitle, List<String> albumArtists, SongTagger.Tags tags) {}
 
     /** One finished download whose songs are all filed, ready for its playlist file. */
     public record Collection(UUID downloadId, DownloadType type, String title) {}
@@ -91,14 +94,17 @@ public class LibraryOrganiser {
     private final Path incompleteDir;
     private final Path root;
     private final Duration loopInterval;
+    private final SongTagger tagger;
     private final boolean enabled;
 
     public LibraryOrganiser(
             @Value("${library.slskd-downloads-dir:}") String downloadsDir,
             @Value("${library.slskd-incomplete-dir:}") String incompleteDir,
             @Value("${library.root:}") String root,
-            @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval) {
+            @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
+            SongTagger tagger) {
         this.loopInterval = loopInterval;
+        this.tagger = tagger;
         if (downloadsDir.isBlank() || root.isBlank()) {
             this.downloadsDir = null;
             this.incompleteDir = null;
@@ -141,14 +147,17 @@ public class LibraryOrganiser {
     }
 
     /**
-     * Moves one song's file into the library.
+     * Tags one song's file and moves it into the library. The album cover is fetched first (once per
+     * album, see {@link SongTagger#cover}); a song without one is filed all the same.
      *
      * @return the file's new absolute path, or empty when the file is not in the downloads folder
      *         (slskd may still be moving it out of incomplete; the row is left for the next pass)
      */
     public Mono<Path> file(Job job, Instant now) {
-        return Mono.fromCallable(() -> fileBlocking(job, now))
-                .subscribeOn(Schedulers.boundedElastic());
+        return tagger.cover(job.tags())
+                .defaultIfEmpty(SongTagger.NO_COVER)
+                .flatMap(cover -> Mono.fromCallable(() -> fileBlocking(job, cover, now))
+                        .subscribeOn(Schedulers.boundedElastic()));
     }
 
     /**
@@ -201,7 +210,7 @@ public class LibraryOrganiser {
         return target;
     }
 
-    Path fileBlocking(Job job, Instant now) throws IOException {
+    Path fileBlocking(Job job, byte[] cover, Instant now) throws IOException {
         Path source = locate(job.slskdFilename());
         if (source == null) {
             // ponytail: "one WARN" assumes a regular loop cadence; a pass slower than the interval
@@ -217,6 +226,10 @@ public class LibraryOrganiser {
             }
             return null;
         }
+        // Tagged where it lies, complete and outside the library, so a scanner never reads it mid-write
+        // and the real extension picks the format. A move that fails after this tags it again next
+        // pass, which changes nothing the second time.
+        tagger.tag(source, job.tags(), cover);
         Path folder = targetFolder(job);
         Files.createDirectories(folder);
         String name = sanitiseFileName(baseName(job.slskdFilename()));

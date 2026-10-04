@@ -1,6 +1,8 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.support.DownloadTaskFixtures;
+import org.jaudiotagger.audio.AudioFileIO;
+import org.jaudiotagger.tag.FieldKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -19,6 +21,7 @@ class LibraryOrganiserTest {
 
     private static final Instant NOW = Instant.parse("2026-09-27T12:00:00Z");
     private static final Duration LOOP = Duration.ofSeconds(2);
+    private static final SongTagger TAGGER = new SongTagger();
 
     @TempDir Path tmp;
     private Path downloads;
@@ -34,12 +37,12 @@ class LibraryOrganiserTest {
         downloads = Files.createDirectories(tmp.resolve("downloads"));
         incomplete = Files.createDirectories(tmp.resolve("incomplete"));
         root = tmp.resolve("music");
-        organiser = new LibraryOrganiser(downloads.toString(), incomplete.toString(), root.toString(), LOOP);
+        organiser = new LibraryOrganiser(downloads.toString(), incomplete.toString(), root.toString(), LOOP, TAGGER);
     }
 
     private static LibraryOrganiser.Job song(String remote, String title, String... artists) {
         return new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG, remote, NOW.minusSeconds(5),
-                title, List.of(artists), null, List.of(), null, List.of());
+                title, List.of(artists), null, List.of(), null, List.of(), null);
     }
 
     private Path put(Path dir, String name) throws IOException {
@@ -51,18 +54,18 @@ class LibraryOrganiserTest {
 
     @Test
     void offWhenEitherFolderIsUnset() {
-        assertFalse(new LibraryOrganiser("", "", root.toString(), LOOP).isEnabled());
-        assertFalse(new LibraryOrganiser(downloads.toString(), "", "", LOOP).isEnabled());
+        assertFalse(new LibraryOrganiser("", "", root.toString(), LOOP, TAGGER).isEnabled());
+        assertFalse(new LibraryOrganiser(downloads.toString(), "", "", LOOP, TAGGER).isEnabled());
         assertTrue(organiser.isEnabled());
     }
 
     @Test
     void refusesToRunWhenTheLibraryIsInsideSlskdsFolders_orTheOtherWayRound() {
-        assertFalse(new LibraryOrganiser(downloads.toString(), "", downloads.resolve("music").toString(), LOOP)
+        assertFalse(new LibraryOrganiser(downloads.toString(), "", downloads.resolve("music").toString(), LOOP, TAGGER)
                 .isEnabled(), "library inside downloads");
-        assertFalse(new LibraryOrganiser(tmp.resolve("downloads").toString(), "", tmp.toString(), LOOP)
+        assertFalse(new LibraryOrganiser(tmp.resolve("downloads").toString(), "", tmp.toString(), LOOP, TAGGER)
                 .isEnabled(), "downloads inside library");
-        assertFalse(new LibraryOrganiser(downloads.toString(), tmp.toString(), root.toString(), LOOP)
+        assertFalse(new LibraryOrganiser(downloads.toString(), tmp.toString(), root.toString(), LOOP, TAGGER)
                 .isEnabled(), "library inside incomplete");
     }
 
@@ -164,7 +167,7 @@ class LibraryOrganiserTest {
         put(downloads.resolve("Doolittle"), "01 - Debaser.flac");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
                 "Pixies\\Doolittle\\01 - Debaser.flac", NOW.minusSeconds(5),
-                "Debaser", List.of("Pixies"), "Doolittle", List.of("Pixies"), null, List.of());
+                "Debaser", List.of("Pixies"), "Doolittle", List.of("Pixies"), null, List.of(), null);
 
         Path filed = organiser.file(job, NOW).block();
 
@@ -180,10 +183,10 @@ class LibraryOrganiserTest {
         put(downloads.resolve("b"), "Live Forever.mp3");
         LibraryOrganiser.Job single = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG,
                 "x\\a\\06 Supersonic.flac", NOW.minusSeconds(5), "Supersonic", List.of("Oasis"),
-                "Supersonic", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"));
+                "Supersonic", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"), null);
         LibraryOrganiser.Job inPlaylist = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.PLAYLIST,
                 "x\\b\\Live Forever.mp3", NOW.minusSeconds(5), "Live Forever", List.of("Oasis"),
-                "Britpop", List.of(), "Definitely Maybe", List.of("Oasis"));
+                "Britpop", List.of(), "Definitely Maybe", List.of("Oasis"), null);
 
         assertEquals(root.resolve("Oasis/Definitely Maybe/06 Supersonic.flac"), organiser.file(single, NOW).block());
         assertEquals(root.resolve("Oasis/Definitely Maybe/Live Forever.mp3"), organiser.file(inPlaylist, NOW).block());
@@ -194,10 +197,60 @@ class LibraryOrganiserTest {
         put(downloads.resolve("c"), "01 - Rock n Roll Star.flac");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
                 "x\\c\\01 - Rock n Roll Star.flac", NOW.minusSeconds(5), "Rock 'n' Roll Star", List.of("Oasis"),
-                "Definitely Maybe (Deluxe Edition Remastered)", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"));
+                "Definitely Maybe (Deluxe Edition Remastered)", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"), null);
 
         assertEquals(root.resolve("Oasis/Definitely Maybe (Deluxe Edition Remastered)/01 - Rock n Roll Star.flac"),
                 organiser.file(job, NOW).block());
+    }
+
+    // ---- tags ------------------------------------------------------------------------------------
+
+    private Path putFixture(Path dir, String fixture, String name) throws IOException {
+        Files.createDirectories(dir);
+        try (var in = getClass().getResourceAsStream("/tagging/" + fixture)) {
+            Files.copy(in, dir.resolve(name));
+        }
+        return dir.resolve(name);
+    }
+
+    private static SongTagger.Tags definitelyMaybe(String title, int track) {
+        return new SongTagger.Tags(title, List.of("Oasis"), "Definitely Maybe", List.of("Oasis"), 1994, track, 11, null);
+    }
+
+    @Test
+    void aSongIsTaggedFromYouTubeMusic_beforeItIsMovedIntoTheLibrary() throws Exception {
+        putFixture(downloads.resolve("Definitely Maybe (Remastered)"), "seeded.mp3", "03 - Live Forever.mp3");
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
+                "x\\Definitely Maybe (Remastered)\\03 - Live Forever.mp3", NOW.minusSeconds(5), "Live Forever",
+                List.of("Oasis"), "Definitely Maybe", List.of("Oasis"), null, List.of(), definitelyMaybe("Live Forever", 3));
+
+        Path filed = organiser.file(job, NOW).block();
+
+        assertEquals(root.resolve("Oasis/Definitely Maybe/03 - Live Forever.mp3"), filed);
+        var tag = AudioFileIO.read(filed.toFile()).getTag();
+        assertEquals("Definitely Maybe", tag.getFirst(FieldKey.ALBUM), "was '... (Remastered)'");
+        assertEquals("3", tag.getFirst(FieldKey.TRACK));
+    }
+
+    @Test
+    void aFileThatCannotBeTagged_isFiledExactlyAsItCame() throws IOException {
+        Path opus = putFixture(downloads.resolve("e"), "song.opus", "Slide Away.opus");
+        byte[] opusBytes = Files.readAllBytes(opus);
+        put(downloads.resolve("f"), "Supersonic.flac"); // "audio": not a FLAC at all
+        LibraryOrganiser.Job opusJob = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
+                "x\\e\\Slide Away.opus", NOW.minusSeconds(5), "Slide Away", List.of("Oasis"),
+                "Definitely Maybe", List.of("Oasis"), null, List.of(), definitelyMaybe("Slide Away", 10));
+        LibraryOrganiser.Job brokenJob = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
+                "x\\f\\Supersonic.flac", NOW.minusSeconds(5), "Supersonic", List.of("Oasis"),
+                "Definitely Maybe", List.of("Oasis"), null, List.of(), definitelyMaybe("Supersonic", 6));
+
+        Path filedOpus = organiser.file(opusJob, NOW).block();
+        Path filedBroken = organiser.file(brokenJob, NOW).block();
+
+        assertEquals(root.resolve("Oasis/Definitely Maybe/Slide Away.opus"), filedOpus);
+        assertArrayEquals(opusBytes, Files.readAllBytes(filedOpus));
+        assertEquals(root.resolve("Oasis/Definitely Maybe/Supersonic.flac"), filedBroken);
+        assertEquals("audio", Files.readString(filedBroken));
     }
 
     @Test
@@ -206,7 +259,7 @@ class LibraryOrganiserTest {
         put(downloads.resolve("Freedom of Choice"), "02-devo-whip_it.mp3");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.PLAYLIST,
                 "x\\Freedom of Choice\\02-devo-whip_it.mp3", NOW.minusSeconds(5),
-                "Whip It", List.of("Devo"), "Alt Nation 1989", List.of(), null, List.of());
+                "Whip It", List.of("Devo"), "Alt Nation 1989", List.of(), null, List.of(), null);
 
         Path filed = organiser.file(job, NOW).block();
 
@@ -264,7 +317,7 @@ class LibraryOrganiserTest {
     void givesUpQuietly_afterTheGraceWindow_stillWithoutCreatingAnything() {
         LibraryOrganiser.Job old = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG,
                 "Doolittle\\01 - Debaser.flac", NOW.minus(LibraryOrganiser.GIVE_UP_AFTER).minusSeconds(1),
-                "Debaser", List.of("Pixies"), null, List.of(), null, List.of());
+                "Debaser", List.of("Pixies"), null, List.of(), null, List.of(), null);
 
         // Same observable outcome as "not yet": no path, no folders. The difference is one WARN line.
         assertNull(organiser.file(old, NOW).block());
@@ -374,7 +427,7 @@ class LibraryOrganiserTest {
 
     @Test
     void deletePartials_isANoOpWithoutAnIncompleteFolder_orWithNothingThere() throws IOException {
-        LibraryOrganiser noIncomplete = new LibraryOrganiser(downloads.toString(), "", root.toString(), LOOP);
+        LibraryOrganiser noIncomplete = new LibraryOrganiser(downloads.toString(), "", root.toString(), LOOP, TAGGER);
         Path alice = put(incomplete.resolve("alice/music/alice"), "song.flac");
         DownloadTask task = DownloadTaskFixtures.downloadPolling(DownloadTaskFixtures.candidates("alice"), 0, 0, "t1");
 
