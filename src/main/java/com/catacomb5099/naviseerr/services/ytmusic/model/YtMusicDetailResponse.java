@@ -101,6 +101,8 @@ public final class YtMusicDetailResponse {
     public static class Collection {
         /** Albums. */
         private String browseId;
+        /** Albums: the album as a playlist ({@code OLAK5uy_...}), what YouTube Music plays it as. */
+        private String audioPlaylistId;
         /** Playlists. */
         private String id;
         private String title;
