@@ -116,7 +116,7 @@ class DownloadRecoveryIT {
         insert("SUCCEEDED");
 
         assertTrue(repository.admitDownloads(10).collectList().block().isEmpty());
-        assertEquals(0L, repository.countActiveTransfers().block());
+        assertEquals(0L, repository.transfersInFlight().count().block());
     }
 
     @Test

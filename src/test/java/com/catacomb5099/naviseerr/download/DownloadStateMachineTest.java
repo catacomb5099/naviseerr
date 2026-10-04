@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -20,11 +21,12 @@ class DownloadStateMachineTest {
     private static final Duration QUEUED_BUDGET = Duration.ofMinutes(10);
     private static final int RETRY_LIMIT = 2;
     private static final int FIRST_WORDING_MIN_CANDIDATES = 3;
+    private static final int MAX_TRANSFERS_PER_SHARER = 2;
 
     private final StallingSharers stallingSharers = new StallingSharers(Duration.ofHours(6));
     private final DownloadStateMachine machine = new DownloadStateMachine(
             SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, QUEUED_BUDGET, MISSING_GRACE,
-            RETRY_LIMIT, FIRST_WORDING_MIN_CANDIDATES, stallingSharers);
+            RETRY_LIMIT, FIRST_WORDING_MIN_CANDIDATES, MAX_TRANSFERS_PER_SHARER, stallingSharers);
 
     @Test
     void searchInit_recordsSearchId_andAdvancesToSearchPoll() {
@@ -388,7 +390,7 @@ class DownloadStateMachineTest {
     void downloadPoll_succeeded_isTerminalSuccess() {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Completed, Succeeded"), T0);
+                SlskdFixtures.transfer("abc", "alice", "Completed, Succeeded"), Set.of(), T0);
 
         assertEquals(DownloadStatus.SUCCEEDED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).status());
@@ -398,7 +400,7 @@ class DownloadStateMachineTest {
     void downloadPoll_inProgress_continuesAtDownloadPollInterval() {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "InProgress"), T0.plusSeconds(10));
+                SlskdFixtures.transfer("abc", "alice", "InProgress"), Set.of(), T0.plusSeconds(10));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(T0.plusSeconds(15), next.nextAttemptAt());
@@ -409,7 +411,7 @@ class DownloadStateMachineTest {
         // A transfer absent from GET /transfers/downloads is tolerated briefly, to cover the gap
         // between enqueueing it and it showing up in the list.
         DownloadDecision d = machine.afterDownloadPoll(
-                downloadPolling(candidates("alice"), 0, 0, "abc"), null, T0.plusSeconds(10));
+                downloadPolling(candidates("alice"), 0, 0, "abc"), null, Set.of(), T0.plusSeconds(10));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(T0.plusSeconds(15), next.nextAttemptAt());
@@ -424,7 +426,7 @@ class DownloadStateMachineTest {
         // Note the deliberate choice of FAILED over SUCCEEDED: not being able to see a transfer is
         // not evidence that it finished.
         DownloadDecision d = machine.afterDownloadPoll(
-                downloadPolling(candidates("alice"), 0, 0, "abc"), null, T0.plusSeconds(61));
+                downloadPolling(candidates("alice"), 0, 0, "abc"), null, Set.of(), T0.plusSeconds(61));
 
         DownloadDecision.Terminal terminal = assertInstanceOf(DownloadDecision.Terminal.class, d);
         assertEquals(DownloadStatus.FAILED, terminal.status());
@@ -440,7 +442,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "SomethingSlskdInventedLater"),
-                T0.plusSeconds(61));
+                Set.of(), T0.plusSeconds(61));
 
         assertEquals(DownloadFailureCode.TRANSFER_NOT_FOUND,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
@@ -450,7 +452,7 @@ class DownloadStateMachineTest {
     void downloadPoll_failureUnderRetryLimit_retriesSameCandidate() {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Completed, TimedOut"), T0);
+                SlskdFixtures.transfer("abc", "alice", "Completed, TimedOut"), Set.of(), T0);
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
@@ -462,7 +464,7 @@ class DownloadStateMachineTest {
     void downloadPoll_retriesExhausted_movesToNextCandidateAndResetsRetryIndex() {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, RETRY_LIMIT, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Errored"), T0);
+                SlskdFixtures.transfer("abc", "alice", "Errored"), Set.of(), T0);
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(1, next.candidateIndex());
@@ -473,7 +475,7 @@ class DownloadStateMachineTest {
     void downloadPoll_allCandidatesExhausted_fails() {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, RETRY_LIMIT, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Errored"), T0);
+                SlskdFixtures.transfer("abc", "alice", "Errored"), Set.of(), T0);
 
         assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
@@ -489,7 +491,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
-                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+                Set.of(), T0.plus(QUEUED_BUDGET).plusSeconds(1));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
@@ -503,7 +505,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
-                T0.plus(QUEUED_BUDGET).minusSeconds(1));
+                Set.of(), T0.plus(QUEUED_BUDGET).minusSeconds(1));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_POLL, next.phase());
@@ -518,7 +520,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Queued, Locally"),
-                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+                Set.of(), T0.plus(QUEUED_BUDGET).plusSeconds(1));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_POLL, next.phase());
@@ -531,7 +533,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "InProgress", 40f, 40L),
-                T0.plus(QUEUED_BUDGET).plusSeconds(300));
+                Set.of(), T0.plus(QUEUED_BUDGET).plusSeconds(300));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_POLL, next.phase());
@@ -543,7 +545,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "InProgress", 0f, 0L),
-                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+                Set.of(), T0.plus(QUEUED_BUDGET).plusSeconds(1));
 
         assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
     }
@@ -553,7 +555,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
-                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+                Set.of(), T0.plus(QUEUED_BUDGET).plusSeconds(1));
 
         assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
@@ -567,7 +569,7 @@ class DownloadStateMachineTest {
         machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
-                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+                Set.of(), T0.plus(QUEUED_BUDGET).plusSeconds(1));
 
         // Song 2's search finishes with alice ranked first: it must start on carol instead.
         DownloadDecision d = machine.afterSearchPoll(searchPolling("s2"),
@@ -585,7 +587,7 @@ class DownloadStateMachineTest {
 
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob", "carol"), 0, 2, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Completed, Errored"), T0.plusSeconds(30));
+                SlskdFixtures.transfer("abc", "alice", "Completed, Errored"), Set.of(), T0.plusSeconds(30));
 
         assertEquals(2, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
     }
@@ -597,7 +599,7 @@ class DownloadStateMachineTest {
 
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob", "carol"), 0, 2, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Completed, Errored"), T0.plusSeconds(30));
+                SlskdFixtures.transfer("abc", "alice", "Completed, Errored"), Set.of(), T0.plusSeconds(30));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
@@ -615,6 +617,93 @@ class DownloadStateMachineTest {
         assertEquals(0, assertInstanceOf(DownloadDecision.Advance.class, d).next().candidateIndex());
     }
 
+    // ---- one sharer, many songs: waiting our turn is not stalling (P9) -------------------------
+
+    @Test
+    void downloadPoll_queuedSeventyMinutesBehindADeliveringSibling_thenInProgress_isNotTimedOut() {
+        // An album from one sharer: track 12 sits in alice's queue while she sends us tracks 1-11.
+        // Seventy minutes is past both the queued budget and the hour, yet she is busy with us.
+        Instant queuedFor70 = T0.plus(Duration.ofMinutes(70));
+        DownloadDecision waiting = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"), Set.of("alice"), queuedFor70);
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, waiting).next();
+        assertEquals(DownloadPhase.DOWNLOAD_POLL, next.phase());
+        assertEquals(0, next.candidateIndex(), "still alice's file, no failover");
+        assertEquals(queuedFor70, next.phaseEnteredAt(), "the clock slides while she is sending us another");
+        assertEquals(queuedFor70.plus(DOWNLOAD_POLL), next.nextAttemptAt());
+        assertFalse(stallingSharers.isStalling("alice", queuedFor70), "busy with us is not stalling");
+
+        // Its own turn comes: bytes start moving. It must get its hour, not be TIMED_OUT on the spot.
+        DownloadDecision started = machine.afterDownloadPoll(next,
+                SlskdFixtures.transfer("abc", "alice", "InProgress", 5f, 5L), Set.of("alice"),
+                queuedFor70.plus(DOWNLOAD_POLL));
+
+        assertEquals(DownloadPhase.DOWNLOAD_POLL,
+                assertInstanceOf(DownloadDecision.Continue.class, started).next().phase());
+    }
+
+    @Test
+    void downloadPoll_betweenTwoFilesFromTheSameSharer_theWaitingOneKeepsItsFreshQueuedBudget() {
+        // Track N finished, track N+1 has not started: for a moment nothing from alice is in
+        // progress. The waiting row's clock slid until the last poll alice was sending, so this gap
+        // is not ten minutes of stalling.
+        Instant lastSeenSending = T0.plus(Duration.ofMinutes(30));
+        DownloadTask slid = assertInstanceOf(DownloadDecision.Continue.class, machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"), Set.of("alice"),
+                lastSeenSending)).next();
+
+        DownloadDecision d = machine.afterDownloadPoll(slid,
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"), Set.of(),
+                lastSeenSending.plusSeconds(20));
+
+        assertEquals(0, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
+        assertFalse(stallingSharers.isStalling("alice", lastSeenSending.plusSeconds(20)));
+    }
+
+    @Test
+    void downloadPoll_queuedPastTheBudget_whileADifferentSharerIsDelivering_stillMovesOn() {
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"), Set.of("carol"),
+                T0.plus(QUEUED_BUDGET).plusSeconds(1));
+
+        assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
+        assertTrue(stallingSharers.isStalling("alice", T0.plus(QUEUED_BUDGET).plusSeconds(1)));
+    }
+
+    @Test
+    void downloadPoll_theDeliveringTransferItself_keepsItsOwnHour() {
+        // The sliding clock is for the file waiting its turn, never for the one being sent.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "InProgress", 40f, 40L), Set.of("alice"),
+                T0.plus(DOWNLOAD_BUDGET).plusSeconds(1));
+
+        assertEquals(DownloadFailureCode.TIMED_OUT,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    @Test
+    void downloadInit_whenTheSharerAlreadyHoldsTwoOfOurs_waitsForOneToFinish() {
+        DownloadTask task = downloadInit(candidates("alice", "bob"), 0, 0);
+
+        DownloadDecision d = machine.beforeDownloadInit(task, MAX_TRANSFERS_PER_SHARER, T0).orElseThrow();
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(0, next.candidateIndex(), "waits for alice rather than moving to bob");
+        assertEquals(T0.plus(DOWNLOAD_POLL), next.nextAttemptAt());
+    }
+
+    @Test
+    void downloadInit_whenTheSharerHoldsFewerThanTheCap_starts() {
+        assertTrue(machine.beforeDownloadInit(downloadInit(candidates("alice"), 0, 0),
+                MAX_TRANSFERS_PER_SHARER - 1, T0).isEmpty());
+    }
+
     // ---- a sharer that says no ---------------------------------------------------------------
 
     @Test
@@ -623,7 +712,7 @@ class DownloadStateMachineTest {
         // same file again gets the same answer. Measured 27-09-2026: 8 such retries, all for nothing.
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice", "bob"), 0, 0, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), T0.plusSeconds(3));
+                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), Set.of(), T0.plusSeconds(3));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(1, next.candidateIndex(), "next sharer, even though retries on alice remained");
@@ -634,7 +723,7 @@ class DownloadStateMachineTest {
     void downloadPoll_rejectedOnTheLastCandidate_exhaustsSources() {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), T0.plusSeconds(3));
+                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), Set.of(), T0.plusSeconds(3));
 
         assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
@@ -645,7 +734,7 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "InProgress"),
-                T0.plus(DOWNLOAD_BUDGET).plusSeconds(1));
+                Set.of(), T0.plus(DOWNLOAD_BUDGET).plusSeconds(1));
 
         assertEquals(DownloadFailureCode.TIMED_OUT,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());

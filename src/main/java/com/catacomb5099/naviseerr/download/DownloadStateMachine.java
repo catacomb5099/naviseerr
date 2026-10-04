@@ -18,6 +18,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Every branching decision in the download pipeline. Pure: no I/O, no Reactor, no clock of its own —
@@ -36,6 +38,7 @@ public class DownloadStateMachine {
     private final Duration missingTransferGrace;
     private final int retryLimit;
     private final int firstWordingMinCandidates;
+    private final int maxTransfersPerSharer;
     private final StallingSharers stallingSharers;
 
     public DownloadStateMachine(
@@ -47,6 +50,7 @@ public class DownloadStateMachine {
             @Value("${download-task.missing-transfer-grace-ms:60000}") Duration missingTransferGrace,
             @Value("${slskd-service.retry-count}") int retryLimit,
             @Value("${download-task.first-wording-min-candidates:3}") int firstWordingMinCandidates,
+            @Value("${download-task.max-transfers-per-sharer:2}") int maxTransfersPerSharer,
             StallingSharers stallingSharers) {
         this.searchPollInterval = searchPollInterval;
         this.downloadPollInterval = downloadPollInterval;
@@ -56,6 +60,7 @@ public class DownloadStateMachine {
         this.missingTransferGrace = missingTransferGrace;
         this.retryLimit = retryLimit;
         this.firstWordingMinCandidates = firstWordingMinCandidates;
+        this.maxTransfersPerSharer = maxTransfersPerSharer;
         this.stallingSharers = stallingSharers;
     }
 
@@ -147,6 +152,22 @@ public class DownloadStateMachine {
                 .build());
     }
 
+    /**
+     * P9: a song whose sharer already holds {@code max-transfers-per-sharer} of our transfers waits for
+     * one of them to finish instead of joining that sharer's queue, without asking slskd anything. With
+     * the default of two, a sharer holds at most two files of ours, typically one sending and one
+     * waiting its turn, and afterDownloadPoll keeps the waiting one from being given up on. Empty when
+     * the transfer may start; {@code heldBySharer} includes the transfers this pass already started.
+     *
+     * <p>ponytail: a held song is claimed and put back every download-poll-interval, sharing batch-size
+     * with the real polls; leave held rows out of CLAIM_DUE_SQL if a long wait ever crowds them out.
+     */
+    public Optional<DownloadDecision> beforeDownloadInit(DownloadTask task, int heldBySharer, Instant now) {
+        return heldBySharer < maxTransfersPerSharer
+                ? Optional.empty()
+                : Optional.of(new DownloadDecision.Continue(task.dueAt(now.plus(downloadPollInterval))));
+    }
+
     public DownloadDecision afterDownloadInit(DownloadTask task, QueueDownloadResponse response,
                                               Instant now) {
         if (response == null || response.getEnqueued() == null || response.getEnqueued().isEmpty()) {
@@ -163,8 +184,12 @@ public class DownloadStateMachine {
                 .build());
     }
 
-    /** A transfer absent from slskd's list gets its own short-budget branch, not the poll timeout. */
-    public DownloadDecision afterDownloadPoll(DownloadTask task, TransferedFile file, Instant now) {
+    /**
+     * A transfer absent from slskd's list gets its own short-budget branch, not the poll timeout.
+     * {@code delivering}: the sharers sending us another of our files right now (see {@link SharerLoad}).
+     */
+    public DownloadDecision afterDownloadPoll(DownloadTask task, TransferedFile file,
+                                              Set<String> delivering, Instant now) {
         List<TransferState> states = TransferedFileUtil.getStateList(file);
         if (states.stream().anyMatch(TransferState::isSuccess)) {
             return new DownloadDecision.Terminal(DownloadStatus.SUCCEEDED, null);
@@ -190,6 +215,17 @@ public class DownloadStateMachine {
         }
         // Genuinely still transferring: the only branch with a percentComplete worth reading.
         DownloadTask observed = task.withProgress(toProgress(file.getPercentComplete()));
+        boolean waiting = !states.contains(TransferState.LOCALLY) && !isDelivering(file);
+        // P9: waiting in the queue of a sharer that is sending us another of our files is waiting our
+        // turn, not being stalled. The clock slides -- phase_entered_at moves to now -- so both budgets
+        // below count from the last moment that sharer was busy with us. That covers a file queued an
+        // hour behind its album's other tracks, which would otherwise time out the moment its own
+        // bytes start, and the gap between one file finishing and the next starting. Bounded: only
+        // our own transfers count, and max-transfers-per-sharer keeps them few.
+        if (waiting && delivering.contains(task.slskdUsername())) {
+            return new DownloadDecision.Continue(observed.toBuilder()
+                    .phaseEnteredAt(now).nextAttemptAt(now.plus(downloadPollInterval)).build());
+        }
         if (observed.isPastBudget(now, downloadBudget)) {
             return new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.TIMED_OUT);
         }
@@ -197,21 +233,25 @@ public class DownloadStateMachine {
         // in progress with not one byte moved -- for the whole queued budget. "Queued, Locally" is
         // slskd's own backlog (its download slots are full, the peer has not been asked yet), not this
         // peer's fault, so it is excluded and stays bounded only by the hour above. phase_entered_at
-        // is when THIS transfer was enqueued (it resets on every retry and failover), so no new column
-        // is needed to know how long we have been in this peer's queue. Straight to the next
+        // is when THIS transfer was enqueued (it resets on every retry and failover), or the last time
+        // its sharer was seen sending us another file (above), so no new column is needed to know how
+        // long we have been in this peer's queue without our turn coming. Straight to the next
         // candidate, not a same-peer retry: a peer that kept us waiting ten minutes will do it again,
         // and the measured case (peer SKYLiGHT_B, 27-09-2026) sat at 0% for the entire hour while
         // seven other candidates were never tried. The sharer is also remembered, so every OTHER
         // song skips it too (see StallingSharers), and DownloadStepExecutor cancels the abandoned
         // transfer in slskd once this decision is out.
-        boolean waiting = !states.contains(TransferState.LOCALLY)
-                && (!states.contains(TransferState.IN_PROGRESS)
-                        || Objects.equals(0L, file.getBytesTransferred()));
         if (waiting && task.isPastBudget(now, queuedBudget)) {
             stallingSharers.markStalled(task.slskdUsername(), now);
             return nextCandidate(task, now);
         }
         return new DownloadDecision.Continue(observed.dueAt(now.plus(downloadPollInterval)));
+    }
+
+    /** The sharer is sending this file: in progress with bytes moved (an unknown count counts as moved). */
+    static boolean isDelivering(TransferedFile file) {
+        return TransferedFileUtil.getStateList(file).contains(TransferState.IN_PROGRESS)
+                && !Objects.equals(0L, file.getBytesTransferred());
     }
 
     /**
