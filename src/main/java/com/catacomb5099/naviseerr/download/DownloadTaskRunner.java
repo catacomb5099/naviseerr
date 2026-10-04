@@ -23,11 +23,13 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /** Every pass asks the database what is due and acts on the answer; nothing is held in memory between passes. */
@@ -190,7 +192,8 @@ public class DownloadTaskRunner {
                             collection.year(), collection.type()));
                     songs.stream().map(MediaItem::of).forEach(media::add);
                     return repository.upsertMedia(media)
-                            .then(repository.createTasks(download.getDownloadId(), tasks, now))
+                            .then(alreadyFiled(download, tasks))
+                            .flatMap(ready -> repository.createTasks(download.getDownloadId(), ready, now))
                             .doOnNext(admitted -> {
                                 if (admitted > 0) {
                                     log.info("Admitted download {} ({} '{}') as {} task(s)",
@@ -225,6 +228,30 @@ public class DownloadTaskRunner {
                             + "for the next pass", download.getDownloadId(),
                             download.getDownloadType(), download.getYoutubeId(), error);
                     return Mono.empty();
+                });
+    }
+
+    /**
+     * The tasks, with the library's file set on each song the library already has from an earlier
+     * download (see {@code FILED_COPIES_SQL} for what counts), so it is created finished instead of
+     * downloaded again. Only with the organiser on: without it there is no library to look in.
+     */
+    private Mono<List<DownloadTask>> alreadyFiled(Download download, List<DownloadTask> tasks) {
+        if (!organiser.isEnabled()) {
+            return Mono.just(tasks);
+        }
+        return repository.filedCopies(download.getDownloadType(), download.getYoutubeId(), tasks)
+                .collectList()
+                .flatMap(copies -> organiser.stillFiled(tasks.size(), copies))
+                .map(paths -> {
+                    long owned = paths.stream().filter(Objects::nonNull).count();
+                    if (owned > 0) {
+                        log.info("Download {}: {} of {} song(s) already in the library; not downloading "
+                                + "them again", download.getDownloadId(), owned, tasks.size());
+                    }
+                    return java.util.stream.IntStream.range(0, tasks.size())
+                            .mapToObj(i -> tasks.get(i).toBuilder().libraryPath(paths.get(i)).build())
+                            .toList();
                 });
     }
 
@@ -289,14 +316,23 @@ public class DownloadTaskRunner {
             return Mono.empty();
         }
         Instant cutoff = organiser.cutoff(now);
+        // Copies of one song ready in the same pass are filed one after the other, and once one is
+        // filed the rest wait a pass: then they see its file (filed_copy) and are not filed twice.
         return repository.tasksToOrganise(batchSize, cutoff, organiser.albumCutoff(now))
-                .flatMap(job -> organiser.file(job, now)
-                        .flatMap(path -> repository.setLibraryPath(job.taskId(), path.toString()))
-                        .onErrorResume(error -> {
-                            log.warn("Could not file song {} ('{}') into the library; will retry "
-                                    + "next pass", job.taskId(), job.slskdFilename(), error);
-                            return Mono.empty();
-                        }), batchSize)
+                .collect(Collectors.groupingBy(job -> Objects.requireNonNullElse(job.copyKey(), job.taskId().toString()),
+                        LinkedHashMap::new, Collectors.toList()))
+                .flatMapMany(copies -> Flux.fromIterable(copies.values()))
+                .flatMap(copies -> {
+                    AtomicBoolean filed = new AtomicBoolean();
+                    return Flux.fromIterable(copies).concatMap(job -> filed.get() ? Mono.empty() : organiser.file(job, now)
+                            .flatMap(path -> repository.setLibraryPath(job.taskId(), path.toString()))
+                            .doOnNext(written -> filed.set(true))
+                            .onErrorResume(error -> {
+                                log.warn("Could not file song {} ('{}') into the library; will retry "
+                                        + "next pass", job.taskId(), job.slskdFilename(), error);
+                                return Mono.empty();
+                            }));
+                }, batchSize)
                 .then(repository.downloadsToFinalise(batchSize, cutoff)
                         .flatMap(collection -> finalise(collection)
                                 // Deferred: the stamp must only be built once the file is written.

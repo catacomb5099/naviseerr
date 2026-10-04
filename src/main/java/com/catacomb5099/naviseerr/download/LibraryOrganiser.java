@@ -18,6 +18,7 @@ import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -42,7 +43,9 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *                     root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;, like that album's tracks
  * </pre>
  *
- * <p>Just before the move, {@link SongTagger} writes YouTube Music's details into the file's tags.
+ * <p>Just before the move, {@link SongTagger} writes YouTube Music's details into the file's tags. A
+ * song whose album track the library already has is not moved at all: it points at that file and the
+ * new copy is removed ({@link Job#filedCopy}).
  *
  * <p>Pure path logic (locating, sanitising, choosing a target) is in static methods so it can be
  * tested without a filesystem; the two entry points {@link #file} and {@link #deletePartials} do the
@@ -77,12 +80,29 @@ public class LibraryOrganiser {
      * One finished song to file, joined with the names its folders are built from. {@code albumTitle}
      * and {@code albumArtists} are the trusted YouTube Music album of a song or playlist track; null and
      * empty when it has none, and always for an album download's track. {@code tags} is what the file's
-     * tags are written from; null writes none.
+     * tags are written from; null writes none. {@code filedCopy} is the library's file of this same
+     * song, when it already has one; null otherwise. Two jobs with one {@code copyKey} are copies of one
+     * song: only one is filed per pass. {@code pickSize} is the picked file's size as the sharer listed
+     * it, null when unknown.
      */
     public record Job(UUID taskId, DownloadType type, String slskdFilename, Instant finishedAt,
                       String songTitle, List<String> songArtists,
                       String collectionTitle, List<String> collectionArtists,
-                      String albumTitle, List<String> albumArtists, SongTagger.Tags tags) {}
+                      String albumTitle, List<String> albumArtists, SongTagger.Tags tags,
+                      String filedCopy, String copyKey, Long pickSize) {
+
+        /** A song the library does not have yet. */
+        public Job(UUID taskId, DownloadType type, String slskdFilename, Instant finishedAt,
+                   String songTitle, List<String> songArtists,
+                   String collectionTitle, List<String> collectionArtists,
+                   String albumTitle, List<String> albumArtists, SongTagger.Tags tags) {
+            this(taskId, type, slskdFilename, finishedAt, songTitle, songArtists, collectionTitle,
+                    collectionArtists, albumTitle, albumArtists, tags, null, null, null);
+        }
+    }
+
+    /** A file the library already has for the song at {@code position} (1-based) of a download being admitted. */
+    public record FiledCopy(int position, String libraryPath) {}
 
     /** One finished download whose songs are all filed, ready for its playlist file. */
     public record Collection(UUID downloadId, DownloadType type, String title) {}
@@ -188,6 +208,24 @@ public class LibraryOrganiser {
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
+    /**
+     * For each of {@code count} songs being admitted, the first of its {@code copies} (newest first)
+     * that is still a file in the library, else null. A file deleted since, or outside the library
+     * root, does not count, so that song is downloaded again.
+     */
+    public Mono<List<String>> stillFiled(int count, List<FiledCopy> copies) {
+        return Mono.fromCallable(() -> {
+            String[] paths = new String[count];
+            for (FiledCopy copy : copies) {
+                int i = copy.position() - 1;
+                if (paths[i] == null && inLibrary(copy.libraryPath())) {
+                    paths[i] = copy.libraryPath();
+                }
+            }
+            return Arrays.asList(paths);
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
     // ---- blocking I/O ----------------------------------------------------------------------------
 
     Path writePlaylistBlocking(String title, List<Entry> entries) throws IOException {
@@ -225,6 +263,22 @@ public class LibraryOrganiser {
                         downloadsDir, job.slskdFilename());
             }
             return null;
+        }
+        if (inLibrary(job.filedCopy())) {
+            // The library has this song already (the recording's other YouTube id, a song request
+            // filed into the album's folder first, the same single asked for twice): one file per
+            // song, so nothing is listed twice. The new copy is removed only when its size is the
+            // picked file's: two songs can share a folder and file name, and the other's must stay.
+            if (job.pickSize() != null && Files.size(source) == job.pickSize()) {
+                Files.delete(source);
+                deleteIfEmpty(source.getParent(), downloadsDir);
+                log.info("Song {} is already in the library as {}; removed the new copy {}", job.taskId(),
+                        job.filedCopy(), source);
+            } else {
+                log.info("Song {} is already in the library as {}; left {} alone, it may be another song's",
+                        job.taskId(), job.filedCopy(), source);
+            }
+            return Path.of(job.filedCopy());
         }
         // Tagged where it lies, complete and outside the library, so a scanner never reads it mid-write
         // and the real extension picks the format. A move that fails after this tags it again next
@@ -353,6 +407,15 @@ public class LibraryOrganiser {
                 return candidate;
             }
         }
+    }
+
+    /** A regular file (never a symlink) inside the library root. */
+    private boolean inLibrary(String path) {
+        if (path == null) {
+            return false;
+        }
+        Path file = Path.of(path).normalize();
+        return file.startsWith(root) && Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS);
     }
 
     /** @return true if the directory was empty and is now gone */
