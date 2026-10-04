@@ -170,7 +170,9 @@ it has a placeholder default. `.env` is gitignored and loaded automatically by S
 `compose.dev.yaml` includes a `ytmusic-adapter` service (a Python/FastAPI adapter around
 `ytmusicapi`) via `build: ../ytmusic-adapter`. That relative path means `./gradlew bootRun`
 (which auto-starts compose.dev.yaml through `spring-boot-docker-compose`) only starts that service
-successfully if the sibling repo `../ytmusic-adapter` is checked out next to this one. The
+successfully if the sibling repo `../ytmusic-adapter` is checked out next to this one. It runs
+that checkout's code live, so pulling the adapter is enough; only a change to its
+`requirements.txt` needs `docker compose -f compose.dev.yaml build ytmusic-adapter`. The
 all-in-one `compose.yaml` builds it straight from GitHub instead, so it needs no second checkout. It
 backs search (`GET /search/**`) via `YtMusicService` — see
 [docs/architecture/ytmusic-integration.md](docs/architecture/ytmusic-integration.md), and that

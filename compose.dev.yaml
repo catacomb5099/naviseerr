@@ -37,6 +37,15 @@ services:
       YTM_TIMEOUT_SECONDS: ${YTM_TIMEOUT_SECONDS:-10}
     ports:
       - "${YTMUSIC_ADAPTER_PORT:-8000}:8000"
+    # Runs the sibling checkout's code, not the copy baked into the image, and reloads it within a
+    # couple of seconds of any change. IntelliJ's compose start never rebuilds an image, so on
+    # 28-09-2026 and again on 04-10-2026 a weeks-old image was missing routes naviseerr calls. A
+    # change to the adapter's requirements.txt still needs `docker compose -f compose.dev.yaml build
+    # ytmusic-adapter`. uvicorn, not the image's gunicorn: gunicorn's --reload notices changes but
+    # its uvicorn workers never come back up.
+    volumes:
+      - ../ytmusic-adapter/app:/app/app:ro
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     # healthcheck is inherited from the image's own HEALTHCHECK (see ../ytmusic-adapter/Dockerfile)
 
   # Builds the weekly "suggested playlists" editions. naviseerr triggers it once a week and polls the
