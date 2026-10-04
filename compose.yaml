@@ -46,7 +46,9 @@ services:
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
-      SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
+      # No name in .env: `up`, `build` and `config` stop at once with this sentence, before the long
+      # first build (stop, down, logs and ps still work). setup.sh checks the rest (length, characters).
+      SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:?Set SOULSEEK_USERNAME in .env, see README step 2}
       SOULSEEK_PASSWORD: ${SOULSEEK_PASSWORD:-}
       SHARE_LIBRARY: ${SHARE_LIBRARY:-true}
     volumes:

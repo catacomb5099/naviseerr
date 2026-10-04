@@ -19,6 +19,8 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
   Docker Engine on Linux. Both include `docker compose`. On Linux, run the `docker` commands below
   with `sudo`, or first [add yourself to the `docker` group](https://docs.docker.com/engine/install/linux-postinstall/).
 - `git`, to download this project.
+- About 4 GB of free disk space for naviseerr itself (the first start downloads at least 700 MB), plus
+  room for your music, and about 600 MB of free memory.
 
 ### Steps
 
@@ -37,7 +39,10 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    else is likely to have (1 to 30 characters, no accents or emoji). It cannot be made up for you:
    Soulseek's rules forbid automatically generated usernames. The password is generated for you.
    The other settings in `.env` are optional and explained there, for example `LIBRARY_DIR`, the
-   folder your music goes in (by default `library/`, inside this folder).
+   folder your music goes in (by default `library/`, inside this folder), and `SHARE_LIBRARY`: your
+   music folder is shared on Soulseek unless you set it to `false`. If you change `SHARE_LIBRARY`
+   after the first start, run `docker compose up -d` and then `docker compose restart slskd`: until
+   that restart, slskd keeps sharing what it shared before.
 3. Start it:
    ```sh
    docker compose up -d
@@ -51,7 +56,9 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    Later you can read it with `docker compose exec slskd cat /app/slskd.yml` (the `password:` under
    `soulseek:`). Keep it somewhere safe: **Soulseek passwords cannot be reset.**
 5. Open the web app at `http://<this computer's address>:5056`, or http://localhost:5056 on the same
-   computer.
+   computer. Is it working? `docker compose ps` shows every part running, and
+   `docker compose logs slskd` does not keep saying "Failed to reconnect" (slskd cannot reach
+   Soulseek) or "invalid username or password" (see Troubleshooting).
 6. Point your music app at the music folder (`LIBRARY_DIR`). If your music app runs in Docker too, give
    its container the same folder.
    - **Navidrome:** its music folder must be `LIBRARY_DIR` or a folder that contains it. Playlists are
@@ -62,7 +69,8 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
      [issue #18169](https://github.com/jellyfin/jellyfin/issues/18169).
 7. Optional, but you get more search results and fewer failed downloads: on your router's "port
    forwarding" page, forward TCP port 50300 to this computer. That is the door other Soulseek users
-   knock on; slskd cannot open it by itself.
+   knock on; slskd cannot open it by itself. **Do not forward port 5056 on your router: the web app
+   has no login.**
 
 ### Updating
 
@@ -70,16 +78,35 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
 git pull && docker compose up -d --build
 ```
 
+### Stopping, removing and backing up
+
+- **Stop:** `docker compose stop`, or `docker compose down`, which also removes the containers. Both
+  keep your settings, passwords, download history and music; `docker compose up -d` starts it again.
+- **Remove everything:** `docker compose down -v`. **This deletes your generated Soulseek password
+  for good, and your download history. Soulseek passwords cannot be reset: without a copy, that
+  Soulseek account is lost.** Back up first. Your music folder (`LIBRARY_DIR`) is an ordinary folder
+  and stays; delete it yourself if you want it gone.
+- **Back up** while naviseerr is installed:
+  - The generated passwords, the part of naviseerr's config that cannot be made again:
+    ```sh
+    docker compose cp setup:/config/secrets.env ./naviseerr-secrets.env
+    ```
+    Move `naviseerr-secrets.env` somewhere safe. To use the same Soulseek account on a new install,
+    copy its `SOULSEEK_PASSWORD=` line into `.env`.
+  - Your music: copy `LIBRARY_DIR` like any other folder, or add it to the backups you already make.
+
 ### Troubleshooting
 
-- **Nothing starts.** `docker compose logs setup` says what is missing, usually `SOULSEEK_USERNAME`.
+- **Nothing starts.** If `docker compose up -d` stops at once with "Set SOULSEEK_USERNAME in .env,
+  see README step 2", fill in `SOULSEEK_USERNAME` in `.env` (step 2). Otherwise
+  `docker compose logs setup` says what is wrong.
 - **"Username taken".** If `docker compose logs slskd` says "invalid username or password", someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,
   then `docker compose restart slskd` (slskd tries to log in once and then waits).
-- **Permission errors** ("permission denied", "Could not file song"). Every container runs as one user,
-  `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into `LIBRARY_DIR`: set
-  them to the folder's owner (`ls -ln` shows its numbers; `id -u` and `id -g` show yours), then run
-  `docker compose up -d`.
+- **Permission errors on Linux** ("permission denied", "Could not file song"). Every container runs as
+  one user, `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into
+  `LIBRARY_DIR`: set them to the folder's owner (`ls -ln` shows its numbers; `id -u` and `id -g` show
+  yours), then run `docker compose up -d`.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.
