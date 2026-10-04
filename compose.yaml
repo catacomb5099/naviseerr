@@ -127,6 +127,9 @@ services:
       SPRING_CONFIG_IMPORT: optional:file:/config/naviseerr.properties
       CURATOR_URL: http://croissant:8010
       CURATOR_TOKEN: ${CURATOR_TOKEN:-}
+      # Download logs at the normal level here; application.yaml's DEBUG (every 2-second pass) is for
+      # developers. LOG_LEVEL=DEBUG in .env brings that detail back.
+      LOGGING_LEVEL_COM_CATACOMB5099_NAVISEERR_DOWNLOAD: ${LOG_LEVEL:-INFO}
     # Not published: the web app below forwards /api to it. To call the API directly while debugging,
     # add  services: {naviseerr: {ports: ["8080:8080"]}}  to compose.override.yaml (see slskd above).
     volumes:

@@ -34,7 +34,8 @@ logging:
   level:
     # DEBUG here surfaces the per-pass slskd call log ("slskd calls this pass: GET /searches=...,
     # GET /transfers/downloads=..."), which is the direct measure of the slskd request rate — count
-    # those lines over a minute rather than inferring it from the intervals below.
+    # those lines over a minute rather than inferring it from the intervals below. The all-in-one
+    # compose.yaml turns this down to INFO (LOG_LEVEL in .env).
     com.catacomb5099.naviseerr.download: DEBUG
 
 # Dormant since 10-08-2026: search runs through yt-music-service below and nothing calls Last.fm.
