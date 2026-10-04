@@ -45,7 +45,7 @@ What has changed since the original assessment: `DownloadTaskRunner` now filters
 
 - `selectBestFiles(state, query)` builds the ordered candidate list `List<Map.Entry<SearchResponseItem, SearchFile>>` — unchanged by the state-machine rewrite, kept byte-for-byte as the guard that the pipeline work did not touch ranking:
   1. flatten every `(response item, file)` pair from `state.getResponses()`,
-  2. keep files that are FLAC or have bit rate `>= slskd-service.min-bit-rate`,
+  2. keep files that are lossless (flac, wav, aif, aiff, ape, wv, judged by the file name's suffix, not slskd's often-blank `extension`) or have bit rate `>= slskd-service.min-bit-rate`,
   3. keep files whose filename is relevant to the query via [TrackMatchingService](#track-matching),
   4. sort by availability first (`hasFreeUploadsSlot`, then `queueLength`, then `uploadSpeed` descending) — see `SlskdSearchResultProcessor.BY_AVAILABILITY`,
   5. cap to `slskd-service.max-files-per-download`.

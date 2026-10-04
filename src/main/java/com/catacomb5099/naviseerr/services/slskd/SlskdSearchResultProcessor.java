@@ -10,7 +10,9 @@ import reactor.core.publisher.Mono;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static reactor.netty.http.HttpConnectionLiveness.log;
@@ -68,7 +70,7 @@ public class SlskdSearchResultProcessor {
                     state.getResponses() == null ? List.of() : state.getResponses();
             List<Pick> candidates = responses.stream()
                     .flatMap(item -> item.getFiles().stream()
-                            .filter(this::isFlacAndHighBitrate)
+                            .filter(this::isLosslessOrHighBitRate)
                             .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename(), wording))))
                     .filter(pick -> pick.grade() != TrackMatchingService.Match.NONE)
                     .toList();
@@ -152,8 +154,27 @@ public class SlskdSearchResultProcessor {
                 && sharer.getQueueLength() > maxSharerQueue;
     }
 
-    private boolean isFlacAndHighBitrate(SearchFile file) {
-        return (file.getBitRate().isPresent() && file.getBitRate().get() >= minBitRate) || file.getExtension().equals("flac");
+    private static final Set<String> LOSSLESS = Set.of("flac", "wav", "aif", "aiff", "ape", "wv");
+
+    /**
+     * Lossless files always pass; slskd reports no bit rate for them (13,845 of 14,188 FLAC files on
+     * 04-10-2026), so the bit-rate rule is for lossy files only.
+     */
+    private boolean isLosslessOrHighBitRate(SearchFile file) {
+        return LOSSLESS.contains(format(file)) || file.getBitRate().filter(bitRate -> bitRate >= minBitRate).isPresent();
+    }
+
+    /**
+     * The format, lower-cased, from the file name's suffix. Not slskd's {@code extension} field: it is
+     * blank on most files (8,972 of 14,188 FLAC files on 04-10-2026) and sometimes wrong (218 FLAC files
+     * claimed "mp3"). Falls back to that field only for a name with no suffix.
+     */
+    private static String format(SearchFile file) {
+        String name = file.getFilename() == null ? "" : file.getFilename();
+        String leaf = name.substring(Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/')) + 1);
+        int dot = leaf.lastIndexOf('.');
+        String format = dot >= 0 ? leaf.substring(dot + 1) : file.getExtension();
+        return format == null ? "" : format.toLowerCase(Locale.ROOT);
     }
 
 }
