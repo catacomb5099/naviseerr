@@ -86,7 +86,8 @@ git pull && docker compose up -d --build
   for good, and your download history. Soulseek passwords cannot be reset: without a copy, that
   Soulseek account is lost.** Back up first. Your music folder (`LIBRARY_DIR`) is an ordinary folder
   and stays; delete it yourself if you want it gone.
-- **Back up** while naviseerr is installed:
+- **Back up** while naviseerr is running or stopped with `docker compose stop` (after
+  `docker compose down`, run `docker compose up -d` first: the command below needs its containers):
   - The generated passwords, the part of naviseerr's config that cannot be made again:
     ```sh
     docker compose cp setup:/config/secrets.env ./naviseerr-secrets.env
