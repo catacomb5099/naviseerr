@@ -349,7 +349,7 @@ class DownloadControllerTest {
 
         // To the user a suggested playlist is a playlist; the client's Playlists pill already folds
         // the two, so the server's filter has to agree or the pill shows a shorter list than the count.
-        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED));
+        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED, DownloadType.RADIO));
     }
 
     @Test

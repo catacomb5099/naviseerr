@@ -24,15 +24,22 @@ public enum DownloadType {
      * the curator at admission the way an album's is fetched from ytmusic-adapter. Filed into the
      * library and written out as a playlist file like a {@link #PLAYLIST}.
      */
-    CURATED;
+    CURATED,
+    /**
+     * Every song of one saved radio ({@code POST /radios}). The id is the radio's own UUID, not a YouTube
+     * id; the songs are read from the {@code radios} table at admission, because YouTube builds a different
+     * radio on every call and the download must be the list the person saw. Filed and written out as a
+     * playlist file like a {@link #PLAYLIST}.
+     */
+    RADIO;
 
     /** True when this type resolves to a track list rather than a single track. */
     public boolean isCollection() {
         return this != SONG;
     }
 
-    /** True for the kinds that get a playlist file in the library: a YouTube playlist and a curated edition. */
+    /** True for the kinds that get a playlist file in the library: a YouTube playlist, a curated edition, a radio. */
     public boolean isPlaylist() {
-        return this == PLAYLIST || this == CURATED;
+        return this == PLAYLIST || this == CURATED || this == RADIO;
     }
 }

@@ -198,7 +198,7 @@ public class DownloadController {
             return List.of();
         }
         return type == DownloadType.PLAYLIST
-                ? List.of(DownloadType.PLAYLIST, DownloadType.CURATED)
+                ? List.of(DownloadType.PLAYLIST, DownloadType.CURATED, DownloadType.RADIO)
                 : List.of(type);
     }
 }

@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.curator.CuratorClient;
+import com.catacomb5099.naviseerr.services.RadioRepository;
 import com.catacomb5099.naviseerr.curator.CuratorEdition;
 import com.catacomb5099.naviseerr.curator.CuratorException;
 import com.catacomb5099.naviseerr.curator.CuratorTrack;
@@ -30,6 +31,7 @@ import java.util.UUID;
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -46,6 +48,7 @@ class DownloadTaskRunnerTest {
     private YtMusicService ytMusicService;
     private LibraryOrganiser organiser;
     private CuratorClient curatorClient;
+    private RadioRepository radioRepository;
     private AlbumSearchStep albumSearches;
     private DownloadTaskRunner runner;
 
@@ -58,6 +61,7 @@ class DownloadTaskRunnerTest {
         ytMusicService = mock(YtMusicService.class);
         organiser = mock(LibraryOrganiser.class);
         curatorClient = mock(CuratorClient.class);
+        radioRepository = mock(RadioRepository.class);
         albumSearches = mock(AlbumSearchStep.class);
         when(organiser.isEnabled()).thenReturn(false);
         when(organiser.deletePartials(any())).thenReturn(Mono.empty());
@@ -81,7 +85,7 @@ class DownloadTaskRunnerTest {
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                ytMusicService, curatorClient, organiser, albumSearches, Clock.fixed(T0, ZoneOffset.UTC),
+                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
     }
 
@@ -724,6 +728,53 @@ class DownloadTaskRunnerTest {
 
         verify(organiser).writePlaylist("80s indie pop", List.of(entry));
         verify(repository).setOrganisedAt(downloadId, T0);
+    }
+
+    @Test
+    void aRadioRequest_downloadsTheSavedSongs_neverAFreshRadioFromYouTube() {
+        UUID radioId = UUID.randomUUID();
+        Download request = pendingRequest(DownloadType.RADIO, radioId.toString());
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(radioRepository.find(radioId)).thenReturn(Mono.just(new YoutubeCollectionInfo(radioId.toString(),
+                List.of(new YoutubeSongInfo("q1", List.of("Earth, Wind & Fire"), List.of("UCewf"), "September",
+                                "https://i.ytimg.com/vi/q1/hqdefault.jpg", 216, null),
+                        new YoutubeSongInfo("q2", List.of("Queen"), List.of("UCq"), "Another One Bites The Dust",
+                                "https://i.ytimg.com/vi/q2/hqdefault.jpg", 215, null)),
+                null, "Billie Jean radio", List.of("Michael Jackson"), List.of("UCmj"), "https://img/seed.jpg")));
+
+        runner.pass().block();
+
+        verifyNoInteractions(ytMusicService);
+        verify(repository).createTasks(eq(request.getDownloadId()),
+                argThat(tasks -> tasks.size() == 2
+                        && tasks.getFirst().songName().equals("September - Earth, Wind & Fire")
+                        && tasks.get(1).youtubeId().equals("q2")),
+                eq(T0), isNull());
+        // The downloads list names it after the radio, keyed by the radio id the request carried.
+        verify(repository).upsertMedia(argThat(items -> items.stream().anyMatch(m ->
+                m.youtubeId().equals(radioId.toString()) && m.title().equals("Billie Jean radio")
+                        && m.trackCount() == 2)));
+    }
+
+    @Test
+    void aRadioRequestForARadioNobodySaved_isFailedNotRetried() {
+        UUID radioId = UUID.randomUUID();
+        Download unknown = pendingRequest(DownloadType.RADIO, radioId.toString());
+        Download garbage = pendingRequest(DownloadType.RADIO, "not-a-uuid");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(unknown, garbage));
+        when(radioRepository.find(radioId)).thenReturn(Mono.empty());
+
+        runner.pass().block();
+
+        verify(repository).failUnadmitted(unknown.getDownloadId(), DownloadFailureCode.METADATA_UNAVAILABLE, T0);
+        verify(repository).failUnadmitted(garbage.getDownloadId(), DownloadFailureCode.METADATA_UNAVAILABLE, T0);
+        verify(repository, never()).createTasks(any(), any(), any(), any());
+    }
+
+    @Test
+    void aRadioIsAPlaylistToTheLibrary() {
+        assertTrue(DownloadType.RADIO.isPlaylist());
+        assertTrue(DownloadType.RADIO.isCollection());
     }
 
     @Test
