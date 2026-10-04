@@ -214,9 +214,11 @@ YouTube id at admission time, via the first three of these methods on
 |---|---|---|
 | `getSongInfo(videoId)` | `GET /v1/songs/{videoId}` | `YoutubeSongInfo` |
 | `getAlbumInfo(browseId)` | `GET /v1/albums/{browseId}` | `YoutubeCollectionInfo` |
+| `getAlbum(browseId)` | `GET /v1/albums/{browseId}` | `YtMusicDetailResponse.Collection`, the adapter shape with `type`, every track's `trackNumber` and `otherVersions[]` (only the album lookup, `SongAlbumResolver`, reads it; `getAlbumInfo` maps it) |
+| `searchSongRows(query, limit)` | `GET /v1/search/songs?q&limit` | `List<YtMusicSearchResponse.Item>`, the rows unmapped, each with its album id and length (only the album lookup reads it) |
 | `getPlaylistInfo(playlistId)` | `GET /v1/playlists/{playlistId}` | `YoutubeCollectionInfo` |
 | `getArtistInfo(channelId)` | `GET /v1/artists/{channelId}` | `YtMusicDetailResponse.Artist` |
-| `getSongDetails(videoId)` | `GET /v1/songs/{videoId}/details` | `YtMusicDetailResponse.SongDetails` (adapter shape; only `SongInfoView.from` reads it) |
+| `getSongDetails(videoId)` | `GET /v1/songs/{videoId}/details` | `YtMusicDetailResponse.SongDetails` (adapter shape; read by `SongInfoView.from` and, for its album, by the album lookup) |
 | `getSongViewCount(videoId)` | `GET /v1/songs/{videoId}` | `Long`, that one upload's exact `viewCount`; empty when none (only `GET /songs/views` reads it) |
 
 Three things about the mapping are easy to get wrong, because the adapter's three responses are not
@@ -239,7 +241,7 @@ the same shape:
   for it would spend a whole search budget to fail. Only an explicit `false` counts — album
   responses omit the field entirely, and treating null as unavailable would drop every album track.
 
-All five go through the same `execute` pipeline as search — one timeout, typed error translation,
+Every one of them goes through the same `execute` pipeline as search — one timeout, typed error translation,
 retry on availability failures only — rather than reimplementing it. That pipeline was extracted from
 `executeSearch` for exactly this reason.
 

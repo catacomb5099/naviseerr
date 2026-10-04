@@ -21,8 +21,8 @@ import java.util.List;
  * keys — an album's id is {@code browseId} and its artists a list, a playlist's id is {@code id} and
  * its single author an object. Declaring all four and letting {@code ignoreUnknown} drop whichever
  * pair is absent is cheaper than two near-identical classes and a switch at the use site. Fields the
- * download pipeline does not read (descriptions, an album's other-versions buckets) are deliberately
- * left off rather than mirrored.
+ * download pipeline does not read (descriptions, related recommendations) are deliberately left off
+ * rather than mirrored.
  */
 public final class YtMusicDetailResponse {
 
@@ -121,6 +121,26 @@ public final class YtMusicDetailResponse {
         private YtMusicSearchResponse.ArtistRef author;
         private String thumbnailUrl;
         private List<Track> tracks;
+        /**
+         * Albums only: the same album's other editions (Deluxe, Remastered, 30th Anniversary), as
+         * YouTube Music lists them under "Other versions". Read by {@code SongAlbumResolver} to file
+         * a song with the plainest one.
+         */
+        private List<RelatedAlbum> otherVersions;
+    }
+
+    /** One entry of an album's {@code otherVersions[]}: enough to tell whether it is the same artist's album. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class RelatedAlbum {
+        private String browseId;
+        private String title;
+        /** {@code "Album"}, {@code "EP"} or {@code "Single"}. */
+        private String type;
+        private List<YtMusicSearchResponse.ArtistRef> artists;
     }
 
     /**

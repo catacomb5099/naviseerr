@@ -269,6 +269,29 @@ public final class SearchQueryTiers {
         return String.join(" ", String.join(" - ", leading), qualifiers).strip() + " - " + artist;
     }
 
+    /** {@link #pickerName}'s two halves. {@code artist} is {@code ""} when the name has none. */
+    record TitleAndArtist(String title, String artist) {}
+
+    /**
+     * The title with its qualifiers ("Wonderwall (Unplugged)") and the artist, read exactly as
+     * {@link #pickerName} reads them -- except that for YouTube's "Artist - Title - channel" shape the
+     * artist is the one named in the title, not the uploading channel. What a song is compared with
+     * YouTube Music's own album and search rows by ({@code SongAlbumResolver}).
+     */
+    static TitleAndArtist titleAndArtist(String songName) {
+        String raw = songName == null ? "" : songName;
+        Cleaned cleaned = clean(raw);
+        List<String> parts = cleaned.parts();
+        String qualifiers = String.join(" ", cleaned.qualifiers());
+        if (parts.size() < 2) {
+            return new TitleAndArtist(parts.isEmpty() ? raw : String.join(" ", parts.getFirst(), qualifiers).strip(), "");
+        }
+        boolean channel = cleaned.artistTitleChannel();
+        List<String> title = parts.subList(channel ? 1 : 0, parts.size() - 1);
+        return new TitleAndArtist(String.join(" ", String.join(" - ", title), qualifiers).strip(),
+                channel ? parts.getFirst() : parts.getLast());
+    }
+
     /**
      * The name taken apart. {@code parts}: last the artist, the rest the title (or artist and title
      * for the channel shape), with no version word anywhere -- what the searches are built from.

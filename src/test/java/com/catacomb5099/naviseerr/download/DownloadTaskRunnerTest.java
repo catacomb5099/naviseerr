@@ -85,7 +85,7 @@ class DownloadTaskRunnerTest {
     void withTheOrganiserOff_noFilingQueryIsMade() {
         runner.pass().block();
 
-        verify(repository, never()).tasksToOrganise(anyInt(), any());
+        verify(repository, never()).tasksToOrganise(anyInt(), any(), any());
     }
 
     @Test
@@ -94,7 +94,8 @@ class DownloadTaskRunnerTest {
         LibraryOrganiser.Job notYet = job(UUID.randomUUID());
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
-        when(repository.tasksToOrganise(10, T0.minusSeconds(600))).thenReturn(Flux.just(filed, notYet));
+        when(organiser.albumCutoff(T0)).thenReturn(T0.minusSeconds(120));
+        when(repository.tasksToOrganise(10, T0.minusSeconds(600), T0.minusSeconds(120))).thenReturn(Flux.just(filed, notYet));
         when(organiser.file(filed, T0)).thenReturn(Mono.just(java.nio.file.Path.of("/music/A/B/c.flac")));
         when(organiser.file(notYet, T0)).thenReturn(Mono.empty());
         when(repository.setLibraryPath(any(), any())).thenReturn(Mono.just(1L));
@@ -109,7 +110,7 @@ class DownloadTaskRunnerTest {
     void aFilingErrorDoesNotStopThePass() {
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(any())).thenReturn(T0.minusSeconds(600));
-        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.just(job(UUID.randomUUID())));
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.just(job(UUID.randomUUID())));
         when(organiser.file(any(), any())).thenReturn(Mono.error(new java.io.IOException("read-only")));
 
         assertDoesNotThrow(() -> runner.pass().block());
@@ -151,7 +152,7 @@ class DownloadTaskRunnerTest {
         LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
-        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(playlist));
         when(repository.playlistEntries(playlistId)).thenReturn(Flux.just(entry));
         when(organiser.writePlaylist("Alt Nation 1989", List.of(entry)))
@@ -169,7 +170,7 @@ class DownloadTaskRunnerTest {
         UUID albumId = UUID.randomUUID();
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
-        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
                 new LibraryOrganiser.Collection(albumId, DownloadType.ALBUM, "Doolittle")));
         when(repository.setOrganisedAt(albumId, T0)).thenReturn(Mono.just(1L));
@@ -186,7 +187,7 @@ class DownloadTaskRunnerTest {
         UUID playlistId = UUID.randomUUID();
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(any())).thenReturn(T0.minusSeconds(600));
-        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
                 new LibraryOrganiser.Collection(playlistId, DownloadType.PLAYLIST, "Mix")));
         when(repository.playlistEntries(playlistId)).thenReturn(Flux.empty());
@@ -199,7 +200,7 @@ class DownloadTaskRunnerTest {
 
     private static LibraryOrganiser.Job job(UUID taskId) {
         return new LibraryOrganiser.Job(taskId, DownloadType.SONG, "music\\a\\c.flac", T0.minusSeconds(5),
-                "c", List.of("A"), null, List.of());
+                "c", List.of("A"), null, List.of(), null, List.of());
     }
 
     @Test
@@ -558,7 +559,7 @@ class DownloadTaskRunnerTest {
         LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
-        when(repository.tasksToOrganise(anyInt(), any())).thenReturn(Flux.empty());
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(curated));
         when(repository.playlistEntries(downloadId)).thenReturn(Flux.just(entry));
         when(organiser.writePlaylist("80s indie pop", List.of(entry)))

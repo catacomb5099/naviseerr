@@ -204,6 +204,22 @@ class YtMusicServiceTest {
     }
 
     @Test
+    void searchSongRows_keepsEachRowsAlbumIdAndLength_whichTheMappedSearchDrops() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody(SONGS_BODY));
+
+        StepVerifier.create(service.searchSongRows("Don't You - Simple Minds", 5))
+                .assertNext(rows -> {
+                    assertEquals("MPREb_PITqkpE6ExP", rows.getFirst().getAlbum().getBrowseId());
+                    assertEquals(259, rows.getFirst().getDurationSeconds());
+                })
+                .verifyComplete();
+
+        assertEquals("/v1/search/songs?q=Don't%20You%20-%20Simple%20Minds&limit=5", server.takeRequest().getPath());
+    }
+
+    @Test
     void getResults_withACallerChosenLimit_passesItThrough_andHitsTheFeaturedPlaylistsRoute() throws InterruptedException {
         server.enqueue(new MockResponse().setResponseCode(200)
                 .addHeader("Content-Type", "application/json")

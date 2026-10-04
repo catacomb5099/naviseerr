@@ -152,10 +152,18 @@ those changes add no migration of their own and cannot land out of order.
   task because one video id can appear on two rows of one album with different titles, and
   `media_items` holds one row per id. `position` stays list order. Null on rows written before V12.
 - `media_items.year`, `album_type`: album rows only, upserted with `COALESCE` like every other field.
-- `song_albums` (`youtube_id` PK, `album_id`, `track_number`, `resolved_at`) and `album_searches`
-  (one row per album download: `phase` SEARCH_INIT/SEARCH_POLL/DONE, tier, search id, due time, lease,
-  outcome) with the partial index `idx_album_searches_due`: created empty, unused until the songs-to-
-  album and whole-album changes land.
+- `song_albums` (`youtube_id` PK, `album_id`, `track_number`, `resolved_at`): the trusted YouTube
+  Music album of a song or playlist track and its number there, `album_id` NULL for "looked, nothing
+  trusted". Written by `SAVE_SONG_ALBUM_SQL` (upsert: a re-look replaces the answer), always after the
+  album's own `media_items` row. `SONGS_TO_RESOLVE_SQL` selects what still needs an answer: non-ALBUM
+  tasks with no row or a NULL row older than `:relookBefore`, not FAILED, and either still running or
+  SUCCEEDED, unfiled and finished after the organiser's `:cutoff` (never the history); `DISTINCT ON
+  (youtube_id)` inside, oldest request first outside. `TASKS_TO_ORGANISE_SQL` LEFT JOINs it (only for
+  non-ALBUM downloads) and the album's `media_items` row for the folder name, and holds a non-ALBUM
+  song with no row back until `finished_at <= :albumCutoff`.
+- `album_searches` (one row per album download: `phase` SEARCH_INIT/SEARCH_POLL/DONE, tier, search id,
+  due time, lease, outcome) with the partial index `idx_album_searches_due`: created empty, unused until
+  the whole-album change lands.
 
 ## Entity and status
 
