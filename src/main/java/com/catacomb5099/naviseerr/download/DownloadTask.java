@@ -36,6 +36,12 @@ public record DownloadTask(
         String trackTitle,
         Integer trackNumber,
         Integer durationSeconds,
+        /**
+         * Set only when admission finds the song already in the library: the row is then created
+         * SUCCEEDED, pointing at that file, and never searched for. The organiser writes the column
+         * for every other song once it is filed; the claim never reads it (a live row has none).
+         */
+        String libraryPath,
         DownloadPhase phase,
         Instant phaseEnteredAt,
         Instant nextAttemptAt,

@@ -215,7 +215,7 @@ public class ActiveDownloadRepository {
                    t.phase_entered_at, t.updated_at, t.finished_at,
                    jsonb_array_length(t.candidates::jsonb) AS candidate_count,
                    t.candidate_index, t.retry_index, t.slskd_username, t.slskd_filename,
-                   t.last_error
+                   t.last_error, t.library_path
               FROM download_tasks t
               LEFT JOIN media_items m ON m.youtube_id = t.youtube_id
              WHERE t.download_id = :id
@@ -331,7 +331,8 @@ public class ActiveDownloadRepository {
                 row.get("retry_index", Integer.class),
                 row.get("slskd_username", String.class),
                 row.get("slskd_filename", String.class),
-                row.get("last_error", String.class));
+                row.get("last_error", String.class),
+                row.get("library_path", String.class));
     }
 
     /** Null from the LEFT JOIN (no media row yet) reads as "no artists", never as null. */

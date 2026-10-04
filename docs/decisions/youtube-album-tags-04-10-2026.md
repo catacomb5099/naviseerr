@@ -149,9 +149,41 @@ early in `SongTagger.tag`. A smaller cover: `SongTagger.COVER_SIZE` `=w544-h544-
 
 ### Already owned (P7: B3)
 
-A song already in the library from an EXACT pick whose file still exists is not downloaded again: at
+A song naviseerr already downloaded, whose file is still where it put it, is not downloaded again: at
 admission by album and track number, or for a song by its YouTube id with the same title; at filing, a
-trusted song whose album and track number are already filed points at the existing file.
+copy that slipped through points at the existing file instead of becoming a second one.
+
+- **What counts as "have":** `FILED_SONGS` in `DownloadTaskRepository`, shared by both checks: a
+  `SUCCEEDED` row with a `library_path`. Its album is an album download's own id and YouTube number,
+  or a song's `song_albums` answer, but only an answer saved within the organiser's two-minute wait
+  after the song finished (`SongAlbumResolver` stamps each answer when it saves it): a later answer
+  means the file went into its own folder, and counting it would leave the album short a track. The
+  file must still be a regular file inside `library.root` (`LibraryOrganiser.stillFiled`); deleted,
+  moved or renamed since, it is downloaded again. Music the library had before naviseerr is never
+  recognised.
+- **At admission** (`DownloadTaskRunner.alreadyFiled`, organiser on only): only an EXACT earlier pick
+  counts (a live take or remix fetched because nothing better was shared does not, so asking again can
+  still find the real song). A matched song's row is created `SUCCEEDED`, finished, 100 %, with that
+  `library_path` and no peer: terminal from birth, so nothing claims, leases or searches it, and the
+  download concludes and writes its playlist as usual. An album download matches only by album and
+  track number, never by id: a Deluxe edition shares the plain album's ids, and taking those files
+  would file half the Deluxe in the plain album's folder. A song or playlist track also matches by its
+  trusted album track once it has a `song_albums` answer (the lookup often has not run yet at
+  admission, so the filing check below catches the rest).
+- **At filing** (`TASKS_TO_ORGANISE_SQL`'s `filed_copy`): a song whose album track (the album its tags
+  follow, and its track number) the library already has, or with no album the same YouTube id and
+  title, points at that file. Typically the official video's twin of a track an album download filed
+  under its audio id, an album track a song request filed into the album's folder first, or one single
+  asked for twice. An EXACT old copy always counts; any old copy counts when the new pick is a
+  stand-in, so stand-ins never pile up, while an EXACT pick is still filed beside an old stand-in. The
+  new copy is deleted only when its size is the picked file's (two songs can share a folder and file
+  name in slskd's downloads folder; the other's stays). Copies of one song ready in the same pass
+  (`copy_key`) are filed one after the other, and once one is filed the rest wait a pass to see it.
+- Deluxe and plain editions are different albums here: asking for the Deluxe downloads all of it.
+
+*Flip:* no admission check: return `Mono.just(tasks)` first in `DownloadTaskRunner.alreadyFiled`. No
+filing check: select `NULL AS filed_copy` in `TASKS_TO_ORGANISE_SQL`. Count stand-in picks as owned at
+admission: drop `f.exact AND` in `FILED_COPIES_SQL`.
 
 ## Consequences
 
@@ -160,8 +192,20 @@ trusted song whose album and track number are already filed points at the existi
 - A song YouTube only has on compilations or singles is never joined. Lose Yourself: the 8 Mile
   soundtrack is Various Artists, and Eminem's own "Curtain Call: The Hits" lists it as "Lose Yourself
   (From "8 Mile" Soundtrack)", a different title by the rule above.
-- Until B3, a song requested again after its album was downloaded whole lands in that album's folder
-  as a second copy, so Jellyfin shows it twice in the album (before, a one-song album of its own).
+- A song requested while its album is still downloading (neither filed yet) is downloaded twice; the
+  filing check then keeps one file per album track, so only the transfer is wasted. The same for an
+  album requested twice at once, and for the first request of a song the library has from its album
+  under the album's other YouTube id: the song lookup has not run at admission, so the song downloads
+  in full and its copy is then removed at filing.
+- A song filed before B1, or filed under its own name because its album answer came late, never counts
+  as its album's track: requesting the album downloads that track again (into the album's folder).
+- There is no way to get a better copy (MP3 to FLAC, or a wrong file graded exact) except deleting the
+  file on disk; when two copies meet at filing, the old one wins. Retrying a failed song does not check
+  whether it was downloaded elsewhere since. A file filed in its own folder is never moved into its
+  album later.
+- Two editions with the same title and artist (explicit and clean) share one folder but are different
+  albums here: asking for the other edition downloads its tracks into that folder again.
+- The client shows an already-owned song as downloaded at once; it does not read `libraryPath` yet.
 - Navidrome groups by tags, not folders: from B2 the songs of one trusted album agree on every field
   its album key reads, so they show as one album there too. Files filed before B2 keep their tags (P8:
   no backfill).

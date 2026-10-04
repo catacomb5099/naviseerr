@@ -68,6 +68,10 @@ public class DownloadTaskRepository {
      * {@code track_number} and {@code duration_seconds} are the album or playlist row's own values
      * (V12): one id can sit on two rows of one album, so {@code media_items} cannot hold them.
      *
+     * <p>A song with a {@code library_path} is one the library already has ({@link #FILED_COPIES_SQL}):
+     * it is created SUCCEEDED and finished, pointing at that file. Terminal from birth, so no claim,
+     * lease or later step can race it, and nothing downloads it.
+     *
      * @return task rows created: N for an admitted N-song download, 0 when it was no longer PENDING
      *         or already had songs
      */
@@ -84,15 +88,75 @@ public class DownloadTaskRepository {
             )
             INSERT INTO download_tasks
                 (task_id, download_id, youtube_id, song_name, position, track_title, track_number,
-                 duration_seconds, phase, phase_entered_at, next_attempt_at)
+                 duration_seconds, library_path, phase, phase_entered_at, next_attempt_at, finished_at,
+                 progress_percent)
             SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, s.position,
-                   s.track_title, s.track_number, s.duration_seconds, 'SEARCH_INIT', :now, :now
+                   s.track_title, s.track_number, s.duration_seconds, s.library_path,
+                   CASE WHEN s.library_path IS NULL THEN 'SEARCH_INIT' ELSE 'SUCCEEDED' END, :now, :now,
+                   CASE WHEN s.library_path IS NULL THEN NULL ELSE :now END,
+                   CASE WHEN s.library_path IS NULL THEN 0 ELSE 100 END
               FROM unnest(:youtubeIds::text[], :songNames::text[], :trackTitles::text[],
-                          :trackNumbers::int[], :durations::int[])
+                          :trackNumbers::int[], :durations::int[], :libraryPaths::text[])
                    WITH ORDINALITY AS s(youtube_id, song_name, track_title, track_number,
-                                        duration_seconds, position)
+                                        duration_seconds, library_path, position)
              WHERE EXISTS (SELECT 1 FROM admitted)
             """;
+
+    /**
+     * Every song in the library, with what it is filed as: its row's own title (for a row from before
+     * V12 its song's title, unless it was an album track, where one id can carry two titles), its album
+     * and track number, and whether its pick was EXACT (a live take or remix fetched because nothing
+     * better was shared is not). The album is an album download's own id and YouTube number, or a song
+     * or playlist track's {@code song_albums} answer -- only one that was there within the organiser's
+     * wait after the song finished, so the file was filed in that album's folder: a later answer (a
+     * lookup that ran late, a week-old "none" asked again) would claim a file that sits in its own
+     * folder. A row from before V12 has no track number, so it never matches by album. Shared by both
+     * "already have it" checks below so they agree on what "have" means. Whether the file is still on
+     * disk is the caller's to check.
+     */
+    private static final String FILED_SONGS = """
+            SELECT f.youtube_id, f.library_path, f.finished_at,
+                   COALESCE(f.candidates::jsonb -> f.candidate_index ->> 'grade' = 'EXACT', false) AS exact,
+                   COALESCE(f.track_title, CASE WHEN fd.download_type <> 'ALBUM' THEN fm.title END) AS title,
+                   CASE WHEN fd.download_type = 'ALBUM' THEN fd.youtube_id ELSE fa.album_id END AS album_id,
+                   CASE WHEN fd.download_type = 'ALBUM' THEN f.track_number ELSE fa.track_number END AS track_number
+              FROM download_tasks f
+              JOIN downloads fd ON fd.download_id = f.download_id
+              LEFT JOIN media_items fm ON fm.youtube_id = f.youtube_id
+              LEFT JOIN song_albums fa ON fa.youtube_id = f.youtube_id AND fd.download_type <> 'ALBUM'
+                    AND fa.resolved_at <= f.finished_at + interval '%d seconds'
+             WHERE f.phase = 'SUCCEEDED'
+               AND f.library_path IS NOT NULL""".formatted(LibraryOrganiser.ALBUM_LOOKUP_GRACE.toSeconds());
+
+    /**
+     * The library's EXACT copies of the songs a download is about to be admitted with, newest first per
+     * song ({@code position} is the song's 1-based place in the list given). The same album and track
+     * number, for any download: an album download's is its own album and YouTube's number, a song's or
+     * playlist track's its {@code song_albums} answer when it already has one. Or, for anything but an
+     * album download, the same YouTube id with the same title. An album download never matches by id:
+     * a Deluxe edition shares the plain album's ids for its first tracks, and taking those files would
+     * file the Deluxe half in the plain album's folder.
+     *
+     * <p>ponytail: a scan of the filed history per admission (no index on youtube_id); add one with a
+     * migration if an install's history reaches hundreds of thousands of songs.
+     */
+    private static final String FILED_COPIES_SQL = """
+            WITH wanted AS (
+                SELECT w.position, w.youtube_id, w.title,
+                       CASE WHEN :album THEN :albumId::text ELSE a.album_id END AS album_id,
+                       CASE WHEN :album THEN w.track_number ELSE a.track_number END AS track_number
+                  FROM unnest(:youtubeIds::text[], :titles::text[], :trackNumbers::int[])
+                       WITH ORDINALITY AS w(youtube_id, title, track_number, position)
+                  LEFT JOIN song_albums a ON a.youtube_id = w.youtube_id AND NOT :album
+            )
+            SELECT w.position, f.library_path
+              FROM wanted w
+              JOIN (%s) f
+                ON f.exact
+               AND ((f.album_id = w.album_id AND f.track_number = w.track_number)
+                    OR (NOT :album AND f.youtube_id = w.youtube_id AND lower(f.title) = lower(w.title)))
+             ORDER BY w.position, f.finished_at DESC
+            """.formatted(FILED_SONGS);
 
     /**
      * Writes what ytmusic-adapter said an id is — the download's own id and, for a collection, every
@@ -375,6 +439,15 @@ public class DownloadTaskRepository {
      * (one id can sit on two rows of an album with two titles), and the album {@code r} the tags follow,
      * which is the download's own album for an album track and the trusted album for anything else.
      * No trusted album: no album, and the song's own picture as the cover.
+     *
+     * <p>{@code filed_copy}: the library's file (FILED_SONGS) of this same song, which the organiser
+     * points the song at instead of filing a second copy. With an album (the one the tags follow) the
+     * same album track: typically the music video's twin of a track an album download filed under its
+     * audio id, or an album track a song request filed into the album's folder first. Without one, the
+     * same YouTube id with the same title (the same single requested twice). The old copy counts when it
+     * was an EXACT pick, or whatever it was when this one is not: a second stand-in never piles up next
+     * to the first. EXACT copies first, then newest. {@code copy_key} names the copy so the organiser
+     * files only one of two copies that are ready in the same pass; the other sees its file next pass.
      */
     private static final String TASKS_TO_ORGANISE_SQL = """
             SELECT t.task_id, t.slskd_filename, t.finished_at, d.download_type,
@@ -385,7 +458,16 @@ public class DownloadTaskRepository {
                    r.title AS tag_album, r.artists AS tag_album_artists, r.year AS tag_year,
                    CASE WHEN d.download_type = 'ALBUM' THEN t.track_number ELSE a.track_number END AS tag_track,
                    r.track_count AS tag_track_total,
-                   CASE WHEN r.youtube_id IS NULL THEN s.image_url ELSE r.image_url END AS tag_cover
+                   CASE WHEN r.youtube_id IS NULL THEN s.image_url ELSE r.image_url END AS tag_cover,
+                   (SELECT f.library_path FROM (%s) f
+                     WHERE (f.exact OR t.candidates::jsonb -> t.candidate_index ->> 'grade' IS DISTINCT FROM 'EXACT')
+                       AND CASE WHEN k.album_id IS NOT NULL AND k.track_number IS NOT NULL
+                                THEN f.album_id = k.album_id AND f.track_number = k.track_number
+                                ELSE d.download_type <> 'ALBUM' AND f.youtube_id = t.youtube_id
+                                     AND lower(f.title) = lower(COALESCE(t.track_title, s.title)) END
+                     ORDER BY f.exact DESC, f.finished_at DESC LIMIT 1) AS filed_copy,
+                   COALESCE(k.album_id || '#' || k.track_number, t.youtube_id, t.task_id::text) AS copy_key,
+                   (t.candidates::jsonb -> t.candidate_index ->> 'size')::bigint AS pick_size
               FROM download_tasks t
               JOIN downloads d ON d.download_id = t.download_id
               LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
@@ -394,6 +476,9 @@ public class DownloadTaskRepository {
               LEFT JOIN media_items al ON al.youtube_id = a.album_id
               LEFT JOIN media_items r
                      ON r.youtube_id = CASE WHEN d.download_type = 'ALBUM' THEN d.youtube_id ELSE a.album_id END
+              CROSS JOIN LATERAL (SELECT CASE WHEN d.download_type = 'ALBUM' THEN d.youtube_id ELSE a.album_id END AS album_id,
+                                         CASE WHEN d.download_type = 'ALBUM' THEN t.track_number
+                                              ELSE a.track_number END AS track_number) k
              WHERE t.phase = 'SUCCEEDED'
                AND t.library_path IS NULL
                AND t.slskd_filename IS NOT NULL
@@ -403,7 +488,7 @@ public class DownloadTaskRepository {
                AND (d.download_type = 'ALBUM' OR a.youtube_id IS NOT NULL OR t.finished_at <= :albumCutoff)
              ORDER BY t.finished_at
              LIMIT :limit
-            """;
+            """.formatted(FILED_SONGS);
 
     /**
      * Songs and playlist tracks whose YouTube Music album is still to be looked up: no answer yet, or a
@@ -526,9 +611,32 @@ public class DownloadTaskRepository {
                 .bind("trackTitles", tasks.stream().map(DownloadTask::trackTitle).toArray(String[]::new))
                 .bind("trackNumbers", tasks.stream().map(DownloadTask::trackNumber).toArray(Integer[]::new))
                 .bind("durations", tasks.stream().map(DownloadTask::durationSeconds).toArray(Integer[]::new))
+                .bind("libraryPaths", tasks.stream().map(DownloadTask::libraryPath).toArray(String[]::new))
                 .bind("now", now)
                 .fetch()
                 .rowsUpdated();
+    }
+
+    /**
+     * The library's EXACT copies of the songs of a download about to be admitted, newest first per
+     * song; see FILED_COPIES_SQL. Whether each file is still there is {@link LibraryOrganiser#stillFiled}'s.
+     *
+     * @param type and {@code downloadYoutubeId}: the download's own, the album id for an album download
+     */
+    public Flux<LibraryOrganiser.FiledCopy> filedCopies(DownloadType type, String downloadYoutubeId,
+                                                        List<DownloadTask> tasks) {
+        if (tasks.isEmpty()) {
+            return Flux.empty();
+        }
+        return client.sql(FILED_COPIES_SQL)
+                .bind("album", type == DownloadType.ALBUM)
+                .bind("albumId", downloadYoutubeId)
+                .bind("youtubeIds", tasks.stream().map(DownloadTask::youtubeId).toArray(String[]::new))
+                .bind("titles", tasks.stream().map(DownloadTask::trackTitle).toArray(String[]::new))
+                .bind("trackNumbers", tasks.stream().map(DownloadTask::trackNumber).toArray(Integer[]::new))
+                .map((row, meta) -> new LibraryOrganiser.FiledCopy(
+                        row.get("position", Long.class).intValue(), row.get("library_path", String.class)))
+                .all();
     }
 
     /**
@@ -629,7 +737,9 @@ public class DownloadTaskRepository {
                                 row.get("tag_year", Integer.class),
                                 row.get("tag_track", Integer.class),
                                 row.get("tag_track_total", Integer.class),
-                                row.get("tag_cover", String.class))))
+                                row.get("tag_cover", String.class)),
+                        row.get("filed_copy", String.class), row.get("copy_key", String.class),
+                        row.get("pick_size", Long.class)))
                 .all();
     }
 

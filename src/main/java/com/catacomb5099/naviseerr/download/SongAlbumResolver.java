@@ -125,7 +125,7 @@ public class SongAlbumResolver {
         Instant now = clock.instant();
         return repository.songsToResolve(batchSize, organiser.cutoff(now), now.minus(RELOOK_AFTER))
                 .concatMap(song -> resolve(song)
-                        .flatMap(found -> save(song, found, now))
+                        .flatMap(found -> save(song, found))
                         .onErrorResume(error -> {
                             log.warn("Could not look up the YouTube Music album of song {} ('{}'); will "
                                     + "ask again: {}", song.youtubeId(), song.songName(), error.getMessage());
@@ -208,11 +208,15 @@ public class SongAlbumResolver {
         return found(plainest, want, List.of(want.own(), row)).defaultIfEmpty(found);
     }
 
-    private Mono<Void> save(Song song, Optional<Found> found, Instant now) {
+    /**
+     * Stamped when the answer is saved, not when the batch started: "already have it" trusts a song's
+     * album only when its answer was there in time for the organiser to file it by it.
+     */
+    private Mono<Void> save(Song song, Optional<Found> found) {
         if (found.isEmpty()) {
             log.info("Song {} ('{}') has no YouTube Music album naviseerr trusts; it is filed under its own name",
                     song.youtubeId(), song.songName());
-            return repository.saveSongAlbum(song.youtubeId(), null, null, now).then();
+            return Mono.defer(() -> repository.saveSongAlbum(song.youtubeId(), null, null, clock.instant())).then();
         }
         Found f = found.get();
         YoutubeCollectionInfo album = YtMusicService.toCollectionInfo(f.album(), f.albumId());
@@ -223,7 +227,8 @@ public class SongAlbumResolver {
                         album.authorIds(), album.imageUrl(), null,
                         Objects.requireNonNullElse(album.trackCount(), album.songs().size()), album.year(),
                         album.type())))
-                .then(repository.saveSongAlbum(song.youtubeId(), f.albumId(), f.track().getTrackNumber(), now))
+                .then(Mono.defer(() -> repository.saveSongAlbum(song.youtubeId(), f.albumId(),
+                        f.track().getTrackNumber(), clock.instant())))
                 .then();
     }
 

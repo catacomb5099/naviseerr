@@ -193,6 +193,61 @@ class LibraryOrganiserTest {
     }
 
     @Test
+    void aSongWhoseAlbumTrackTheLibraryHas_pointsAtThatFile_andItsNewCopyIsRemoved() throws IOException {
+        // The album download filed Supersonic under its audio id; the music video's id came in a
+        // playlist later. One file per album track, so the album never lists it twice.
+        Path existing = put(root.resolve("Oasis/Definitely Maybe"), "06 - Supersonic.flac");
+        Path twin = put(downloads.resolve("a"), "Supersonic (Official Video).mp3");
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.PLAYLIST,
+                "x\\a\\Supersonic (Official Video).mp3", NOW.minusSeconds(5), "Supersonic", List.of("Oasis"),
+                "Britpop", List.of(), "Definitely Maybe", List.of("Oasis"), null, existing.toString(), "MPREb_dm#6",
+                Files.size(twin));
+
+        assertEquals(existing, organiser.file(job, NOW).block());
+        assertFalse(Files.exists(twin), "the new copy is removed");
+        assertFalse(Files.exists(downloads.resolve("a")), "and its emptied folder");
+        assertEquals("audio", Files.readString(existing), "the library's file is untouched");
+    }
+
+    @Test
+    void aNewCopyOfAnotherSize_isLeftAlone_itMayBeAnotherSongsFileWithTheSameName() throws IOException {
+        Path existing = put(root.resolve("Oasis/Definitely Maybe"), "06 - Supersonic.flac");
+        Path other = put(downloads.resolve("CD1"), "01 Intro.mp3");
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.PLAYLIST,
+                "x\\CD1\\01 Intro.mp3", NOW.minusSeconds(5), "Intro", List.of("Oasis"),
+                "Britpop", List.of(), "Definitely Maybe", List.of("Oasis"), null, existing.toString(), "k",
+                Files.size(other) + 1);
+
+        assertEquals(existing, organiser.file(job, NOW).block());
+        assertTrue(Files.exists(other));
+    }
+
+    @Test
+    void aSongWhoseLibraryCopyIsGone_isFiledAsUsual() throws IOException {
+        put(downloads.resolve("a"), "06 Supersonic.flac");
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG,
+                "x\\a\\06 Supersonic.flac", NOW.minusSeconds(5), "Supersonic", List.of("Oasis"),
+                "Supersonic", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"), null,
+                root.resolve("Oasis/Definitely Maybe/deleted since.flac").toString(), "MPREb_dm#6", 5L);
+
+        assertEquals(root.resolve("Oasis/Definitely Maybe/06 Supersonic.flac"), organiser.file(job, NOW).block());
+    }
+
+    @Test
+    void stillFiled_takesEachSongsNewestCopyThatIsStillAFileInTheLibrary() throws IOException {
+        Path kept = put(root.resolve("A/B"), "kept.flac");
+        Path outside = put(tmp.resolve("elsewhere"), "outside.flac");
+        List<LibraryOrganiser.FiledCopy> copies = List.of(
+                new LibraryOrganiser.FiledCopy(1, root.resolve("A/B/deleted.flac").toString()),
+                new LibraryOrganiser.FiledCopy(1, kept.toString()),
+                new LibraryOrganiser.FiledCopy(2, outside.toString()),
+                new LibraryOrganiser.FiledCopy(3, root.resolve("../elsewhere/outside.flac").toString()));
+
+        assertEquals(java.util.Arrays.asList(kept.toString(), null, null, null), organiser.stillFiled(4, copies).block(),
+                "a deleted file falls through to the next copy; outside the library never counts; no copy is null");
+    }
+
+    @Test
     void anAlbumDownloadsTrack_staysInTheAlbumTheUserAskedFor_evenWithASongAlbumOnTheJob() throws IOException {
         put(downloads.resolve("c"), "01 - Rock n Roll Star.flac");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,

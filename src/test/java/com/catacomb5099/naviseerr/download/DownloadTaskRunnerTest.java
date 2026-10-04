@@ -88,6 +88,33 @@ class DownloadTaskRunnerTest {
         verify(repository, never()).tasksToOrganise(anyInt(), any(), any());
     }
 
+    private static LibraryOrganiser.Job copy(String key) {
+        return new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG, "music\\a\\c.flac", T0.minusSeconds(5),
+                "c", List.of("a"), null, List.of(), null, List.of(), null, null, key, null);
+    }
+
+    @Test
+    void twoCopiesOfOneSongReadyInOnePass_onlyTheFirstIsFiled_unlessItsFileIsNotThereYet() {
+        LibraryOrganiser.Job first = copy("MPREb_dm#6");
+        LibraryOrganiser.Job second = copy("MPREb_dm#6");
+        LibraryOrganiser.Job missing = copy("blinding");
+        LibraryOrganiser.Job stillFiled = copy("blinding");
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(organiser.albumCutoff(T0)).thenReturn(T0.minusSeconds(120));
+        when(repository.tasksToOrganise(10, T0.minusSeconds(600), T0.minusSeconds(120)))
+                .thenReturn(Flux.just(first, missing, second, stillFiled));
+        when(organiser.file(first, T0)).thenReturn(Mono.just(java.nio.file.Path.of("/music/A/B/1.flac")));
+        when(organiser.file(missing, T0)).thenReturn(Mono.empty());
+        when(organiser.file(stillFiled, T0)).thenReturn(Mono.just(java.nio.file.Path.of("/music/A/C/2.flac")));
+        when(repository.setLibraryPath(any(), any())).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(organiser, never()).file(second, T0);
+        verify(repository).setLibraryPath(stillFiled.taskId(), "/music/A/C/2.flac");
+    }
+
     @Test
     void withTheOrganiserOn_eachFiledSongGetsItsLibraryPathWritten_andAMissingFileIsLeftForNextPass() {
         LibraryOrganiser.Job filed = job(UUID.randomUUID());
@@ -482,6 +509,26 @@ class DownloadTaskRunnerTest {
                         && m.imageUrl().equals("https://img/rick.jpg")
                         && m.artists().equals(List.of("Rick Astley"))
                         && m.artistIds().equals(List.of("UC-rick")))));
+    }
+
+    @Test
+    void aSongTheLibraryAlreadyHas_isCreatedPointingAtItsFile_withTheOrganiserOn() {
+        Download request = pendingRequest(DownloadType.SONG, "vid-1");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getSongInfo("vid-1"))
+                .thenReturn(Mono.just(new YoutubeSongInfo("vid-1", List.of("Rick Astley"), List.of("UC-rick"),
+                        "Never Gonna Give You Up", "https://img/rick.jpg", 213, null)));
+        when(organiser.isEnabled()).thenReturn(true);
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
+        List<LibraryOrganiser.FiledCopy> copies = List.of(new LibraryOrganiser.FiledCopy(1, "/music/R/N/n.flac"));
+        when(repository.filedCopies(eq(DownloadType.SONG), eq("vid-1"), any())).thenReturn(Flux.fromIterable(copies));
+        when(organiser.stillFiled(1, copies)).thenReturn(Mono.just(List.of("/music/R/N/n.flac")));
+
+        runner.pass().block();
+
+        verify(repository).createTasks(eq(request.getDownloadId()),
+                argThat(tasks -> tasks.size() == 1 && "/music/R/N/n.flac".equals(tasks.getFirst().libraryPath())),
+                eq(T0));
     }
 
     @Test
