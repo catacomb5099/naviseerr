@@ -47,7 +47,7 @@ What has changed since the original assessment: `DownloadTaskRunner` now filters
   1. flatten every `(response item, file)` pair from `state.getResponses()`,
   2. keep files that are lossless (flac, wav, aif, aiff, ape, wv, judged by the file name's suffix, not slskd's often-blank `extension`) or have bit rate `>= slskd-service.min-bit-rate`,
   3. keep files whose filename is relevant to the query via [TrackMatchingService](#track-matching),
-  4. sort by availability first (`hasFreeUploadsSlot`, then `queueLength`, then `uploadSpeed` descending) — see `SlskdSearchResultProcessor.BY_AVAILABILITY`,
+  4. sort by availability first (`hasFreeUploadSlot`, then `queueLength`, then `uploadSpeed` descending) — see `SlskdSearchResultProcessor.BY_AVAILABILITY`,
   5. cap to `slskd-service.max-files-per-download`.
 - `DownloadStepExecutor` calls this only once a `SEARCH_POLL` sees `isComplete = true`, then converts the result to `DownloadCandidate` (see [download-manager.md](download-manager.md)) for storage on the task row.
 
