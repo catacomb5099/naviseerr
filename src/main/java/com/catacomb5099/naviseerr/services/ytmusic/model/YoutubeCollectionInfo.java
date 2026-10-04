@@ -8,8 +8,9 @@ import java.util.List;
  * <p>One type for both on purpose. They are two adapter endpoints with two response shapes, but
  * what the download pipeline wants out of either is identical — a display title and picture for the
  * download row and a list of songs to create task rows from. Splitting them would mean two types, two
- * mappers and a switch at every use site, for one nullable field's worth of difference. If they do
- * diverge later (track numbers, per-track availability), split then.
+ * mappers and a switch at every use site, for a few nullable fields' worth of difference ({@code year}
+ * and {@code type} here, {@code trackNumber} on each song: only albums have them). If they diverge
+ * further than nullable fields, split then.
  *
  * @param year     null for a playlist — the adapter's {@code PlaylistDetail} has no year, only albums
  *                 do. Stored on the album's {@code media_items} row; identifies a specific pressing.
