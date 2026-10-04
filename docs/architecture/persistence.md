@@ -182,7 +182,9 @@ those changes add no migration of their own and cannot land out of order.
   CTEs, joined with the album's `media_items` row for its name); written by `SAVE_ALBUM_SEARCH_SQL`
   (lease holder only, never once DONE; re-holds the waiting songs when a wording starts); ended by
   `RELEASE_ALBUM_SONGS_SQL` (one statement: DONE first, then the untouched songs) or by `CANCEL_SQL`'s
-  `album` CTE. Its `SEARCH_POLL` rows are added into `COUNT_ACTIVE_SEARCHES_SQL`. Rows are kept once
+  `album` CTE. Every statement that writes both locks the album row before its songs; `CANCEL_SQL`
+  reads its `album` CTE in a one-time filter for that, since an unread CTE runs after the main update
+  and the opposite order deadlocks with a release. Its `SEARCH_POLL` rows are added into `COUNT_ACTIVE_SEARCHES_SQL`. Rows are kept once
   DONE, like task rows.
 
 ## Entity and status

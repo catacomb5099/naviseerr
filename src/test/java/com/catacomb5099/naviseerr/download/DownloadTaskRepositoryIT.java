@@ -9,15 +9,20 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
 import reactor.core.publisher.Mono;
 import reactor.util.function.Tuple2;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static com.catacomb5099.naviseerr.support.TaskFinishing.finish;
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,6 +35,7 @@ class DownloadTaskRepositoryIT {
     @Autowired R2dbcEntityTemplate template;
     @Autowired DownloadTaskRepository repository;
     @Autowired DownloadService downloadService;
+    @Autowired PostgreSQLContainer<?> postgres;
 
     private static final Instant NOW = Instant.parse("2026-08-13T12:00:00Z");
 
@@ -1346,6 +1352,30 @@ class DownloadTaskRepositoryIT {
         assertEquals(0L, repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.WHOLE_FOLDER,
                 java.util.Map.of(taskIdsOf(id).getFirst(), DownloadTaskFixtures.albumFolderCandidates("x")), NOW.plusSeconds(2)).block());
         assertEquals(List.of("SEARCH_INIT", "SEARCH_INIT"), phasesOf(id));
+    }
+
+    @Test
+    void cancellingTheWholeAlbum_locksItsSearchBeforeItsSongs_asTheReleaseDoes_soTheTwoCannotDeadlock() throws Exception {
+        UUID id = admitAlbum("1 a", "2 b");
+        try (Connection release = DriverManager.getConnection(
+                postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
+            // A release that has just marked the search done and is about to hand out the songs.
+            release.setAutoCommit(false);
+            release.createStatement().execute("SELECT 1 FROM album_searches WHERE download_id = '" + id + "' FOR UPDATE");
+            CompletableFuture<List<DownloadTask>> cancel = repository.cancelTasks(id, null, NOW).collectList().toFuture();
+            Instant deadline = Instant.now().plusSeconds(10);
+            while (template.getDatabaseClient().sql("SELECT count(*) AS n FROM pg_stat_activity "
+                            + "WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE album_searches%'")
+                    .map((row, meta) -> row.get("n", Long.class)).one().block() == 0) {
+                assertTrue(Instant.now().isBefore(deadline), "the cancel never waited for the album row");
+                Thread.sleep(20);
+            }
+            // The cancel is waiting for the album row while holding no song, so the release can take them.
+            release.createStatement().execute("SELECT 1 FROM download_tasks WHERE download_id = '" + id + "' FOR UPDATE NOWAIT");
+            release.commit();
+            assertEquals(2, cancel.get(10, TimeUnit.SECONDS).size());
+        }
+        assertEquals("CANCELLED", albumField(id, "outcome"));
     }
 
     @Test

@@ -335,7 +335,10 @@ public class DownloadTaskRepository {
      * RETURNING hands back what the caller needs to stop the transfer in slskd and remove partial
      * files. Bind the whole-download case with {@code bindNull("taskId", UUID.class)}. Cancelling the
      * whole download also ends its album search (P5), so a search still running cannot hand files to
-     * songs a later retry reopens; cancelling one song leaves it running for the others.
+     * songs a later retry reopens; cancelling one song leaves it running for the others. The album row
+     * is locked BEFORE the song rows (the {@code count(*)} line makes Postgres run that CTE first instead
+     * of after the songs): the album step's release and hold take the same two locks in that order, and
+     * the opposite order deadlocks, failing the user's cancel.
      */
     private static final String CANCEL_SQL = """
             WITH album AS (
@@ -348,6 +351,7 @@ public class DownloadTaskRepository {
                  WHERE download_id = :id
                    AND :taskId::uuid IS NULL
                    AND phase <> 'DONE'
+                RETURNING download_id
             )
             UPDATE download_tasks
                SET phase = 'FAILED',
@@ -360,6 +364,7 @@ public class DownloadTaskRepository {
              WHERE download_id = :id
                AND phase NOT IN ('SUCCEEDED', 'FAILED')
                AND (:taskId::uuid IS NULL OR task_id = :taskId)
+               AND (SELECT count(*) FROM album) >= 0
             RETURNING task_id, download_id, candidates, candidate_index,
                       slskd_username, slskd_filename, slskd_transfer_id
             """;
