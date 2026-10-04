@@ -1258,9 +1258,10 @@ class DownloadTaskRepositoryIT {
 
     @Test
     void saveAlbumSearch_startingAWording_holdsTheWaitingSongsLonger_butNotOnesAlreadySearchingOnTheirOwn() {
-        UUID id = admitAlbum("1 waiting", "2 fell due");
+        UUID id = admitAlbum("1 waiting", "2 fell due", "3 retrying its second wording");
         List<UUID> songs = taskIdsOf(id);
         setTask(songs.get(1), "next_attempt_at = '" + NOW.minusSeconds(1) + "'");
+        setTask(songs.get(2), "search_tier = 1, next_attempt_at = '" + NOW.plusSeconds(2) + "'");
         AlbumSearch claimed = repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
 
         assertEquals(1L, repository.saveAlbumSearch(claimed.toBuilder().phase(DownloadPhase.SEARCH_POLL).searchId("s1")
@@ -1268,6 +1269,11 @@ class DownloadTaskRepositoryIT {
 
         assertEquals(HOLD.plusSeconds(60), nextAttemptOf(songs.get(0)));
         assertEquals(NOW.minusSeconds(1), nextAttemptOf(songs.get(1)));
+        assertEquals(NOW.plusSeconds(2), nextAttemptOf(songs.get(2)), "the release will not touch it, so neither may the hold");
+        AlbumSearch polling = repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+        assertEquals(1L, repository.saveAlbumSearch(polling.toBuilder().nextAttemptAt(NOW.plusSeconds(2)).build(),
+                "me", NOW, null).block());
+        assertEquals(HOLD.plusSeconds(60), nextAttemptOf(songs.get(0)), "a poll's save holds nobody");
         assertEquals(0L, repository.saveAlbumSearch(claimed, "me", NOW, null).block(), "the save cleared the lease");
     }
 
@@ -1276,7 +1282,7 @@ class DownloadTaskRepositoryIT {
         UUID id = admitAlbum("1 picked", "2 unpicked", "3 cancelled", "4 between wordings", "5 leased", "6 lease expired");
         List<UUID> songs = taskIdsOf(id);
         repository.cancelTasks(id, songs.get(2), NOW).blockLast();
-        setTask(songs.get(3), "search_tier = 1, candidates = '[{\"username\":\"kept\"}]'");
+        setTask(songs.get(3), "search_tier = 1"); // its first wording found nothing worth keeping
         setTask(songs.get(4), "lease_owner = 'busy', lease_expires_at = '" + NOW.plusSeconds(30) + "'");
         setTask(songs.get(5), "lease_owner = 'gone', lease_expires_at = '" + NOW.minusSeconds(1) + "'");
         repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
@@ -1291,8 +1297,8 @@ class DownloadTaskRepositoryIT {
         assertEquals("DOWNLOAD_INIT", taskField(songs.get(0), "phase"));
         assertEquals("SEARCH_INIT", taskField(songs.get(1), "phase"));
         assertEquals("FAILED", taskField(songs.get(2), "phase"), "a cancelled song stays cancelled");
-        assertEquals(HOLD, nextAttemptOf(songs.get(3)), "a song between wordings keeps its files and its own clock");
-        assertEquals("[{\"username\":\"kept\"}]", taskField(songs.get(3), "candidates"));
+        assertEquals(HOLD, nextAttemptOf(songs.get(3)), "a song between wordings keeps its own clock");
+        assertEquals("SEARCH_INIT", taskField(songs.get(3), "phase"));
         assertEquals("busy", taskField(songs.get(4), "lease_owner"), "a song a live lease holds is not touched");
         assertNull(taskField(songs.get(5), "lease_owner"), "a stale step can no longer save over the release");
 

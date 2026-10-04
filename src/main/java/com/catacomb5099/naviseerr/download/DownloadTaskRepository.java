@@ -646,7 +646,9 @@ public class DownloadTaskRepository {
      * it is not DONE (a cancel ends it under a running step). When the step has just started a wording
      * ({@code :extendHold}), the songs still held get a fresh hold in the same statement, so a slow
      * search slot does not let them fall due while the album search is alive. Songs whose hold already ran
-     * out are left alone: they are searching on their own.
+     * out are left alone: they are searching on their own. Only songs the release can still touch
+     * (WAITING_ALBUM_SONGS_SQL's test): one retrying a later wording of its own would otherwise sit out
+     * a hold nothing ends early.
      */
     private static final String SAVE_ALBUM_SEARCH_SQL = """
             WITH saved AS (
@@ -670,6 +672,8 @@ public class DownloadTaskRepository {
                    AND EXISTS (SELECT 1 FROM saved)
                    AND phase = 'SEARCH_INIT'
                    AND search_id IS NULL
+                   AND search_tier = 0
+                   AND candidates = '[]'
                    AND next_attempt_at > :now
             )
             SELECT count(*) AS saved FROM saved
