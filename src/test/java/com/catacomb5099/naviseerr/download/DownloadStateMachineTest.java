@@ -1,11 +1,13 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -65,6 +67,25 @@ class DownloadStateMachineTest {
         DownloadDecision.Terminal t = assertInstanceOf(DownloadDecision.Terminal.class, d);
         assertEquals(DownloadStatus.FAILED, t.status());
         assertEquals(DownloadFailureCode.SEARCH_FAILED, t.failureCode());
+    }
+
+    /**
+     * slskd's record of "Daft Punk Discovery" (04-10-2026): more answers came than its response cap allows
+     * and it ended the search "Completed, Errored" holding 252 responses. Those are picked from like any
+     * completed search's; an Errored search that holds none still fails.
+     */
+    @Test
+    void searchPoll_erroredAfterOverflowingTheResponseCap_keepsTheResults() {
+        DownloadTask task = searchPolling("s1").toBuilder().songName("One More Time - Daft Punk").build();
+        SearchState overflowed = new SearchState(Optional.empty(), 4592, "s1", true, 79, 252, List.of(),
+                "One More Time", "2026-10-04T12:15:08Z", "Completed, Errored", 7618882);
+
+        DownloadDecision d = machine.afterSearchPoll(task, overflowed, candidates("a", "b", "c"), T0);
+
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, assertInstanceOf(DownloadDecision.Advance.class, d).next().phase());
+        assertEquals(DownloadFailureCode.SEARCH_FAILED, assertInstanceOf(DownloadDecision.Terminal.class,
+                machine.afterSearchPoll(task, SlskdFixtures.searchState("s1", true, "Completed, Errored"),
+                        List.of(), T0)).failureCode());
     }
 
     @Test
