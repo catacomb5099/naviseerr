@@ -262,7 +262,13 @@ public class DownloadStateMachine {
                 return new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)).toBuilder()
                         .retryIndex(task.retryIndex() + 1).lastError(describe(error)).build());
             }
-            return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
+            // slskd answers 409 when it is not logged in to Soulseek, with the reason in its body: "The
+            // server connection must be connected and logged in to perform a search (currently:
+            // Disconnected)" (slskd 0.26.0, 04-10-2026). Matched on the status, not the wording, so a
+            // reworded slskd still counts; naviseerr never sends a search id, so an id clash, the
+            // other 409 slskd could give here, cannot happen.
+            return giveUpSearch(task, error instanceof WebClientResponseException.Conflict
+                    ? DownloadFailureCode.SOULSEEK_OFFLINE : DownloadFailureCode.SEARCH_FAILED, now);
         }
         if (!task.isPastBudget(now, searchBudget)) {
             return new DownloadDecision.Continue(task.dueAt(now.plus(searchPollInterval)));
@@ -270,8 +276,15 @@ public class DownloadStateMachine {
         return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
     }
 
-    /** The exception's message, or its class name when it carries none (a Netty read timeout does not). */
-    private static String describe(Throwable error) {
+    /**
+     * slskd's own answer when it gave one ("409 CONFLICT" plus its reason, which the exception's message
+     * leaves out), else the exception's message, or its class name when it carries none (a Netty read
+     * timeout does not).
+     */
+    static String describe(Throwable error) {
+        if (error instanceof WebClientResponseException refused && !refused.getResponseBodyAsString().isBlank()) {
+            return refused.getStatusCode() + " " + refused.getResponseBodyAsString();
+        }
         return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
