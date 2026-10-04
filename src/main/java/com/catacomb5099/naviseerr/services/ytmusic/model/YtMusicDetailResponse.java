@@ -108,6 +108,13 @@ public final class YtMusicDetailResponse {
         private String title;
         /** Albums only; a playlist has no year. */
         private Integer year;
+        /** Albums only: YouTube's kind of release, {@code "Album"}, {@code "EP"} or {@code "Single"}. */
+        private String type;
+        /**
+         * YouTube's own count for the album or playlist, which can be more than {@link #tracks} holds
+         * (an unavailable track, or a playlist longer than the adapter's page).
+         */
+        private Integer trackCount;
         /** Albums. */
         private List<YtMusicSearchResponse.ArtistRef> artists;
         /** Playlists. */
@@ -131,6 +138,11 @@ public final class YtMusicDetailResponse {
         private String title;
         private List<YtMusicSearchResponse.ArtistRef> artists;
         private Integer durationSeconds;
+        /**
+         * The number YouTube Music prints beside an album's row, 1-based; null on playlist rows and
+         * top songs. Not the list index: an unavailable track keeps its number while the list skips it.
+         */
+        private Integer trackNumber;
         /**
          * YouTube's own wording ("28M plays"). Present on album tracks and an artist's top songs, null
          * on playlist rows. Passed through, never parsed: the adapter warns the figure is lossy upstream.

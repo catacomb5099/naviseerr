@@ -165,9 +165,15 @@ public class DownloadTaskRunner {
                                 download.getYoutubeId());
                         return fail(download, DownloadFailureCode.METADATA_UNAVAILABLE);
                     }
+                    // Each row keeps its own title, number and length: one id can sit on two rows
+                    // of one album, and media_items holds only one of them.
                     List<DownloadTask> tasks = songs.stream()
                             .map(song -> DownloadTask.initial(download.getDownloadId(), song.id(),
-                                    soulseekQuery(song), now))
+                                            soulseekQuery(song), now).toBuilder()
+                                    .trackTitle(song.name())
+                                    .trackNumber(song.trackNumber())
+                                    .durationSeconds(song.durationSeconds())
+                                    .build())
                             .toList();
                     // The download's own id first, then every track. For a song the two are the
                     // same row and the upsert folds them. Written BEFORE the task rows, so a crash
@@ -176,10 +182,12 @@ public class DownloadTaskRunner {
                     List<MediaItem> media = new java.util.ArrayList<>();
                     // Keyed by the id the REQUEST carried, not the one the adapter echoed back:
                     // the feed joins on downloads.youtube_id, and the two can differ (a playlist
-                    // requested as VL... is answered as PL...).
+                    // requested as VL... is answered as PL...). The track count is YouTube's own
+                    // when it gives one (an album's real total, unavailable tracks included).
                     media.add(new MediaItem(download.getYoutubeId(), collection.name(),
                             collection.authorNames(), collection.authorIds(), collection.imageUrl(),
-                            null, songs.size()));
+                            null, Objects.requireNonNullElse(collection.trackCount(), songs.size()),
+                            collection.year(), collection.type()));
                     songs.stream().map(MediaItem::of).forEach(media::add);
                     return repository.upsertMedia(media)
                             .then(repository.createTasks(download.getDownloadId(), tasks, now))

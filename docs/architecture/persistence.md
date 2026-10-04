@@ -140,6 +140,23 @@ d.youtube_id` (LEFT: a QUEUED download has no row yet), and by `SONGS_SQL` via
 Artist"` — not a display field. `download_tasks.position` is written from `unnest(...) WITH
 ORDINALITY` in `CREATE_TASKS_SQL`.
 
+### V12: album metadata
+
+[V12__album_metadata.sql](../../src/main/resources/db/migration/V12__album_metadata.sql) holds the
+schema for all of the album work (tagging, joining songs to their album, whole-album downloads), so
+those changes add no migration of their own and cannot land out of order.
+
+- `download_tasks.track_title`, `track_number`, `duration_seconds`: the album or playlist row's own
+  title, YouTube track number (albums only) and length, written by `CREATE_TASKS_SQL` from three more
+  parallel arrays in the same `unnest(...) WITH ORDINALITY` and returned by `CLAIM_DUE_SQL`. On the
+  task because one video id can appear on two rows of one album with different titles, and
+  `media_items` holds one row per id. `position` stays list order. Null on rows written before V12.
+- `media_items.year`, `album_type`: album rows only, upserted with `COALESCE` like every other field.
+- `song_albums` (`youtube_id` PK, `album_id`, `track_number`, `resolved_at`) and `album_searches`
+  (one row per album download: `phase` SEARCH_INIT/SEARCH_POLL/DONE, tier, search id, due time, lease,
+  outcome) with the partial index `idx_album_searches_due`: created empty, unused until the songs-to-
+  album and whole-album changes land.
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.

@@ -212,12 +212,12 @@ public class YtMusicService {
                                         ? collection.getThumbnailUrl()
                                         : track.getVideoId() == null ? null
                                         : fallbackThumbnail(track.getVideoId()),
-                                track.getDurationSeconds(), track.getViews()))
+                                track.getDurationSeconds(), track.getViews(), track.getTrackNumber()))
                         .toList();
-        return new YoutubeCollectionInfo(id, songs,
-                collection.getYear() == null ? null : String.valueOf(collection.getYear()),
-                collection.getTitle(), names(authors), ids(authors), collection.getThumbnailUrl(),
-                isAlbum ? collection.getAudioPlaylistId() : id.replaceFirst("^VL", ""));
+        return new YoutubeCollectionInfo(id, songs, collection.getYear(), collection.getTitle(),
+                names(authors), ids(authors), collection.getThumbnailUrl(),
+                isAlbum ? collection.getAudioPlaylistId() : id.replaceFirst("^VL", ""),
+                collection.getType(), collection.getTrackCount());
     }
 
     private static List<String> names(List<YtMusicSearchResponse.ArtistRef> artists) {

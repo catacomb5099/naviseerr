@@ -12,7 +12,7 @@ import java.util.List;
  * diverge later (track numbers, per-track availability), split then.
  *
  * @param year     null for a playlist — the adapter's {@code PlaylistDetail} has no year, only albums
- *                 do. Carried because it costs nothing and identifies a specific pressing.
+ *                 do. Stored on the album's {@code media_items} row; identifies a specific pressing.
  * @param authorIds never null; the channel id behind each {@code authorNames} entry, {@code ""}
  *                 where unknown, index-aligned like {@link YoutubeSongInfo#authorIds()}. For a
  *                 playlist this is its author's channel, which need not be an artist at all.
@@ -22,20 +22,23 @@ import java.util.List;
  * @param playlistId nullable; the playlist YouTube Music plays this as, for a "play it there" link:
  *                 an album's {@code OLAK5uy_...} (the adapter's {@code audioPlaylistId}), a
  *                 playlist's own bare id. Null for anything built here rather than read from YouTube.
+ * @param type     albums only: {@code "Album"}, {@code "EP"} or {@code "Single"}, as YouTube words it.
+ * @param trackCount nullable; YouTube's own count, which can exceed {@code songs.size()} (unavailable
+ *                 tracks are dropped from {@code songs}, and a playlist can be longer than one page).
  */
-public record YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
+public record YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, Integer year,
                                     String name, List<String> authorNames, List<String> authorIds,
-                                    String imageUrl, String playlistId) {
+                                    String imageUrl, String playlistId, String type, Integer trackCount) {
 
-    /** Not read from YouTube, so there is nothing to play it as there. */
-    public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
+    /** Not read from YouTube: nothing to play it as there, no type, no count of YouTube's own. */
+    public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, Integer year,
                                  String name, List<String> authorNames, List<String> authorIds,
                                  String imageUrl) {
-        this(id, songs, year, name, authorNames, authorIds, imageUrl, null);
+        this(id, songs, year, name, authorNames, authorIds, imageUrl, null, null, null);
     }
 
     /** Names without ids, for a caller that has none to give. */
-    public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
+    public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, Integer year,
                                  String name, List<String> authorNames, String imageUrl) {
         this(id, songs, year, name, authorNames, List.of(), imageUrl);
     }

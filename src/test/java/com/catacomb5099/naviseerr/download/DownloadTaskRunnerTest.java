@@ -588,7 +588,7 @@ class DownloadTaskRunnerTest {
                         new YoutubeSongInfo("v1", List.of("A"), "one", "https://img/a.jpg", 100),
                         new YoutubeSongInfo("v2", List.of("A"), "two", "https://img/a.jpg", 100),
                         new YoutubeSongInfo("v3", List.of("A"), "three", "https://img/a.jpg", 100)),
-                        "1999", "The Album", List.of("A"), List.of("UC-a"), "https://img/a.jpg")));
+                        1999, "The Album", List.of("A"), List.of("UC-a"), "https://img/a.jpg")));
 
         runner.pass().block();
 
@@ -601,6 +601,36 @@ class DownloadTaskRunnerTest {
                 && items.getFirst().title().equals("The Album")
                 && items.getFirst().artistIds().equals(List.of("UC-a"))
                 && items.getFirst().trackCount() == 3));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void anAlbumRequest_givesEachTaskItsRowsOwnTitleNumberAndLength_andTheAlbumRowItsYearTypeAndCount() {
+        Download request = pendingRequest(DownloadType.ALBUM, "MPREb_rAj03C3fO0c");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        // The live 30th Anniversary page lists one id on two rows (tracks 21 and 24).
+        when(ytMusicService.getAlbumInfo("MPREb_rAj03C3fO0c")).thenReturn(Mono.just(
+                new YoutubeCollectionInfo("MPREb_rAj03C3fO0c", List.of(
+                        new YoutubeSongInfo("h7-BHdjeEY0", List.of("Oasis"), List.of("UC-o"),
+                                "Up In The Sky (Sawmills Outtake)", null, 273, null, 21),
+                        new YoutubeSongInfo("h7-BHdjeEY0", List.of("Oasis"), List.of("UC-o"),
+                                "Cigarettes & Alcohol (Sawmills Outtake)", null, 307, null, 24)),
+                        2024, "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"),
+                        List.of("UC-o"), null, null, "Album", 27)));
+
+        runner.pass().block();
+
+        ArgumentCaptor<List<DownloadTask>> tasks = ArgumentCaptor.forClass(List.class);
+        verify(repository).createTasks(eq(request.getDownloadId()), tasks.capture(), eq(T0));
+        assertEquals(List.of("Up In The Sky (Sawmills Outtake)", "Cigarettes & Alcohol (Sawmills Outtake)"),
+                tasks.getValue().stream().map(DownloadTask::trackTitle).toList());
+        assertEquals(List.of(21, 24), tasks.getValue().stream().map(DownloadTask::trackNumber).toList());
+        assertEquals(List.of(273, 307), tasks.getValue().stream().map(DownloadTask::durationSeconds).toList());
+        // YouTube's own total, not the two rows this page happened to list.
+        verify(repository).upsertMedia(argThat(items -> items.getFirst().youtubeId().equals("MPREb_rAj03C3fO0c")
+                && items.getFirst().year() == 2024
+                && items.getFirst().albumType().equals("Album")
+                && items.getFirst().trackCount() == 27));
     }
 
     @Test

@@ -496,7 +496,7 @@ class YtMusicServiceTest {
                 .assertNext(album -> {
                     assertEquals("MPREb_Hl8XJR59OrY", album.id());
                     assertEquals("Definitely Maybe", album.name());
-                    assertEquals("1994", album.year());
+                    assertEquals(1994, album.year());
                     assertEquals(List.of("Oasis"), album.authorNames());
                     assertEquals(List.of("UCmMUZbaYdNH0bEd1PAlAqsA"), album.authorIds());
                     // One task row per entry here, so a dropped track is a song the user asked for
@@ -526,6 +526,68 @@ class YtMusicServiceTest {
     }
 
     @Test
+    void getAlbumInfo_liveDefinitelyMaybe_carriesTrackNumbersTypeYearAndYouTubesTrackCount() throws Exception {
+        String body;
+        try (var in = getClass().getResourceAsStream("/ytmusic/album-definitely-maybe.json")) {
+            body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody(body));
+
+        StepVerifier.create(service.getAlbumInfo("MPREb_Hl8XJR59OrY"))
+                .assertNext(album -> {
+                    assertEquals(1994, album.year());
+                    assertEquals("Album", album.type());
+                    assertEquals(11, album.trackCount());
+                    assertEquals(java.util.stream.IntStream.rangeClosed(1, 11).boxed().toList(),
+                            album.songs().stream().map(s -> s.trackNumber()).toList());
+                    assertEquals("Married with Children", album.songs().getLast().name());
+                    assertEquals(193, album.songs().getLast().durationSeconds());
+                })
+                .verifyComplete();
+    }
+
+    /**
+     * Tracks 21-24 of the live 30th Anniversary Deluxe Edition page (MPREb_rAj03C3fO0c, 04-10-2026):
+     * YouTube lists h7-BHdjeEY0 as both 21 and 24, each row with its own title and length.
+     */
+    private static final String ALBUM_WITH_REPEATED_ID_BODY = """
+            {"browseId": "MPREb_rAj03C3fO0c", "title": "Definitely Maybe (30th Anniversary Deluxe Edition)",
+             "type": "Album", "year": 2024, "trackCount": 27,
+             "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}],
+             "tracks": [
+               {"videoId": "h7-BHdjeEY0", "title": "Up In The Sky (Sawmills Outtake)", "durationSeconds": 273,
+                "trackNumber": 21, "isAvailable": true},
+               {"videoId": "QVjjrOZDKNo", "title": "Columbia (Sawmills Outtake)", "durationSeconds": 438,
+                "trackNumber": 22, "isAvailable": true},
+               {"videoId": "F2WySRKLB24", "title": "Bring It On Down (Sawmills Outtake)", "durationSeconds": 263,
+                "trackNumber": 23, "isAvailable": true},
+               {"videoId": "h7-BHdjeEY0", "title": "Cigarettes & Alcohol (Sawmills Outtake)", "durationSeconds": 307,
+                "trackNumber": 24, "isAvailable": true}]}
+            """;
+
+    @Test
+    void getAlbumInfo_aRepeatedVideoId_keepsEachRowsOwnTitleLengthAndNumber() {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody(ALBUM_WITH_REPEATED_ID_BODY));
+
+        StepVerifier.create(service.getAlbumInfo("MPREb_rAj03C3fO0c"))
+                .assertNext(album -> {
+                    assertEquals(4, album.songs().size(), "a repeated id is still two songs to download");
+                    var first = album.songs().getFirst();
+                    var last = album.songs().getLast();
+                    assertEquals(first.id(), last.id());
+                    assertEquals("Up In The Sky (Sawmills Outtake)", first.name());
+                    assertEquals(273, first.durationSeconds());
+                    assertEquals(21, first.trackNumber());
+                    assertEquals("Cigarettes & Alcohol (Sawmills Outtake)", last.name());
+                    assertEquals(307, last.durationSeconds());
+                    assertEquals(24, last.trackNumber());
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void getPlaylistInfo_readsItsOwnIdAndAuthorShape_andHasNoYear() throws InterruptedException {
         server.enqueue(new MockResponse().setResponseCode(200)
                 .addHeader("Content-Type", "application/json").setBody(PLAYLIST_DETAIL_BODY));
@@ -539,6 +601,8 @@ class YtMusicServiceTest {
                     assertEquals(List.of("UC2"), playlist.authorIds());
                     assertEquals(List.of("UC1"), playlist.songs().getFirst().authorIds());
                     assertNull(playlist.year(), "only albums have a year");
+                    assertNull(playlist.type(), "nor a kind of release");
+                    assertNull(playlist.songs().getFirst().trackNumber(), "a playlist row has no album number");
                     assertEquals("https://example.com/playlist.jpg", playlist.imageUrl());
                     // A playlist's tracks come from anywhere, so the playlist's cover would be the
                     // WRONG picture for them; each gets YouTube's own thumbnail for its videoId.

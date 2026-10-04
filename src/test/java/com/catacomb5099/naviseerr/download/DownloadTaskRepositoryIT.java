@@ -156,6 +156,66 @@ class DownloadTaskRepositoryIT {
         assertEquals(List.of("zeta", "alpha", "mid"), byPosition);
     }
 
+    @Test
+    void createTasks_storesEachRowsOwnTitleNumberAndLength_evenWhenTwoRowsShareAnId() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        // Tracks 21 and 24 of the live 30th Anniversary page share one video id; a playlist row has
+        // no album number.
+        repository.createTasks(id, List.of(
+                track(id, "h7-BHdjeEY0", "Up In The Sky (Sawmills Outtake)", 21, 273),
+                track(id, "h7-BHdjeEY0", "Cigarettes & Alcohol (Sawmills Outtake)", 24, 307),
+                track(id, "v-pl", "Wonderwall", null, null)), NOW).block();
+
+        assertEquals(List.of(
+                        List.of("Up In The Sky (Sawmills Outtake)", "21", "273", "1"),
+                        List.of("Cigarettes & Alcohol (Sawmills Outtake)", "24", "307", "2"),
+                        Arrays.asList("Wonderwall", null, null, "3")),
+                trackColumnsOf(id), "position stays list order beside YouTube's own number");
+        // The claim hands them back, so the task in memory is the whole row.
+        List<DownloadTask> claimed = repository
+                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10).collectList().block();
+        DownloadTask outtake = claimed.stream()
+                .filter(t -> "Cigarettes & Alcohol (Sawmills Outtake)".equals(t.trackTitle())).findFirst().orElseThrow();
+        assertEquals(24, outtake.trackNumber());
+        assertEquals(307, outtake.durationSeconds());
+    }
+
+    @Test
+    void aTaskRowWrittenWithoutTheV12Columns_keepsThemNull_andIsStillClaimed() {
+        UUID id = insertDownload("IN_PROGRESS", "ALBUM");
+        // What every row from before V12 looks like, and what an older instance still writes.
+        template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, position, "
+                        + "phase, phase_entered_at, next_attempt_at) "
+                        + "VALUES (gen_random_uuid(), :id, 'v-old', 'Old - Band', 1, 'SEARCH_INIT', :now, :now)")
+                .bind("id", id).bind("now", NOW).fetch().rowsUpdated().block();
+
+        assertEquals(List.of(Arrays.asList(null, null, null, "1")), trackColumnsOf(id));
+        DownloadTask claimed = repository
+                .claimDueTasks(10, "x", NOW, Duration.ofSeconds(60), true, 10).blockFirst();
+        assertEquals("Old - Band", claimed.songName());
+        assertNull(claimed.trackTitle());
+        assertNull(claimed.trackNumber());
+        assertNull(claimed.durationSeconds());
+    }
+
+    private static DownloadTask track(UUID downloadId, String youtubeId, String title, Integer number,
+                                      Integer seconds) {
+        return DownloadTask.initial(downloadId, youtubeId, title + " - Oasis", NOW).toBuilder()
+                .trackTitle(title).trackNumber(number).durationSeconds(seconds).build();
+    }
+
+    /** title, number, length and position of every row of one download, in position order, as text. */
+    private List<List<String>> trackColumnsOf(UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT track_title, track_number::text AS n, duration_seconds::text AS d, position::text AS p "
+                        + "FROM download_tasks WHERE download_id = :id ORDER BY position")
+                .bind("id", downloadId)
+                .map((row, meta) -> Arrays.asList(row.get("track_title", String.class), row.get("n", String.class),
+                        row.get("d", String.class), row.get("p", String.class)))
+                .all().collectList().block();
+    }
+
     // ---- media_items ---------------------------------------------------------------------------
 
     @Test
@@ -213,6 +273,21 @@ class DownloadTaskRepositoryIT {
                 new MediaItem("v1", "Twice", List.of(), List.of(), null, null, null))).block());
 
         assertEquals("Once", mediaField("v1", "title"));
+    }
+
+    @Test
+    void upsertMedia_storesAnAlbumsYearAndType_andALessCompleteAnswerKeepsThem() {
+        repository.upsertMedia(List.of(new MediaItem("MPREb_Hl8XJR59OrY", "Definitely Maybe", List.of("Oasis"),
+                List.of("UC-oasis"), null, null, 11, 1994, "Album"))).block();
+        // A row written without them (a song request for the same id, or an older instance).
+        repository.upsertMedia(List.of(new MediaItem("MPREb_Hl8XJR59OrY", "Definitely Maybe", List.of("Oasis"),
+                List.of("UC-oasis"), null, null, null))).block();
+
+        assertEquals(List.of(1994, 11), template.getDatabaseClient()
+                .sql("SELECT year, track_count FROM media_items WHERE youtube_id = 'MPREb_Hl8XJR59OrY'")
+                .map((row, meta) -> List.of(row.get("year", Integer.class), row.get("track_count", Integer.class)))
+                .one().block());
+        assertEquals("Album", mediaField("MPREb_Hl8XJR59OrY", "album_type"));
     }
 
     @Test

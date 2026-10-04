@@ -17,7 +17,7 @@ import java.util.stream.IntStream;
  *                   asked for as {@code VLPL...} is answered as {@code PL...}, and downloads key
  *                   {@code media_items} by the requested id (see {@code DownloadTaskRunner}).
  * @param iconURL    capital {@code URL}, matching {@code Track}/{@code Album} on the search contract.
- * @param year       albums only; null for a playlist or when the adapter's year is not numeric.
+ * @param year       albums only; null for a playlist.
  * @param trackCount {@code tracks.size()} -- the available tracks, not YouTube's advertised count.
  * @param playlistId the playlist YouTube Music plays this as, so the client can link "play it on
  *                   YouTube Music": an album's {@code OLAK5uy_...}, a playlist's bare id. Null when
@@ -44,17 +44,6 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
                         songs.get(i).durationSeconds(), i + 1, songs.get(i).plays()))
                 .toList();
         return new CollectionView(requestedId, type, info.name(), info.authorNames(), info.imageUrl(),
-                parseYear(info.year()), tracks.size(), tracks, info.playlistId());
-    }
-
-    private static Integer parseYear(String year) {
-        if (year == null) {
-            return null;
-        }
-        try {
-            return Integer.valueOf(year.trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
+                info.year(), tracks.size(), tracks, info.playlistId());
     }
 }
