@@ -186,6 +186,14 @@ class CollectionControllerTest {
     }
 
     @Test
+    void radio_isRejected_becauseASavedRadioIsReadOnItsOwnRoute() {
+        StepVerifier.create(controller.collection("89d99ba5-913e-438b-a0d9-478700747fc3", DownloadType.RADIO))
+                .assertNext(response -> assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode()))
+                .verifyComplete();
+        verifyNoInteractions(ytMusicService);
+    }
+
+    @Test
     void blankId_isRejectedWith400() {
         StepVerifier.create(controller.collection(" ", DownloadType.ALBUM))
                 .assertNext(response -> assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode()))

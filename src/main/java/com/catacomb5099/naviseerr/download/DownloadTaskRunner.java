@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.curator.CuratorClient;
+import com.catacomb5099.naviseerr.services.RadioRepository;
 import com.catacomb5099.naviseerr.curator.CuratorEdition;
 import com.catacomb5099.naviseerr.curator.CuratorException;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
@@ -41,6 +42,7 @@ public class DownloadTaskRunner {
     private final SlskdService slskdService;
     private final YtMusicService ytMusicService;
     private final CuratorClient curatorClient;
+    private final RadioRepository radioRepository;
     private final LibraryOrganiser organiser;
     private final Clock clock;
     private final Duration loopInterval;
@@ -60,6 +62,7 @@ public class DownloadTaskRunner {
             SlskdService slskdService,
             YtMusicService ytMusicService,
             CuratorClient curatorClient,
+            RadioRepository radioRepository,
             LibraryOrganiser organiser,
             Clock clock,
             @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
@@ -74,6 +77,7 @@ public class DownloadTaskRunner {
         this.slskdService = slskdService;
         this.ytMusicService = ytMusicService;
         this.curatorClient = curatorClient;
+        this.radioRepository = radioRepository;
         this.organiser = organiser;
         this.clock = clock;
         this.loopInterval = loopInterval;
@@ -234,7 +238,7 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * One shape for all four types, so {@link #gatherMetadata} has no branch of its own. A song is
+     * One shape for all five types, so {@link #gatherMetadata} has no branch of its own. A song is
      * a collection of one -- which is exactly what it becomes in {@code download_tasks} anyway -- and
      * a curated edition is a collection whose track list comes from the curator instead of YouTube.
      */
@@ -247,7 +251,22 @@ public class DownloadTaskRunner {
             case ALBUM -> ytMusicService.getAlbumInfo(id);
             case PLAYLIST -> ytMusicService.getPlaylistInfo(id);
             case CURATED -> curatorClient.getEdition(id).map(edition -> curatedCollection(id, edition));
+            case RADIO -> savedRadio(id);
         };
+    }
+
+    /**
+     * The saved radio, never a fresh one from YouTube. An id that is not a UUID or names no saved radio
+     * comes back as a radio with no songs, which {@link #gatherMetadata} fails as nothing-to-download;
+     * an empty Mono would instead leave the row PENDING and retried forever.
+     */
+    private Mono<YoutubeCollectionInfo> savedRadio(String id) {
+        YoutubeCollectionInfo none = new YoutubeCollectionInfo(id, List.of(), null, null, List.of(), null);
+        try {
+            return radioRepository.find(UUID.fromString(id)).defaultIfEmpty(none);
+        } catch (IllegalArgumentException notAUuid) {
+            return Mono.just(none);
+        }
     }
 
     /**
