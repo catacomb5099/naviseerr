@@ -36,7 +36,7 @@ public class SlskdSearchResultProcessor {
     // history. So: can they start at all, then how many people are ahead of you, then speed.
     private static final Comparator<SearchResponseItem> BY_AVAILABILITY =
             Comparator
-                    .comparing((SearchResponseItem peer) -> !Boolean.TRUE.equals(peer.getHasFreeUploadsSlot()))
+                    .comparing((SearchResponseItem peer) -> !Boolean.TRUE.equals(peer.getHasFreeUploadSlot()))
                     .thenComparingInt(SearchResponseItem::getQueueLength)
                     .thenComparingInt(peer -> -peer.getUploadSpeed());
 
@@ -150,7 +150,7 @@ public class SlskdSearchResultProcessor {
 
     /** No slot for us now and a long line ahead of us: the profile of a sharer that never serves. */
     private boolean isOverloaded(SearchResponseItem sharer) {
-        return !Boolean.TRUE.equals(sharer.getHasFreeUploadsSlot())
+        return !Boolean.TRUE.equals(sharer.getHasFreeUploadSlot())
                 && sharer.getQueueLength() > maxSharerQueue;
     }
 

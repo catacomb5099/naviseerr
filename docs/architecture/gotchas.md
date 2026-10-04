@@ -69,6 +69,12 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - What/impact: replaced by `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=`. A `naviseerr-client` image older than this server gets a 404 on every download request. Normally a self-hosted service would keep a shim for a release; here the old route inserts a row with no YouTube id, which admission cannot resolve, so every download through it would fail — and a route that reliably produces failures is worse for the user than a 404, because they cannot tell "my server is newer than my client" from "Soulseek had nothing".
 - Suggested action: ship the client change alongside the server. Nothing to fix here.
 
+## 11. A misspelt slskd field reads as null, silently (free-slot flag fixed 04-10-2026)
+
+- Where: the DTOs under [schema/slskd](../../src/main/java/com/catacomb5099/naviseerr/schema/slskd/), which bind by field name and ignore unknown JSON keys.
+- What happened: `SearchResponseItem` spelt the free-slot flag `hasFreeUploadsSlot`, but slskd sends `hasFreeUploadSlot`. It read null for every sharer, so `BY_AVAILABILITY`'s first key never told sharers apart, `isOverloaded` demoted every sharer with more than `max-sharer-queue` waiting even when it had a slot free, and every stored `DownloadCandidate.hasFreeUploadSlot` was null (all 681 rows checked on 04-10-2026). In real searches 86% of sharers report a free slot.
+- Suggested action: name new fields from a captured slskd response, and pin them with real JSON as `SlskdServiceSearchShapeTest` and `SlskdServiceTransfersShapeTest` do. Tests that mock the getters cannot catch this.
+
 ## Related docs
 
 - [download-manager.md](download-manager.md) - the durable state machine these entries reference.

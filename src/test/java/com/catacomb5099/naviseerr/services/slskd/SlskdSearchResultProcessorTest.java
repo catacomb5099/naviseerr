@@ -334,11 +334,11 @@ class SlskdSearchResultProcessorTest {
                 result.stream().map(e -> e.peer().getUsername()).toList());
     }
 
-    private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadsSlot, int queueLength, SearchFile file) {
+    private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadSlot, int queueLength, SearchFile file) {
         SearchResponseItem item = mock(SearchResponseItem.class);
         when(item.getUsername()).thenReturn(username);
         when(item.getUploadSpeed()).thenReturn(uploadSpeed);
-        when(item.getHasFreeUploadsSlot()).thenReturn(hasFreeUploadsSlot);
+        when(item.getHasFreeUploadSlot()).thenReturn(hasFreeUploadSlot);
         when(item.getQueueLength()).thenReturn(queueLength);
         when(item.getFiles()).thenReturn(List.of(file));
         return item;

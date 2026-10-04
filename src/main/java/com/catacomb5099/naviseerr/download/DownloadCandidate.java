@@ -44,7 +44,7 @@ public record DownloadCandidate(
                 file.getSize(),
                 file.getCode(),
                 file.getIsLocked(),
-                pick.peer().getHasFreeUploadsSlot(),
+                pick.peer().getHasFreeUploadSlot(),
                 pick.peer().getQueueLength(),
                 pick.peer().getUploadSpeed(),
                 pick.grade().name());
