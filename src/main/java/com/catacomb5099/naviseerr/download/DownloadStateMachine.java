@@ -79,7 +79,7 @@ public class DownloadStateMachine {
     /** {@code state} missing or not yet complete is treated as still running, not as an error. */
     public DownloadDecision afterSearchPoll(DownloadTask task, SearchState state,
                                             List<DownloadCandidate> selected, Instant now) {
-        if (state != null && SlskdSearchState.isFailure(state.getState())) {
+        if (state != null && SlskdSearchState.isFailure(state.getState(), state.getResponseCount())) {
             return giveUpSearch(task, DownloadFailureCode.SEARCH_FAILED, now);
         }
         if (state == null || !Boolean.TRUE.equals(state.getIsComplete())) {
