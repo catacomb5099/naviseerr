@@ -704,6 +704,32 @@ class DownloadStateMachineTest {
                 MAX_TRANSFERS_PER_SHARER - 1, T0).isEmpty());
     }
 
+    @Test
+    void downloadInit_whoseSharerWentOnTheStallingListWhileItWaited_movesToTheNextSharer() {
+        // Held behind alice's two, which then sat ten minutes untouched: alice is stalling now, and
+        // her count is back to zero. Asking her anyway would burn another ten minutes per song.
+        stallingSharers.markStalled("alice", T0);
+
+        DownloadDecision d = machine.beforeDownloadInit(downloadInit(candidates("alice", "bob"), 0, 0),
+                0, T0.plusSeconds(5)).orElseThrow();
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(1, next.candidateIndex());
+        assertNull(next.slskdUsername());
+    }
+
+    @Test
+    void downloadPoll_waitingWithNoRecordedSharer_isJudgedOnItsOwn() {
+        DownloadTask noSharer = downloadPolling(candidates("alice"), 0, 0, "abc").toBuilder()
+                .slskdUsername(null).build();
+
+        DownloadDecision d = machine.afterDownloadPoll(noSharer,
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"), Set.of("alice"), T0.plusSeconds(10));
+
+        assertEquals(T0, assertInstanceOf(DownloadDecision.Continue.class, d).next().phaseEnteredAt());
+    }
+
     // ---- a sharer that says no ---------------------------------------------------------------
 
     @Test

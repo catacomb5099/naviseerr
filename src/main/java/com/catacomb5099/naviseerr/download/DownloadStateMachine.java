@@ -158,11 +158,18 @@ public class DownloadStateMachine {
      * the default of two, a sharer holds at most two files of ours, typically one sending and one
      * waiting its turn, and afterDownloadPoll keeps the waiting one from being given up on. Empty when
      * the transfer may start; {@code heldBySharer} includes the transfers this pass already started.
+     * A held song can wait long enough for its sharer to land on the stalling list (its two transfers
+     * sat ten minutes untouched); it then moves to its next non-stalling sharer, as a failover would,
+     * instead of burning another ten minutes there once the sharer's count drops.
      *
      * <p>ponytail: a held song is claimed and put back every download-poll-interval, sharing batch-size
      * with the real polls; leave held rows out of CLAIM_DUE_SQL if a long wait ever crowds them out.
      */
     public Optional<DownloadDecision> beforeDownloadInit(DownloadTask task, int heldBySharer, Instant now) {
+        int pick = pickCandidate(task.candidates(), task.candidateIndex(), now);
+        if (pick != task.candidateIndex()) {
+            return Optional.of(new DownloadDecision.Continue(rebuild(task, now, pick, 0)));
+        }
         return heldBySharer < maxTransfersPerSharer
                 ? Optional.empty()
                 : Optional.of(new DownloadDecision.Continue(task.dueAt(now.plus(downloadPollInterval))));
@@ -222,7 +229,7 @@ public class DownloadStateMachine {
         // hour behind its album's other tracks, which would otherwise time out the moment its own
         // bytes start, and the gap between one file finishing and the next starting. Bounded: only
         // our own transfers count, and max-transfers-per-sharer keeps them few.
-        if (waiting && delivering.contains(task.slskdUsername())) {
+        if (waiting && task.slskdUsername() != null && delivering.contains(task.slskdUsername())) {
             return new DownloadDecision.Continue(observed.toBuilder()
                     .phaseEnteredAt(now).nextAttemptAt(now.plus(downloadPollInterval)).build());
         }
