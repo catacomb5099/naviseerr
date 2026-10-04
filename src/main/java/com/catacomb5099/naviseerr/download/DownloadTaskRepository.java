@@ -360,25 +360,72 @@ public class DownloadTaskRepository {
 
     /**
      * Finished songs whose file has not been filed into the library yet, oldest first, with the names
-     * their folders are built from: the song's own media row and its download's (the album's, for an
-     * album track). {@code finished_at > :cutoff} is what stops this from trawling every success in
-     * the install's history the day the organiser is switched on, and is also the give-up rule: a file
-     * that has not appeared by then is left where slskd put it and never looked for again.
+     * their folders are built from: the song's own media row, its download's (the album's, for an
+     * album track) and, for a song or playlist track, its trusted YouTube Music album's
+     * ({@code song_albums}, written by {@link SongAlbumResolver}). {@code finished_at > :cutoff} is
+     * what stops this from trawling every success in the install's history the day the organiser is
+     * switched on, and is also the give-up rule: a file that has not appeared by then is left where
+     * slskd put it and never looked for again.
+     *
+     * <p>A song or playlist track with no album answer yet waits until {@code :albumCutoff} (a short
+     * grace after it finished), then is filed by its own name. The wait is in the WHERE, not applied
+     * after the LIMIT, so waiting songs never fill the batch and hold back ones that are ready.
      */
     private static final String TASKS_TO_ORGANISE_SQL = """
             SELECT t.task_id, t.slskd_filename, t.finished_at, d.download_type,
                    s.title AS song_title, s.artists AS song_artists,
-                   c.title AS collection_title, c.artists AS collection_artists
+                   c.title AS collection_title, c.artists AS collection_artists,
+                   al.title AS album_title, al.artists AS album_artists
               FROM download_tasks t
               JOIN downloads d ON d.download_id = t.download_id
               LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
               LEFT JOIN media_items c ON c.youtube_id = d.youtube_id
+              LEFT JOIN song_albums a ON a.youtube_id = t.youtube_id AND d.download_type <> 'ALBUM'
+              LEFT JOIN media_items al ON al.youtube_id = a.album_id
              WHERE t.phase = 'SUCCEEDED'
                AND t.library_path IS NULL
                AND t.slskd_filename IS NOT NULL
                AND t.finished_at > :cutoff
+               -- ponytail: any answer counts, including a week-old "none" the lookup is about to ask
+               -- again; that song is then filed by its own name. Compare resolved_at if that matters.
+               AND (d.download_type = 'ALBUM' OR a.youtube_id IS NOT NULL OR t.finished_at <= :albumCutoff)
              ORDER BY t.finished_at
              LIMIT :limit
+            """;
+
+    /**
+     * Songs and playlist tracks whose YouTube Music album is still to be looked up: no answer yet, or a
+     * "none trusted" answer older than {@code :relookBefore}. Only rows still downloading, or finished
+     * and not filed yet within the organiser's window -- the history is never trawled (its files are
+     * filed already, and nothing re-files them). One row per YouTube id, oldest request first.
+     */
+    private static final String SONGS_TO_RESOLVE_SQL = """
+            SELECT youtube_id, song_name, duration_seconds, download_type, download_youtube_id
+              FROM (SELECT DISTINCT ON (t.youtube_id)
+                           t.youtube_id, t.song_name, COALESCE(t.duration_seconds, s.duration_seconds) AS duration_seconds,
+                           d.download_type, d.youtube_id AS download_youtube_id, d.created_at, t.position
+                      FROM download_tasks t
+                      JOIN downloads d ON d.download_id = t.download_id
+                      LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
+                      LEFT JOIN song_albums a ON a.youtube_id = t.youtube_id
+                     WHERE d.download_type <> 'ALBUM'
+                       AND t.youtube_id IS NOT NULL
+                       AND (a.youtube_id IS NULL OR (a.album_id IS NULL AND a.resolved_at < :relookBefore))
+                       AND t.phase <> 'FAILED'
+                       AND (t.phase <> 'SUCCEEDED' OR (t.library_path IS NULL AND t.finished_at > :cutoff))
+                     ORDER BY t.youtube_id, d.created_at, t.position) due
+             ORDER BY created_at, position
+             LIMIT :limit
+            """;
+
+    /** One song's album answer. Upsert: a later answer (a re-look) replaces the old one. */
+    private static final String SAVE_SONG_ALBUM_SQL = """
+            INSERT INTO song_albums (youtube_id, album_id, track_number, resolved_at)
+            VALUES (:youtubeId, :albumId, :trackNumber, :now)
+            ON CONFLICT (youtube_id) DO UPDATE
+               SET album_id = EXCLUDED.album_id,
+                   track_number = EXCLUDED.track_number,
+                   resolved_at = EXCLUDED.resolved_at
             """;
 
     private static final String SET_LIBRARY_PATH_SQL = """
@@ -541,10 +588,15 @@ public class DownloadTaskRepository {
         return client.sql(READMIT_SQL).bind("id", downloadId).fetch().rowsUpdated();
     }
 
-    /** Finished songs still to be moved into the library, oldest first. See {@link LibraryOrganiser}. */
-    public Flux<LibraryOrganiser.Job> tasksToOrganise(int limit, Instant cutoff) {
+    /**
+     * Finished songs still to be moved into the library, oldest first. See {@link LibraryOrganiser}.
+     *
+     * @param albumCutoff a song or playlist track that finished after this waits for its album lookup
+     */
+    public Flux<LibraryOrganiser.Job> tasksToOrganise(int limit, Instant cutoff, Instant albumCutoff) {
         return client.sql(TASKS_TO_ORGANISE_SQL)
                 .bind("cutoff", cutoff)
+                .bind("albumCutoff", albumCutoff)
                 .bind("limit", limit)
                 .map((row, meta) -> new LibraryOrganiser.Job(
                         row.get("task_id", UUID.class),
@@ -554,8 +606,35 @@ public class DownloadTaskRepository {
                         row.get("song_title", String.class),
                         artists(row.get("song_artists", String[].class)),
                         row.get("collection_title", String.class),
-                        artists(row.get("collection_artists", String[].class))))
+                        artists(row.get("collection_artists", String[].class)),
+                        row.get("album_title", String.class),
+                        artists(row.get("album_artists", String[].class))))
                 .all();
+    }
+
+    /** Songs whose album is still to be looked up, oldest request first. See {@link SongAlbumResolver}. */
+    public Flux<SongAlbumResolver.Song> songsToResolve(int limit, Instant cutoff, Instant relookBefore) {
+        return client.sql(SONGS_TO_RESOLVE_SQL)
+                .bind("cutoff", cutoff)
+                .bind("relookBefore", relookBefore)
+                .bind("limit", limit)
+                .map((row, meta) -> new SongAlbumResolver.Song(
+                        row.get("youtube_id", String.class),
+                        row.get("song_name", String.class),
+                        row.get("duration_seconds", Integer.class),
+                        DownloadType.valueOf(row.get("download_type", String.class)),
+                        row.get("download_youtube_id", String.class)))
+                .all();
+    }
+
+    /** @param albumId null for "looked, and no album could be trusted"; then so is {@code trackNumber} */
+    public Mono<Long> saveSongAlbum(String youtubeId, String albumId, Integer trackNumber, Instant now) {
+        DatabaseClient.GenericExecuteSpec spec = client.sql(SAVE_SONG_ALBUM_SQL)
+                .bind("youtubeId", youtubeId)
+                .bind("now", now);
+        spec = bindNullable(spec, "albumId", albumId);
+        spec = trackNumber == null ? spec.bindNull("trackNumber", Integer.class) : spec.bind("trackNumber", trackNumber);
+        return spec.fetch().rowsUpdated();
     }
 
     /** Records where a song's file now lives. Writes once: a second call for the same task is a no-op. */

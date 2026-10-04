@@ -39,7 +39,7 @@ class LibraryOrganiserTest {
 
     private static LibraryOrganiser.Job song(String remote, String title, String... artists) {
         return new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG, remote, NOW.minusSeconds(5),
-                title, List.of(artists), null, List.of());
+                title, List.of(artists), null, List.of(), null, List.of());
     }
 
     private Path put(Path dir, String name) throws IOException {
@@ -164,11 +164,40 @@ class LibraryOrganiserTest {
         put(downloads.resolve("Doolittle"), "01 - Debaser.flac");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
                 "Pixies\\Doolittle\\01 - Debaser.flac", NOW.minusSeconds(5),
-                "Debaser", List.of("Pixies"), "Doolittle", List.of("Pixies"));
+                "Debaser", List.of("Pixies"), "Doolittle", List.of("Pixies"), null, List.of());
 
         Path filed = organiser.file(job, NOW).block();
 
         assertEquals(root.resolve("Pixies/Doolittle/01 - Debaser.flac"), filed);
+    }
+
+    @Test
+    void aSongOrPlaylistTrackWithATrustedAlbum_goesInThatAlbumsFolder_soItJoinsTheAlbum() throws IOException {
+        // Supersonic requested on its own and Live Forever inside a playlist: both are Definitely Maybe
+        // tracks on YouTube Music, so both land in Oasis/Definitely Maybe/, the folder an album
+        // download of it uses too. Jellyfin makes one album per folder.
+        put(downloads.resolve("a"), "06 Supersonic.flac");
+        put(downloads.resolve("b"), "Live Forever.mp3");
+        LibraryOrganiser.Job single = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG,
+                "x\\a\\06 Supersonic.flac", NOW.minusSeconds(5), "Supersonic", List.of("Oasis"),
+                "Supersonic", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"));
+        LibraryOrganiser.Job inPlaylist = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.PLAYLIST,
+                "x\\b\\Live Forever.mp3", NOW.minusSeconds(5), "Live Forever", List.of("Oasis"),
+                "Britpop", List.of(), "Definitely Maybe", List.of("Oasis"));
+
+        assertEquals(root.resolve("Oasis/Definitely Maybe/06 Supersonic.flac"), organiser.file(single, NOW).block());
+        assertEquals(root.resolve("Oasis/Definitely Maybe/Live Forever.mp3"), organiser.file(inPlaylist, NOW).block());
+    }
+
+    @Test
+    void anAlbumDownloadsTrack_staysInTheAlbumTheUserAskedFor_evenWithASongAlbumOnTheJob() throws IOException {
+        put(downloads.resolve("c"), "01 - Rock n Roll Star.flac");
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
+                "x\\c\\01 - Rock n Roll Star.flac", NOW.minusSeconds(5), "Rock 'n' Roll Star", List.of("Oasis"),
+                "Definitely Maybe (Deluxe Edition Remastered)", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"));
+
+        assertEquals(root.resolve("Oasis/Definitely Maybe (Deluxe Edition Remastered)/01 - Rock n Roll Star.flac"),
+                organiser.file(job, NOW).block());
     }
 
     @Test
@@ -177,7 +206,7 @@ class LibraryOrganiserTest {
         put(downloads.resolve("Freedom of Choice"), "02-devo-whip_it.mp3");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.PLAYLIST,
                 "x\\Freedom of Choice\\02-devo-whip_it.mp3", NOW.minusSeconds(5),
-                "Whip It", List.of("Devo"), "Alt Nation 1989", List.of());
+                "Whip It", List.of("Devo"), "Alt Nation 1989", List.of(), null, List.of());
 
         Path filed = organiser.file(job, NOW).block();
 
@@ -235,7 +264,7 @@ class LibraryOrganiserTest {
     void givesUpQuietly_afterTheGraceWindow_stillWithoutCreatingAnything() {
         LibraryOrganiser.Job old = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.SONG,
                 "Doolittle\\01 - Debaser.flac", NOW.minus(LibraryOrganiser.GIVE_UP_AFTER).minusSeconds(1),
-                "Debaser", List.of("Pixies"), null, List.of());
+                "Debaser", List.of("Pixies"), null, List.of(), null, List.of());
 
         // Same observable outcome as "not yet": no path, no folders. The difference is one WARN line.
         assertNull(organiser.file(old, NOW).block());

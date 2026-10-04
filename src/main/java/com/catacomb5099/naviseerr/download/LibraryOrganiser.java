@@ -38,6 +38,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *   song              root/&lt;primary artist&gt;/&lt;song title&gt;/&lt;file as downloaded&gt;
  *   album track       root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;
  *   playlist track    filed exactly like a song; the playlist itself is one .m3u8 in root/Playlists/
+ *   song or playlist track with a trusted YouTube Music album ({@link SongAlbumResolver})
+ *                     root/&lt;album artist&gt;/&lt;album title&gt;/&lt;file as downloaded&gt;, like that album's tracks
  * </pre>
  *
  * <p>Pure path logic (locating, sanitising, choosing a target) is in static methods so it can be
@@ -51,6 +53,12 @@ public class LibraryOrganiser {
 
     /** A finished song whose file has not turned up in slskd's downloads folder by then is given up on. */
     static final Duration GIVE_UP_AFTER = Duration.ofMinutes(10);
+    /**
+     * How long a finished song or playlist track waits for its album lookup before it is filed by its
+     * own name. The lookup normally answers while the song is still downloading; this covers a busy or
+     * slow YouTube.
+     */
+    static final Duration ALBUM_LOOKUP_GRACE = Duration.ofMinutes(2);
 
     private static final Pattern SEPARATORS = Pattern.compile("[\\\\/]+");
     private static final Pattern DRIVE = Pattern.compile("^[A-Za-z]:$");
@@ -63,10 +71,15 @@ public class LibraryOrganiser {
     /** Where a download's playlist file goes: a folder of nothing but .m3u8s, so Jellyfin never sees it as an album. */
     static final String PLAYLISTS_FOLDER = "Playlists";
 
-    /** One finished song to file, joined with the names its folders are built from. */
+    /**
+     * One finished song to file, joined with the names its folders are built from. {@code albumTitle}
+     * and {@code albumArtists} are the trusted YouTube Music album of a song or playlist track; null and
+     * empty when it has none, and always for an album download's track.
+     */
     public record Job(UUID taskId, DownloadType type, String slskdFilename, Instant finishedAt,
                       String songTitle, List<String> songArtists,
-                      String collectionTitle, List<String> collectionArtists) {}
+                      String collectionTitle, List<String> collectionArtists,
+                      String albumTitle, List<String> albumArtists) {}
 
     /** One finished download whose songs are all filed, ready for its playlist file. */
     public record Collection(UUID downloadId, DownloadType type, String title) {}
@@ -120,6 +133,11 @@ public class LibraryOrganiser {
     /** Songs that finished before this instant are no longer looked for in the downloads folder. */
     public Instant cutoff(Instant now) {
         return now.minus(GIVE_UP_AFTER);
+    }
+
+    /** Songs that finished before this instant no longer wait for their album lookup. */
+    public Instant albumCutoff(Instant now) {
+        return now.minus(ALBUM_LOOKUP_GRACE);
     }
 
     /**
@@ -294,6 +312,10 @@ public class LibraryOrganiser {
         if (job.type() == DownloadType.ALBUM) {
             artist = first(job.collectionArtists(), "Unknown Artist");
             folder = orElse(job.collectionTitle(), "Unknown Album");
+        } else if (job.albumTitle() != null && !job.albumTitle().isBlank()) {
+            // Its album's folder, so it joins that album's other songs: Jellyfin makes one album per folder.
+            artist = first(job.albumArtists(), "Unknown Artist");
+            folder = job.albumTitle();
         } else {
             // A song, or one track of a playlist. Playlist tracks are NOT kept together in one folder:
             // Jellyfin would show that folder as an album named after whichever track came first.

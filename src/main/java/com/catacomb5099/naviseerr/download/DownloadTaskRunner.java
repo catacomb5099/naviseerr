@@ -289,7 +289,7 @@ public class DownloadTaskRunner {
             return Mono.empty();
         }
         Instant cutoff = organiser.cutoff(now);
-        return repository.tasksToOrganise(batchSize, cutoff)
+        return repository.tasksToOrganise(batchSize, cutoff, organiser.albumCutoff(now))
                 .flatMap(job -> organiser.file(job, now)
                         .flatMap(path -> repository.setLibraryPath(job.taskId(), path.toString()))
                         .onErrorResume(error -> {
