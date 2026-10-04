@@ -62,6 +62,21 @@ public class SlskdSearchResultProcessor {
      * @param wording what was actually searched
      */
     public Mono<List<Pick>> selectBestFiles(SearchState state, String query, String wording) {
+        return selectBestFiles(state, query, wording, null);
+    }
+
+    /**
+     * The same, for an album's song searching on its own (P6): a file whose length slskd gives and that
+     * is not within {@link #lengthTolerance} of the album track's is dropped before anything else is
+     * judged, whatever its name says. "Live at Town Hall/03 - Mr. Jones.flac" is graded the requested
+     * version (the name carries no "live"), and only its 379 s against the album's 270 s gives it away.
+     * A file with no length (3.5% of them) is no evidence either way and stays.
+     *
+     * @param albumTrackSeconds the album row's length; null for a song or playlist track, which keeps
+     *                          any length
+     */
+    public Mono<List<Pick>> selectBestFiles(SearchState state, String query, String wording,
+                                            Integer albumTrackSeconds) {
         return Mono.fromCallable(() -> {
             // Null rather than empty when the caller handed us a search fetched without
             // includeResponses. Degrade to "no candidates" instead of an NPE, so the failure reads as
@@ -74,6 +89,18 @@ public class SlskdSearchResultProcessor {
                             .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename(), wording))))
                     .filter(pick -> pick.grade() != TrackMatchingService.Match.NONE)
                     .toList();
+            if (albumTrackSeconds != null) {
+                List<Pick> sameLength = candidates.stream()
+                        .filter(pick -> pick.file().getLength()
+                                .map(seconds -> Math.abs(seconds - albumTrackSeconds) <= lengthTolerance(albumTrackSeconds))
+                                .orElse(true))
+                        .toList();
+                if (sameLength.size() < candidates.size()) {
+                    log.info("query='{}': {} file(s) dropped for not lasting the album track's {} s", query,
+                            candidates.size() - sameLength.size(), albumTrackSeconds);
+                }
+                candidates = sameLength;
+            }
             long unverified = candidates.stream().filter(pick -> pick.grade() == TrackMatchingService.Match.UNVERIFIED).count();
             if (unverified < candidates.size()) {
                 candidates = candidates.stream().filter(pick -> pick.grade() != TrackMatchingService.Match.UNVERIFIED).toList();
@@ -146,6 +173,15 @@ public class SlskdSearchResultProcessor {
             }
         }
         return spread;
+    }
+
+    /**
+     * How far a file's length may be from the YouTube track's and still be the same recording:
+     * max(10 s, 3%). Per track, 90% of the album folders measured 04-10-2026 were within 1-12 s of the
+     * usual length; a live take or another edit is usually further off. Also the whole-album picker's rule.
+     */
+    public static int lengthTolerance(int expectedSeconds) {
+        return Math.max(10, (int) Math.round(expectedSeconds * 0.03));
     }
 
     /** No slot for us now and a long line ahead of us: the profile of a sharer that never serves. */

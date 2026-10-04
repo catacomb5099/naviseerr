@@ -17,12 +17,12 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * P5, whole album first: one album download's search for a sharer holding every song, stepped by
- * {@link DownloadTaskRunner} on the same two search slots the songs use. While it runs, the album's songs
- * are held (their {@code next_attempt_at} lies {@link #holdUntil} ahead, re-extended at each wording), so
- * they do not start searches of their own. It ends by releasing them in one statement: songs a whole
- * folder holds go straight to downloading that folder's file, the rest are due now and search on their
- * own as before. If this step dies, the hold simply runs out and every song searches on its own.
+ * P5, whole album first, and P6, part album next: one album download's search for a sharer holding every
+ * song, or failing that the most of them, stepped by {@link DownloadTaskRunner} on the same two search
+ * slots the songs use. While it runs, the album's songs are held (their {@code next_attempt_at} lies
+ * {@link #holdUntil} ahead, re-extended at each wording), so they do not start searches of their own. It
+ * ends by releasing them in one statement: songs the best folder holds go straight to downloading that
+ * folder's file, the rest are due now and search on their own as before. If this step dies, the hold simply runs out and every song searches on its own.
  *
  * <p>Its own I/O shell and decisions in one place: two phases, one slskd call each, and every way out
  * leads to the same release.
@@ -31,7 +31,7 @@ import java.util.UUID;
 @Component
 public class AlbumSearchStep {
 
-    /** A song gets its file in the best whole folder plus the same track in the next two (other sharers). */
+    /** A song gets its file in the best folder plus the same track in the next two (other sharers). */
     static final int CANDIDATES_PER_SONG = 3;
 
     private final DownloadTaskRepository repository;
@@ -153,25 +153,31 @@ public class AlbumSearchStep {
             return finish(album, AlbumSearch.Outcome.NOTHING_TO_SEARCH, Map.of(), now, owner);
         }
         // Off the event loop: judging 250 responses (about 5,000 files) takes a fifth of a second.
-        return Mono.fromCallable(() -> picker.wholeFolders(responses, songs, album.title(), album.artists(),
+        return Mono.fromCallable(() -> picker.folders(responses, songs, album.title(), album.artists(),
                         sharer -> stallingSharers.isStalling(sharer, now)))
                 .subscribeOn(Schedulers.parallel())
-                .flatMap(whole -> settle(album, responses.size(), songs.size(), whole, now, owner));
+                .flatMap(folders -> settle(album, responses.size(), songs.size(), folders, now, owner));
     }
 
-    private Mono<Void> settle(AlbumSearch album, int responses, int songs, List<AlbumFolderPicker.Folder> whole,
+    private Mono<Void> settle(AlbumSearch album, int responses, int songs, List<AlbumFolderPicker.Folder> folders,
                                Instant now, String owner) {
-        if (whole.isEmpty()) {
-            log.info("Album '{}' of download {}: no sharer among {} has all {} song(s); each searches on its own",
-                    album.title(), album.downloadId(), responses, songs);
+        if (folders.isEmpty()) {
+            log.info("Album '{}' of download {}: no sharer among {} has all {} song(s), or half of them; each "
+                    + "searches on its own", album.title(), album.downloadId(), responses, songs);
             return finish(album, AlbumSearch.Outcome.NO_WHOLE_FOLDER, Map.of(), now, owner);
         }
-        AlbumFolderPicker.Folder best = whole.getFirst();
-        log.info("Album '{}' of download {}: {} whole folder(s); all {} song(s) from '{}' ({}), {} other file(s) "
-                        + "there left alone", album.title(), album.downloadId(), whole.size(), songs,
-                best.peer().getUsername(), best.path(), best.extras());
-        return finish(album, AlbumSearch.Outcome.WHOLE_FOLDER,
-                AlbumFolderPicker.candidates(whole, CANDIDATES_PER_SONG), now, owner);
+        AlbumFolderPicker.Folder best = folders.getFirst();
+        boolean whole = best.files().size() == songs;
+        log.info("Album '{}' of download {}: {} folder(s); {} of {} song(s) from '{}' ({}), {} other file(s) "
+                        + "there left alone{}", album.title(), album.downloadId(), folders.size(),
+                best.files().size(), songs, best.peer().getUsername(), best.path(), best.extras(),
+                whole ? "" : "; the rest search on their own");
+        // P6: only the songs the best folder holds; a song only a later folder has searches on its own
+        // rather than coming from yet another sharer's folder.
+        Map<UUID, List<DownloadCandidate>> picks = AlbumFolderPicker.candidates(folders, CANDIDATES_PER_SONG);
+        picks.keySet().retainAll(best.files().keySet());
+        return finish(album, whole ? AlbumSearch.Outcome.WHOLE_FOLDER : AlbumSearch.Outcome.PART_FOLDER,
+                picks, now, owner);
     }
 
     private Mono<Void> finish(AlbumSearch album, AlbumSearch.Outcome outcome,

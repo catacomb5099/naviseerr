@@ -104,6 +104,15 @@ public record DownloadTask(
         return tiers.get(Math.clamp(searchTier, 0, tiers.size() - 1));
     }
 
+    /**
+     * P6: the length this song's own search holds files to, when it is an album's track (only an album
+     * row has a YouTube track number), so a live take of the same title is not filed as the album's;
+     * null for a song or playlist track, which keeps any length.
+     */
+    public Integer albumTrackSeconds() {
+        return trackNumber == null ? null : durationSeconds;
+    }
+
     public DownloadCandidate currentCandidate() {
         return candidates.get(candidateIndex);
     }

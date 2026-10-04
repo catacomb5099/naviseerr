@@ -117,7 +117,7 @@ class AlbumSearchStepTest {
         SearchResponseItem peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 1, "Baron53");
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(peer))));
-        when(picker.wholeFolders(any(), eq(List.of(song)), eq("Laughing Stock"), eq(List.of("Talk Talk")), any()))
+        when(picker.folders(any(), eq(List.of(song)), eq("Laughing Stock"), eq(List.of("Talk Talk")), any()))
                 .thenReturn(List.of(new AlbumFolderPicker.Folder(peer, "TALK TALK\\LAUGHING STOCK",
                         Map.of(song.taskId(), file), 0)));
 
@@ -129,11 +129,39 @@ class AlbumSearchStepTest {
     }
 
     @Test
+    void noWholeFolder_theBestPartHandsItsSongsTheirFiles_andTheRestSearchOnTheirOwn() {
+        DownloadTask second = DownloadTask.initial(DOWNLOAD, "v2", "Ascension Day - Talk Talk", T0);
+        DownloadTask third = DownloadTask.initial(DOWNLOAD, "v3", "After The Flood - Talk Talk", T0);
+        when(repository.waitingAlbumSongs(any(), any())).thenReturn(Flux.just(song, second, third));
+        SearchFile aFirst = new SearchFile("A\\1.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(333));
+        SearchFile aThird = new SearchFile("A\\3.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(566));
+        SearchFile bFirst = new SearchFile("B\\1.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(333));
+        SearchFile bSecond = new SearchFile("B\\2.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(360));
+        SearchResponseItem a = new SearchResponseItem(2, List.of(aFirst, aThird), true, 0, List.of(), 0, 1, 1, "a");
+        SearchResponseItem b = new SearchResponseItem(2, List.of(bFirst, bSecond), true, 0, List.of(), 0, 1, 1, "b");
+        when(slskd.getSearchWithResponses("s1"))
+                .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(a, b))));
+        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of(
+                new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), aFirst, third.taskId(), aThird), 0),
+                new AlbumFolderPicker.Folder(b, "B", Map.of(song.taskId(), bFirst, second.taskId(), bSecond), 0)));
+
+        step.step(album(DownloadPhase.SEARCH_POLL, 0),
+                Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
+
+        // The second song only b's part has: it searches on its own rather than coming from a second folder.
+        verify(repository).releaseAlbumSongs(eq(DOWNLOAD), eq("me"), eq(AlbumSearch.Outcome.PART_FOLDER),
+                eq(Map.of(song.taskId(), List.of(DownloadCandidate.fromAlbumFolder(a, aFirst),
+                                DownloadCandidate.fromAlbumFolder(b, bFirst)),
+                        third.taskId(), List.of(DownloadCandidate.fromAlbumFolder(a, aThird)))),
+                eq(T0.plusSeconds(4)));
+    }
+
+    @Test
     void aSearchStuckRunningPastItsBudget_isJudgedOnWhatItFound() {
         // slskd leaves some searches "InProgress" for days; the budget ends the wait, not the album.
         when(slskd.getSearchWithResponses("s1")).thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses(
                 "s1", false, "InProgress", List.of(new SearchResponseItem(0, List.of(), true, 0, List.of(), 0, 1, 1, "x")))));
-        when(picker.wholeFolders(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of());
 
         step.step(album(DownloadPhase.SEARCH_POLL, 0),
                 Map.of("s1", SlskdFixtures.searchState("s1", false, "InProgress")), T0.plus(BUDGET), "me").block();

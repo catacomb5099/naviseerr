@@ -20,18 +20,19 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * P5: which sharers' folders hold a whole album, best first. Pure apart from its two collaborators,
- * which supply the rules a single song is already judged by: {@link TrackMatchingService#grade} must
- * call a file the requested version (EXACT) of one track, and the file must pass the same format rule
- * ({@link SlskdSearchResultProcessor#isLosslessOrHighBitRate}). What is new here is only what an album
- * needs and a song does not: files grouped by sharer and folder (disc subfolders merged), each file's
- * length held against the YouTube row's, one file per track and one track per file, and the folder
- * shown to be the album artist's.
+ * P5 and P6: which sharers' folders hold the album, whole ones first, then the ones holding the most of
+ * it. Pure apart from its two collaborators, which supply the rules a single song is already judged by:
+ * {@link TrackMatchingService#grade} must call a file the requested version (EXACT) of one track, and
+ * the file must pass the same format rule ({@link SlskdSearchResultProcessor#isLosslessOrHighBitRate}).
+ * What is new here is only what an album needs and a song does not: files grouped by sharer and folder
+ * (disc subfolders merged), each file's length held against the YouTube row's, one file per track and
+ * one track per file, and the folder shown to be the album artist's.
  *
  * <p>Measured 04-10-2026 on eight real album searches (understand-slskd.md): a whole folder existed for
  * every one, including Talk Talk's Laughing Stock, with 72 to 230 clean folders each; deluxe editions
  * (Definitely Maybe: 32 folders of 40+ files) sit beside the plain ones, which is why only the matched
- * files are ever downloaded.
+ * files are ever downloaded. Some folders are genuinely partial (raphyduck's Definitely Maybe lacks Live
+ * Forever), which is what a part folder is for when nobody has the whole album.
  */
 @Component
 public class AlbumFolderPicker {
@@ -68,51 +69,55 @@ public class AlbumFolderPicker {
     }
 
     /**
-     * One sharer's folder holding every track: the file for each task, and how many usable audio files
-     * it has besides (bonus tracks, other takes; never downloaded, but a sign of a deluxe edition).
+     * One sharer's folder holding every track, or (P6) a part of them: the file for each task it holds,
+     * and how many usable audio files it has besides (bonus tracks, other takes; never downloaded, but a
+     * sign of a deluxe edition).
      */
     public record Folder(SearchResponseItem peer, String path, Map<UUID, SearchFile> files, int extras) {}
 
     /**
-     * Every folder that holds all of {@code tracks}, best first: a sharer that can start now, then the
-     * shortest queue, then the fewest extra files, then speed (the song picker's order, with the extras
-     * slotted in before the sharer's own speed claim); an overloaded sharer (no free slot and a queue past
-     * {@code max-sharer-queue}) goes last. Stalling sharers are left out.
+     * Every folder that holds all of {@code tracks}, or at least half of them and at least two (P6: a part
+     * album from one sharer beats a song from each of many), best first: the most tracks, so every whole
+     * folder comes before any part; then the song picker's order -- an overloaded sharer (no free slot and
+     * a queue past {@code max-sharer-queue}) last, a sharer that can start now, the shortest queue -- with
+     * the fewest extra files slotted in before the sharer's own speed claim. Stalling sharers are left out.
      *
      * @param tracks       the album's songs still waiting, in track order (the last may run long: a
      *                     hidden track)
      * @param albumArtists YouTube's artists for the album; "Various Artists" for a compilation
      */
-    public List<Folder> wholeFolders(List<SearchResponseItem> responses, List<DownloadTask> tracks,
-                                     String albumTitle, List<String> albumArtists, Predicate<String> stalling) {
+    public List<Folder> folders(List<SearchResponseItem> responses, List<DownloadTask> tracks,
+                                String albumTitle, List<String> albumArtists, Predicate<String> stalling) {
         if (tracks.isEmpty()) {
             return List.of();
         }
+        int fewest = Math.min(tracks.size(), Math.max(2, (tracks.size() + 1) / 2));
         boolean compilation = isCompilation(tracks, albumArtists);
-        List<Folder> whole = new ArrayList<>();
+        List<Folder> found = new ArrayList<>();
         for (Grouped folder : group(responses).values()) {
-            if (folder.usable.size() < tracks.size() || stalling.test(folder.peer.getUsername())
+            if (folder.usable.size() < fewest || stalling.test(folder.peer.getUsername())
                     || !compilation && albumArtists.stream().noneMatch(folder::names)) {
                 continue;
             }
-            Map<UUID, SearchFile> assigned = assign(folder.usable, tracks, albumTitle, albumArtists);
-            if (assigned.size() == tracks.size() && (!compilation || carriesTrackArtists(assigned, tracks))) {
-                whole.add(new Folder(folder.peer, folder.path, assigned, folder.usable.size() - assigned.size()));
+            Map<UUID, SearchFile> assigned = assign(folder.usable, tracks, albumTitle, albumArtists, fewest);
+            if (assigned.size() >= fewest && (!compilation || carriesTrackArtists(assigned, tracks))) {
+                found.add(new Folder(folder.peer, folder.path, assigned, folder.usable.size() - assigned.size()));
             }
         }
-        whole.sort(Comparator
-                .comparing((Folder f) -> files.isOverloaded(f.peer()))
+        found.sort(Comparator
+                .comparingInt((Folder f) -> -f.files().size())
+                .thenComparing(f -> files.isOverloaded(f.peer()))
                 .thenComparing(f -> !Boolean.TRUE.equals(f.peer().getHasFreeUploadSlot()))
                 .thenComparingInt(f -> f.peer().getQueueLength())
                 .thenComparingInt(Folder::extras)
                 .thenComparingInt(f -> -f.peer().getUploadSpeed()));
-        return whole;
+        return found;
     }
 
     /**
-     * Each track's candidates: its file in the best folder, then in the next folders of OTHER sharers,
-     * up to {@code perTrack}, so a sharer that stalls costs one candidate and the next whole folder takes
-     * over (P5). Every song of the album gets the same sharer first.
+     * Each track's candidates: its file in the best folder, then in the next folders of OTHER sharers
+     * that hold it, up to {@code perTrack}, so a sharer that stalls costs one candidate and the next
+     * folder takes over (P5). Every song the best folder holds gets the same sharer first.
      */
     public static Map<UUID, List<DownloadCandidate>> candidates(List<Folder> ranked, int perTrack) {
         List<Folder> chosen = new ArrayList<>();
@@ -180,14 +185,16 @@ public class AlbumFolderPicker {
      * One file per track, one track per file. Every pairing the song rules accept (EXACT, the length
      * within max(10 s, 3%), no other-take word) is ranked -- the title as written beats the title once
      * brackets are dropped, so "Up In The Sky" takes "04 Up In The Sky.flac" and not "(Sawmills Outtake)";
-     * then the smaller length gap; then the file's own track number -- and taken best first.
+     * then the smaller length gap; then the file's own track number -- and taken best first. Gives up,
+     * empty, as soon as fewer than {@code fewest} tracks can still be found here.
      *
      * <p>ponytail: greedy, not an optimal assignment; an album's tracks rarely compete for one file, and
      * when they do the better pairing wins, which is what an optimal one would mostly do too.
      */
     private Map<UUID, SearchFile> assign(List<SearchFile> usable, List<DownloadTask> tracks,
-                                         String albumTitle, List<String> albumArtists) {
+                                         String albumTitle, List<String> albumArtists, int fewest) {
         List<Pair> pairs = new ArrayList<>();
+        int missing = 0;
         String albumWords = albumTitle + " " + String.join(" ", albumArtists);
         for (int i = 0; i < tracks.size(); i++) {
             DownloadTask track = tracks.get(i);
@@ -211,8 +218,8 @@ public class AlbumFolderPicker {
                         track.trackNumber() != null && track.trackNumber().equals(trackNumber(leaf))));
                 any = true;
             }
-            if (!any) {
-                return Map.of(); // a track nobody in this folder has: not whole, stop looking
+            if (!any && ++missing > tracks.size() - fewest) {
+                return Map.of(); // too many tracks nobody in this folder has: stop looking
             }
         }
         pairs.sort(Comparator.comparing((Pair p) -> !p.exactTitle())
@@ -245,7 +252,7 @@ public class AlbumFolderPicker {
         if (expected == null) {
             return Optional.of(Integer.MAX_VALUE);
         }
-        int tolerance = Math.max(10, (int) Math.round(expected * 0.03));
+        int tolerance = SlskdSearchResultProcessor.lengthTolerance(expected);
         int diff = seconds - expected;
         boolean fits = last ? diff >= -tolerance : Math.abs(diff) <= tolerance;
         return fits ? Optional.of(Math.abs(diff)) : Optional.empty();
@@ -290,9 +297,10 @@ public class AlbumFolderPicker {
 
     private static boolean carriesTrackArtists(Map<UUID, SearchFile> assigned, List<DownloadTask> tracks) {
         long carrying = tracks.stream()
-                .filter(t -> TrackMatchingService.nameInPath(artistOf(t), assigned.get(t.taskId()).getFilename()))
+                .filter(t -> assigned.containsKey(t.taskId())
+                        && TrackMatchingService.nameInPath(artistOf(t), assigned.get(t.taskId()).getFilename()))
                 .count();
-        return carrying >= COMPILATION_ARTIST_SHARE * tracks.size();
+        return carrying >= COMPILATION_ARTIST_SHARE * assigned.size();
     }
 
     /** The song's first artist: song_name is "Title - Artist" (DownloadTaskRunner.soulseekQuery). */
