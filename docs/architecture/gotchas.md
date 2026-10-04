@@ -24,11 +24,11 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - Why a wrong string was always low-risk: an unrecognised state falls through to `SlskdSearchState.isFailure`'s default of `false`, which routes to "completed with no usable candidates" (`NO_CANDIDATES`) rather than being misclassified as success.
 - What that same reading DID find: the searches were fine, naviseerr was flooding slskd. slskd runs two searches at a time (hard-coded in slskd 0.24+, via Soulseek.NET's `MaximumConcurrentSearches`) and queues the rest inside itself while answering every `POST /searches` with 200 immediately. 26 of the 50 searches had been failed by naviseerr's 120 s `search-budget-ms` — a clock that starts at submission — and then completed normally in slskd minutes later. Fixed by `download-task.max-concurrent-searches` (see [download-manager.md](download-manager.md#four-independent-bounds)).
 
-## 4. The `"flac"` extension check is case-sensitive
+## 4. The FLAC check trusted slskd's `extension` field (fixed 04-10-2026)
 
-- Where: [SlskdSearchResultProcessor.isFlacAndHighBitrate](../../src/main/java/com/catacomb5099/naviseerr/services/slskd/SlskdSearchResultProcessor.java) - `file.getExtension().equals("flac")`.
-- Impact: a file reported with extension `"FLAC"` or `"Flac"` fails this check and is kept only if it also clears the bitrate filter, so some genuine FLAC files can be silently excluded from candidates.
-- Suggested action: `equalsIgnoreCase("flac")`. Left as-is deliberately through the durable-download-state-machine work — `selectBestFiles` and everything under it stayed byte-for-byte unchanged so its existing tests passing unmodified could serve as the guard that the pipeline rewrite did not also touch ranking/filtering; fixing this is a small, separate, well-scoped change.
+- Where: [SlskdSearchResultProcessor.isLosslessOrHighBitRate](../../src/main/java/com/catacomb5099/naviseerr/services/slskd/SlskdSearchResultProcessor.java), formerly `isFlacAndHighBitrate` with `file.getExtension().equals("flac")`.
+- What it was: worse than the case-sensitivity issue first logged here. slskd leaves `extension` blank on most files (8,972 of 14,188 FLAC files on 04-10-2026), sometimes gets it wrong (218 FLAC files claimed `"mp3"`), and lossless files carry no `bitRate`, so most FLAC failed both halves of the filter and MP3 won (Ticket To Ride kept 8 of 520 files). A null extension would also have thrown.
+- Status: **fixed.** The format comes from the file name's suffix, case-insensitive, falling back to `extension` only for a name with no suffix. Lossless suffixes (`flac`, `wav`, `aif`, `aiff`, `ape`, `wv`) always pass; everything else still needs `bitRate >= slskd-service.min-bit-rate`, so VBR MP3, m4a and opus (no or lower reported bit rate) are still dropped.
 
 ## 5. `@EnableWebFlux` + wide-open CORS
 
