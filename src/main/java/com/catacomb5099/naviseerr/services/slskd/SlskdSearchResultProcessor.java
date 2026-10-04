@@ -149,7 +149,7 @@ public class SlskdSearchResultProcessor {
     }
 
     /** No slot for us now and a long line ahead of us: the profile of a sharer that never serves. */
-    private boolean isOverloaded(SearchResponseItem sharer) {
+    public boolean isOverloaded(SearchResponseItem sharer) {
         return !Boolean.TRUE.equals(sharer.getHasFreeUploadSlot())
                 && sharer.getQueueLength() > maxSharerQueue;
     }
@@ -158,9 +158,9 @@ public class SlskdSearchResultProcessor {
 
     /**
      * Lossless files always pass; slskd reports no bit rate for them (13,845 of 14,188 FLAC files on
-     * 04-10-2026), so the bit-rate rule is for lossy files only.
+     * 04-10-2026), so the bit-rate rule is for lossy files only. The whole-album picker applies the same rule.
      */
-    private boolean isLosslessOrHighBitRate(SearchFile file) {
+    public boolean isLosslessOrHighBitRate(SearchFile file) {
         return LOSSLESS.contains(format(file)) || file.getBitRate().filter(bitRate -> bitRate >= minBitRate).isPresent();
     }
 

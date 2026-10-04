@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 class DownloadTaskRunnerTest {
@@ -45,6 +46,7 @@ class DownloadTaskRunnerTest {
     private YtMusicService ytMusicService;
     private LibraryOrganiser organiser;
     private CuratorClient curatorClient;
+    private AlbumSearchStep albumSearches;
     private DownloadTaskRunner runner;
 
     @BeforeEach
@@ -56,11 +58,12 @@ class DownloadTaskRunnerTest {
         ytMusicService = mock(YtMusicService.class);
         organiser = mock(LibraryOrganiser.class);
         curatorClient = mock(CuratorClient.class);
+        albumSearches = mock(AlbumSearchStep.class);
         when(organiser.isEnabled()).thenReturn(false);
         when(organiser.deletePartials(any())).thenReturn(Mono.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.empty());
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.empty());
-        when(repository.createTasks(any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.createTasks(any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.upsertMedia(any())).thenReturn(Mono.just(1L));
         when(repository.concludeDownloads()).thenReturn(Mono.just(0L));
         when(repository.failUnadmitted(any(), any(), any())).thenReturn(Mono.just(1L));
@@ -69,13 +72,16 @@ class DownloadTaskRunnerTest {
         when(repository.countActiveSearches()).thenReturn(Mono.just(0L));
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.empty());
+        when(repository.claimDueAlbumSearches(anyInt(), any(), any(), any(), anyInt())).thenReturn(Flux.empty());
+        when(albumSearches.holdUntil(any())).thenAnswer(inv -> inv.<java.time.Instant>getArgument(0).plusSeconds(240));
+        when(albumSearches.step(any(), any(), any(), any())).thenReturn(Mono.empty());
         when(repository.save(any(), any())).thenReturn(Mono.just(1L));
         when(downloadService.finishTask(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskdService.getAllSearches()).thenReturn(Flux.empty());
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                ytMusicService, curatorClient, organiser, Clock.fixed(T0, ZoneOffset.UTC),
+                ytMusicService, curatorClient, organiser, albumSearches, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
     }
 
@@ -307,6 +313,73 @@ class DownloadTaskRunnerTest {
                 eq(true), eq(1));
     }
 
+    // ---- whole album first (P5) ------------------------------------------------------------------
+
+    private static AlbumSearch albumSearch(DownloadPhase phase, String searchId) {
+        return AlbumSearch.builder().downloadId(UUID.randomUUID()).phase(phase).searchId(searchId)
+                .phaseEnteredAt(T0).nextAttemptAt(T0).title("Definitely Maybe").artists(List.of("Oasis")).build();
+    }
+
+    @Test
+    void albumSearchesShareTheSearchSlots_andAreClaimedFirst() {
+        // Two free slots, one album and five songs due: one album search and one song search start.
+        AlbumSearch album = albumSearch(DownloadPhase.SEARCH_INIT, null);
+        when(repository.claimDueAlbumSearches(anyInt(), any(), any(), any(), anyInt())).thenReturn(Flux.just(album));
+
+        runner.pass().block();
+
+        verify(repository).claimDueAlbumSearches(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)), eq(2));
+        verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)), eq(true), eq(1));
+        verify(albumSearches).step(eq(album), any(), any(), any());
+    }
+
+    @Test
+    void anAlbumSearchAlreadyRunning_takesNoSlot_andIsPolledFromTheBatchedSearchList() {
+        AlbumSearch album = albumSearch(DownloadPhase.SEARCH_POLL, "album-search");
+        when(repository.countActiveSearches()).thenReturn(Mono.just(1L));
+        when(repository.claimDueAlbumSearches(anyInt(), any(), any(), any(), anyInt())).thenReturn(Flux.just(album));
+        when(slskdService.getAllSearches()).thenReturn(Flux.just(
+                SlskdFixtures.searchState("album-search", true, "Completed")));
+
+        runner.pass().block();
+
+        verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)), eq(true), eq(1));
+        verify(albumSearches).step(eq(album), argThat(searches -> searches.containsKey("album-search")), any(), any());
+    }
+
+    @Test
+    void anAlbumSearchStart_goesBeforeTheSongSearches_oneAfterAnother() {
+        AlbumSearch album = albumSearch(DownloadPhase.SEARCH_INIT, null);
+        DownloadTask song = at(DownloadPhase.SEARCH_INIT);
+        when(repository.claimDueAlbumSearches(anyInt(), any(), any(), any(), anyInt())).thenReturn(Flux.just(album));
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(song));
+        List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+        when(albumSearches.step(eq(album), any(), any(), any())).thenReturn(
+                Mono.delay(Duration.ofMillis(50)).doOnNext(t -> order.add("album done")).then());
+        when(executor.execute(eq(song), any(), any(), any())).thenAnswer(inv -> {
+            order.add("song started");
+            return Mono.just(new DownloadDecision.Continue(song.dueAt(T0.plusSeconds(2))));
+        });
+
+        runner.pass().block();
+
+        assertEquals(List.of("album done", "song started"), order);
+    }
+
+    @Test
+    void aSongWhoseAlbumFolderFilesAllFailed_goesBackToItsOwnSearch_andTheirPartialFilesGo() {
+        DownloadTask task = downloadPolling(albumFolderCandidates("alice"), 0, 0, "abc");
+        DownloadTask searching = task.withPhase(DownloadPhase.SEARCH_INIT, T0).toBuilder().candidates(List.of()).build();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(searching)));
+
+        runner.pass().block();
+
+        verify(repository).save(eq(searching), any());
+        verify(organiser).deletePartials(task);
+        verify(downloadService, never()).finishTask(any(), any(), any(), any(), any());
+    }
+
     @Test
     void searchInitTasks_areSteppedOneAfterAnother_becauseSlskdRejectsOverlappingSearchPosts() {
         DownloadTask first = at(DownloadPhase.SEARCH_INIT).toBuilder().taskId(UUID.randomUUID()).build();
@@ -534,7 +607,7 @@ class DownloadTaskRunnerTest {
                         // The Soulseek wording: title, then primary artist, the shape the matcher
                         // still splits on. NOT the bare title -- that is what the display uses.
                         && tasks.getFirst().songName().equals("Never Gonna Give You Up - Rick Astley")),
-                eq(T0));
+                eq(T0), isNull());
         // The download's own media row and the song's are the same id, so one row is enough --
         // but it must carry what the card shows.
         verify(repository).upsertMedia(argThat(items -> items.stream()
@@ -562,7 +635,7 @@ class DownloadTaskRunnerTest {
 
         verify(repository).createTasks(eq(request.getDownloadId()),
                 argThat(tasks -> tasks.size() == 1 && "/music/R/N/n.flac".equals(tasks.getFirst().libraryPath())),
-                eq(T0));
+                eq(T0), isNull());
     }
 
     @Test
@@ -587,7 +660,7 @@ class DownloadTaskRunnerTest {
                         && tasks.getFirst().youtubeId().equals("kkxixKRfEnk")
                         && tasks.getFirst().songName().equals("Cico Buff - Cocteau Twins")
                         && tasks.get(1).youtubeId().equals("ewnLtRyqAzo")),
-                eq(T0));
+                eq(T0), isNull());
         // The playlist's own media row is keyed by the category the REQUEST carried, named after the
         // edition, credited to Naviseerr and pictured with its first song; every song gets YouTube's
         // predictable thumbnail because the curator stores none. Nor does it store channel ids, so
@@ -616,7 +689,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository).failUnadmitted(request.getDownloadId(), DownloadFailureCode.METADATA_UNAVAILABLE, T0);
-        verify(repository, never()).createTasks(any(), any(), any());
+        verify(repository, never()).createTasks(any(), any(), any(), any());
     }
 
     @Test
@@ -629,7 +702,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         verify(repository, never()).failUnadmitted(any(), any(), any());
-        verify(repository, never()).createTasks(any(), any(), any());
+        verify(repository, never()).createTasks(any(), any(), any(), any());
     }
 
     @Test
@@ -675,8 +748,9 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         // One download, three searchable rows -- the whole point of the 1:N task table.
+        // An album first looks for one sharer with every song (P5): its songs are held until then.
         verify(repository).createTasks(eq(request.getDownloadId()),
-                argThat(tasks -> tasks.size() == 3), eq(T0));
+                argThat(tasks -> tasks.size() == 3), eq(T0), eq(T0.plusSeconds(240)));
         // Four media rows: the album itself, keyed by the id the REQUEST carried, plus its tracks.
         verify(repository).upsertMedia(argThat(items -> items.size() == 4
                 && items.getFirst().youtubeId().equals("MPREb_1")
@@ -703,7 +777,7 @@ class DownloadTaskRunnerTest {
         runner.pass().block();
 
         ArgumentCaptor<List<DownloadTask>> tasks = ArgumentCaptor.forClass(List.class);
-        verify(repository).createTasks(eq(request.getDownloadId()), tasks.capture(), eq(T0));
+        verify(repository).createTasks(eq(request.getDownloadId()), tasks.capture(), eq(T0), any());
         assertEquals(List.of("Up In The Sky (Sawmills Outtake)", "Cigarettes & Alcohol (Sawmills Outtake)"),
                 tasks.getValue().stream().map(DownloadTask::trackTitle).toList());
         assertEquals(List.of(21, 24), tasks.getValue().stream().map(DownloadTask::trackNumber).toList());
@@ -746,7 +820,7 @@ class DownloadTaskRunnerTest {
         // re-requested every loop interval for the life of the install.
         verify(repository).failUnadmitted(request.getDownloadId(),
                 DownloadFailureCode.METADATA_UNAVAILABLE, T0);
-        verify(repository, never()).createTasks(any(), any(), any());
+        verify(repository, never()).createTasks(any(), any(), any(), any());
     }
 
     @Test
@@ -761,7 +835,7 @@ class DownloadTaskRunnerTest {
         // The opposite of the case above: failing here would kill every download requested while
         // the sidecar happened to be restarting.
         verify(repository, never()).failUnadmitted(any(), any(), any());
-        verify(repository, never()).createTasks(any(), any(), any());
+        verify(repository, never()).createTasks(any(), any(), any(), any());
     }
 
     @Test

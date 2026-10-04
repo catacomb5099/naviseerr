@@ -118,18 +118,20 @@ public class TrackMatchingService {
     }
 
     private static boolean artistInPath(String request, String path) {
-        Set<String> pathTokens = tokens(path);
-        String squashedPath = squash(path);
-        for (String name : artistNames(request)) {
-            Set<String> words = tokens(name);
-            words.remove("the");
-            String squashed = squash(name);
-            if (!words.isEmpty() && pathTokens.containsAll(words)
-                    || squashed.length() >= 5 && squashedPath.contains(squashed)) {
-                return true;
-            }
-        }
-        return false;
+        return artistNames(request).stream().anyMatch(name -> nameInPath(name, path));
+    }
+
+    /**
+     * One artist name somewhere in a path, by the rules {@link #grade(String, String, String)} describes:
+     * every word but "the", or the name run together. Also what the whole-album picker uses to check a
+     * folder is the album artist's.
+     */
+    public static boolean nameInPath(String name, String path) {
+        Set<String> words = tokens(name);
+        words.remove("the");
+        String squashed = squash(name);
+        return !words.isEmpty() && tokens(path).containsAll(words)
+                || squashed.length() >= 5 && squash(path).contains(squashed);
     }
 
     /**
@@ -274,7 +276,8 @@ public class TrackMatchingService {
         return i < 0 ? "" : request.substring(i + 3);
     }
 
-    private static Set<String> tokens(String text) {
+    /** The lower-case, accent-free words of a text. */
+    public static Set<String> tokens(String text) {
         Set<String> out = new HashSet<>();
         if (text == null) return out;
         Matcher m = TOKEN.matcher(fold(text));
@@ -290,7 +293,7 @@ public class TrackMatchingService {
     }
 
     /** Letters and digits only, so "Lady Gaga" is found inside "LadyGaga" and "lady_gaga". */
-    private static String squash(String text) {
+    public static String squash(String text) {
         return fold(text).replaceAll("[^a-z0-9]", "");
     }
 

@@ -335,6 +335,18 @@ public class DownloadStateMachine {
             return new DownloadDecision.Continue(rebuild(task, now,
                     pickCandidate(task.candidates(), task.candidateIndex() + 1, now), 0));
         }
+        // P5: these files came from whole-album folders, never from this song's own search, so running
+        // out of them is no reason to give up: the song goes back to the start and searches on its own,
+        // as if the album search had never found it. Candidates cleared, or better() and giveUpSearch
+        // would carry the failed folder files forward; the runner removes their partial files.
+        if (!task.candidates().isEmpty()
+                && task.candidates().stream().allMatch(c -> DownloadCandidate.ALBUM_FOLDER.equals(c.source()))) {
+            return new DownloadDecision.Advance(task.withPhase(DownloadPhase.SEARCH_INIT, now)
+                    .withProgressReset().toBuilder()
+                    .searchTier(0).searchId(null).candidates(List.of()).candidateIndex(0).retryIndex(0)
+                    .slskdUsername(null).slskdFilename(null).slskdTransferId(null).lastError(null)
+                    .build());
+        }
         return new DownloadDecision.Terminal(DownloadStatus.FAILED,
                 DownloadFailureCode.SOURCES_EXHAUSTED);
     }
