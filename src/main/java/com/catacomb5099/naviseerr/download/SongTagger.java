@@ -101,12 +101,14 @@ public class SongTagger {
 
     /**
      * Free-form keys other taggers write that the generic fields above miss, and that Navidrome reads as
-     * the album's version, compilation flag or release date (ID3 TXXX, Vorbis comment, iTunes ----).
-     * ffmpeg's TXXX:compilation and a Vorbis YEAR next to DATE are the common ones.
+     * the album's version, compilation flag, release date, album artist or MusicBrainz album id (ID3
+     * TXXX, Vorbis comment, iTunes ----). ffmpeg's TXXX:compilation, a Vorbis YEAR next to DATE and
+     * foobar2000's "ALBUM ARTIST" are the common ones: Navidrome reads every album-artist spelling, so a
+     * leftover "Various Artists" beside YouTube's artist would make an album of its own.
      */
     private static final Set<String> RAW_SPLITS_AN_ALBUM = Set.of("ALBUMVERSION", "MUSICBRAINZ_ALBUMCOMMENT",
             "MUSICBRAINZ ALBUM COMMENT", "RELEASETYPE", "MUSICBRAINZ ALBUM TYPE", "COMPILATION", "TCMP",
-            "RELEASEDATE", "YEAR", "TOTALTRACKS", "TOTALDISCS");
+            "RELEASEDATE", "YEAR", "TOTALTRACKS", "TOTALDISCS", "ALBUM ARTIST", "MUSICBRAINZ ALBUM ID");
 
     /** Several artists in one tag: Navidrome splits on " / " into separate artists. */
     private static final String ARTIST_SEPARATOR = " / ";
@@ -319,8 +321,15 @@ public class SongTagger {
                     }
                 }
             }
-            case FlacTag flac -> RAW_SPLITS_AN_ALBUM.forEach(k -> flac.deleteField(k.replace(' ', '_')));
-            case VorbisCommentTag vorbis -> RAW_SPLITS_AN_ALBUM.forEach(k -> vorbis.deleteField(k.replace(' ', '_')));
+            // Vorbis keys come spelled both ways ("ALBUM ARTIST", "ALBUM_ARTIST"); Navidrome reads both.
+            case FlacTag flac -> RAW_SPLITS_AN_ALBUM.forEach(k -> {
+                flac.deleteField(k);
+                flac.deleteField(k.replace(' ', '_'));
+            });
+            case VorbisCommentTag vorbis -> RAW_SPLITS_AN_ALBUM.forEach(k -> {
+                vorbis.deleteField(k);
+                vorbis.deleteField(k.replace(' ', '_'));
+            });
             case Mp4Tag mp4 -> {
                 RAW_SPLITS_AN_ALBUM.forEach(k -> mp4.deleteField("----:com.apple.iTunes:" + k));
                 mp4.deleteField("----:com.apple.iTunes:MusicBrainz Album Comment");

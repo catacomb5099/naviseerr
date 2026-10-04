@@ -119,7 +119,8 @@ the format (the tag library reads by extension; a FLAC named `.mp3` fails cleanl
   ids (Navidrome takes that id alone as the album; Jellyfin a majority vote of them), compilation flags,
   album version and disc subtitle, original date, sort and plural album-artist forms, label, catalogue
   number, barcode, and the free-form leftovers other taggers write (ffmpeg's TXXX:compilation, a Vorbis
-  YEAR beside DATE, TOTALTRACKS).
+  YEAR beside DATE, TOTALTRACKS, foobar2000's `ALBUM ARTIST`: Navidrome reads every album-artist
+  spelling, so a leftover "Various Artists" from a compilation rip would make an album of its own).
   Album artist and release date are removed when YouTube has none, so every song of the album agrees;
   track numbers are only set when known. Several artists are written "A / B", which Navidrome splits.
 - **Everything else is fill-only (P2):** title (the album or playlist row's own title, else the song's)
@@ -141,8 +142,9 @@ Checked in a real Navidrome scan (04-10-2026): an MP3, a FLAC and an M4A tagged 
 in three folders became one "Definitely Maybe" album, 3 songs, 1994, not a compilation, each with the
 cover; the untouched copies showed as two albums under the wrong names.
 
-*Flip:* P1 to fill-only too: in `SongTagger.plan`, `fill` the album fields instead of `set`/`setOrDelete`
-and skip `SPLITS_AN_ALBUM` (Navidrome then keeps splitting mixed sources). No tagging at all: return
+*Flip:* P1 to fill-only too: in `SongTagger.plan`, `fill` the album fields instead of `set`/`setOrDelete`,
+skip `SPLITS_AN_ALBUM`, and return the plan's `album` flag false and `cover` as `!hasCover` (they drive the
+free-form clean-up, the release date and the cover); Navidrome then keeps splitting mixed sources. No tagging at all: return
 early in `SongTagger.tag`. A smaller cover: `SongTagger.COVER_SIZE` `=w544-h544-l90-rj` (167 KB).
 
 ### Already owned (P7: B3)

@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.download.SongTagger.Plan;
 import com.catacomb5099.naviseerr.download.SongTagger.Tags;
+import org.jaudiotagger.audio.AudioFile;
 import org.jaudiotagger.audio.AudioFileIO;
 import org.jaudiotagger.tag.FieldKey;
 import org.jaudiotagger.tag.Tag;
@@ -233,6 +234,38 @@ class SongTaggerTest {
                 assertEquals(1, siblings.count(), "no temporary file left beside " + file.getFileName());
             }
         }
+    }
+
+    @Test
+    void aSongRippedFromACompilation_losesFoobarsAlbumArtistToo_soItJoinsTheArtistsAlbum() throws Exception {
+        // foobar2000 writes the album artist as "ALBUM ARTIST" (TXXX in an MP3 ffmpeg made from its FLAC),
+        // and Navidrome reads it beside ALBUMARTIST/TPE2: left behind, the song's album artist would be
+        // "Oasis • Various Artists", an album of its own. A spaced MusicBrainz id alone would be the album.
+        Path flac = copy("seeded.flac", "06 Supersonic.flac");
+        Path mp3 = copy("seeded.mp3", "03 Live Forever.mp3");
+        AudioFile flacFile = AudioFileIO.read(flac.toFile());
+        FlacTag vorbis = (FlacTag) flacFile.getTag();
+        vorbis.setField("ALBUM ARTIST", "Various Artists");
+        vorbis.setField("ALBUM_ARTIST", "Various Artists");
+        vorbis.setField("MUSICBRAINZ ALBUM ID", "44444444-4444-4444-4444-444444444444");
+        flacFile.commit();
+        AudioFile mp3File = AudioFileIO.read(mp3.toFile());
+        AbstractID3v2Tag id3 = (AbstractID3v2Tag) mp3File.getTag();
+        AbstractID3v2Frame txxx = id3.createFrame("TXXX");
+        ((FrameBodyTXXX) txxx.getBody()).setDescription("ALBUM ARTIST");
+        ((FrameBodyTXXX) txxx.getBody()).setText("Various Artists");
+        id3.addField(txxx);
+        mp3File.commit();
+
+        tagger.tag(flac, definitelyMaybe("Supersonic", 6), SongTagger.NO_COVER);
+        tagger.tag(mp3, definitelyMaybe("Live Forever", 3), SongTagger.NO_COVER);
+
+        Tag flacTag = read(flac);
+        assertEquals(List.of("", "", ""), List.of(raw(flacTag, "ALBUM ARTIST"), raw(flacTag, "ALBUM_ARTIST"),
+                raw(flacTag, "MUSICBRAINZ ALBUM ID")));
+        assertEquals("Oasis", flacTag.getFirst(FieldKey.ALBUM_ARTIST));
+        assertEquals("", raw(read(mp3), "ALBUM ARTIST"));
+        assertEquals("Oasis", read(mp3).getFirst(FieldKey.ALBUM_ARTIST));
     }
 
     @Test
