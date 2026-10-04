@@ -379,6 +379,7 @@ class YtMusicServiceTest {
     private static final String ALBUM_DETAIL_BODY = """
             {
               "browseId": "MPREb_Hl8XJR59OrY",
+              "audioPlaylistId": "OLAK5uy_definitelyMaybe",
               "title": "Definitely Maybe",
               "type": "Album",
               "year": 1994,
@@ -516,6 +517,8 @@ class YtMusicServiceTest {
                     // nobody downstream may turn "28M plays" into a number.
                     assertEquals("28M plays", album.songs().getFirst().plays());
                     assertNull(album.songs().get(1).plays(), "absent on the wire is null, not an error");
+                    // What YouTube Music plays the album as, for the client's "Play album" link.
+                    assertEquals("OLAK5uy_definitelyMaybe", album.playlistId());
                 })
                 .verifyComplete();
 
@@ -543,6 +546,8 @@ class YtMusicServiceTest {
                             playlist.songs().getFirst().imageUrl());
                     assertNull(playlist.songs().getFirst().plays(),
                             "YouTube hands out play counts on album tracks only");
+                    // A playlist plays as itself.
+                    assertEquals("PL123", playlist.playlistId());
                 })
                 .verifyComplete();
 

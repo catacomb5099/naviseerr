@@ -19,10 +19,13 @@ import java.util.stream.IntStream;
  * @param iconURL    capital {@code URL}, matching {@code Track}/{@code Album} on the search contract.
  * @param year       albums only; null for a playlist or when the adapter's year is not numeric.
  * @param trackCount {@code tracks.size()} -- the available tracks, not YouTube's advertised count.
+ * @param playlistId the playlist YouTube Music plays this as, so the client can link "play it on
+ *                   YouTube Music": an album's {@code OLAK5uy_...}, a playlist's bare id. Null when
+ *                   the adapter gave none.
  */
 public record CollectionView(String id, DownloadType type, String name, List<String> artists,
                              String iconURL, Integer year, int trackCount,
-                             List<CollectionTrackView> tracks) {
+                             List<CollectionTrackView> tracks, String playlistId) {
 
     /**
      * @param position 1-based track order, the same {@code position} the download's task rows get.
@@ -41,7 +44,7 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
                         songs.get(i).durationSeconds(), i + 1, songs.get(i).plays()))
                 .toList();
         return new CollectionView(requestedId, type, info.name(), info.authorNames(), info.imageUrl(),
-                parseYear(info.year()), tracks.size(), tracks);
+                parseYear(info.year()), tracks.size(), tracks, info.playlistId());
     }
 
     private static Integer parseYear(String year) {

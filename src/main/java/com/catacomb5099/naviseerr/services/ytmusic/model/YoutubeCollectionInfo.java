@@ -19,10 +19,20 @@ import java.util.List;
  * @param imageUrl nullable; the collection's own artwork.
  * @param songs    never null; may be empty, which the caller must treat as "nothing to download"
  *                 rather than as a failure.
+ * @param playlistId nullable; the playlist YouTube Music plays this as, for a "play it there" link:
+ *                 an album's {@code OLAK5uy_...} (the adapter's {@code audioPlaylistId}), a
+ *                 playlist's own bare id. Null for anything built here rather than read from YouTube.
  */
 public record YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
                                     String name, List<String> authorNames, List<String> authorIds,
-                                    String imageUrl) {
+                                    String imageUrl, String playlistId) {
+
+    /** Not read from YouTube, so there is nothing to play it as there. */
+    public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
+                                 String name, List<String> authorNames, List<String> authorIds,
+                                 String imageUrl) {
+        this(id, songs, year, name, authorNames, authorIds, imageUrl, null);
+    }
 
     /** Names without ids, for a caller that has none to give. */
     public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, String year,
