@@ -169,6 +169,7 @@ class YtMusicServiceTest {
         service = new YtMusicService(webClient);
         ReflectionTestUtils.setField(service, "searchResultLimit", 10);
         ReflectionTestUtils.setField(service, "mixedSearchLimit", 100);
+        ReflectionTestUtils.setField(service, "radioSize", 25);
         ReflectionTestUtils.setField(service, "timeoutMs", 2000L);
         ReflectionTestUtils.setField(service, "retryCount", 1);
         ReflectionTestUtils.setField(service, "firstBackOffDurationMs", 1L);
@@ -733,5 +734,33 @@ class YtMusicServiceTest {
                     assertTrue(d.getCredits().isEmpty());
                 })
                 .verifyComplete();
+    }
+
+    /** {@code GET /v1/radio/{seed}}: the playlist shape, named after the seed, tracks from anywhere. */
+    @Test
+    void getRadioInfo_asksForRadioSizeSongs_andMapsThemLikeAPlaylist() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody("""
+                        {"id": "7CTJcHjkq0E", "title": "Billie Jean",
+                         "author": {"name": "Michael Jackson", "channelId": "UCmj"},
+                         "trackCount": 1, "thumbnailUrl": "https://img/seed.jpg",
+                         "tracks": [{"videoId": "q1", "title": "September",
+                           "artists": [{"name": "Earth, Wind & Fire", "channelId": "UCewf"}],
+                           "albumName": "The Best Of", "durationSeconds": 216}]}
+                        """));
+
+        StepVerifier.create(service.getRadioInfo("7CTJcHjkq0E"))
+                .assertNext(radio -> {
+                    assertEquals("Billie Jean", radio.name());
+                    assertEquals(List.of("Michael Jackson"), radio.authorNames());
+                    assertEquals("https://img/seed.jpg", radio.imageUrl());
+                    assertEquals("September", radio.songs().getFirst().name());
+                    assertEquals(216, radio.songs().getFirst().durationSeconds());
+                    assertEquals("https://i.ytimg.com/vi/q1/hqdefault.jpg", radio.songs().getFirst().imageUrl(),
+                            "a radio's songs are not the seed, so they must not wear the seed's cover");
+                })
+                .verifyComplete();
+
+        assertEquals("/v1/radio/7CTJcHjkq0E?limit=25", server.takeRequest().getPath());
     }
 }

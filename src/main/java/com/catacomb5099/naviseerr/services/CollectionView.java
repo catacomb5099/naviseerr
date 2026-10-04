@@ -34,14 +34,19 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
     }
 
     static CollectionView from(YoutubeCollectionInfo info, DownloadType type, String requestedId) {
+        List<CollectionTrackView> tracks = tracksOf(info);
+        return new CollectionView(requestedId, type, info.name(), info.authorNames(), info.imageUrl(),
+                parseYear(info.year()), tracks.size(), tracks);
+    }
+
+    /** Every song with an id, numbered from 1: what a download of this collection would create task rows for. */
+    static List<CollectionTrackView> tracksOf(YoutubeCollectionInfo info) {
         List<YoutubeSongInfo> songs = info.songs().stream().filter(song -> song.id() != null).toList();
-        List<CollectionTrackView> tracks = IntStream.range(0, songs.size())
+        return IntStream.range(0, songs.size())
                 .mapToObj(i -> new CollectionTrackView(songs.get(i).id(), songs.get(i).name(),
                         songs.get(i).authorNames(), songs.get(i).imageUrl(),
                         songs.get(i).durationSeconds(), i + 1, songs.get(i).plays()))
                 .toList();
-        return new CollectionView(requestedId, type, info.name(), info.authorNames(), info.imageUrl(),
-                parseYear(info.year()), tracks.size(), tracks);
     }
 
     private static Integer parseYear(String year) {

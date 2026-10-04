@@ -37,6 +37,7 @@ public class YtMusicService {
     private static final String ALBUM_PATH_PREFIX = "/v1/albums/";
     private static final String PLAYLIST_PATH_PREFIX = "/v1/playlists/";
     private static final String ARTIST_PATH_PREFIX = "/v1/artists/";
+    private static final String RADIO_PATH_PREFIX = "/v1/radio/";
 
     private final WebClient ytMusicWebClient;
 
@@ -48,6 +49,8 @@ public class YtMusicService {
     // (albums, artists). Lowering it silently drops albums from general search.
     @Value("${yt-music-service.mixed-search-limit}")
     private int mixedSearchLimit;
+    @Value("${yt-music-service.radio-size}")
+    private int radioSize;
     @Value("${yt-music-service.timeout-ms}")
     private long timeoutMs;
     @Value("${yt-music-service.retry-count}")
@@ -168,6 +171,19 @@ public class YtMusicService {
         return execute(uriBuilder -> uriBuilder.path(PLAYLIST_PATH_PREFIX + id).build(),
                         YtMusicDetailResponse.Collection.class, "playlist", id)
                 .map(playlist -> toCollectionInfo(playlist, id));
+    }
+
+    /**
+     * YouTube Music's own radio for a song, album or playlist id: {@code radio-size} similar songs, the
+     * seed's own songs already left out by the adapter. It answers in the playlist shape, so it maps like
+     * a playlist (each song gets its own thumbnail) and its name and artwork are the SEED's. A different
+     * list on every call -- see {@code RadioController} for why it is saved.
+     */
+    public Mono<YoutubeCollectionInfo> getRadioInfo(String seedId) {
+        return execute(uriBuilder -> uriBuilder.path(RADIO_PATH_PREFIX + seedId)
+                        .queryParam(LIMIT_PARAM, radioSize).build(),
+                        YtMusicDetailResponse.Collection.class, "radio", seedId)
+                .map(radio -> toCollectionInfo(radio, seedId));
     }
 
     /**
