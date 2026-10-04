@@ -1093,7 +1093,7 @@ public class DownloadTaskRepository {
     /**
      * Ends an album search and releases its songs; see RELEASE_ALBUM_SONGS_SQL.
      *
-     * @param picks the folder files for each song a whole folder holds; empty when none does
+     * @param picks the folder files for each song the best folder holds; empty when no folder holds enough
      * @return songs released; 0 when this owner no longer holds the search or it had already ended
      */
     public Mono<Long> releaseAlbumSongs(UUID downloadId, String owner, AlbumSearch.Outcome outcome,

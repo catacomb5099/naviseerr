@@ -22,7 +22,9 @@ public record AlbumSearch(UUID downloadId, DownloadPhase phase, int searchTier, 
     public enum Outcome {
         /** A whole folder was found; its songs were handed their files. */
         WHOLE_FOLDER,
-        /** No folder held every song; they search on their own. */
+        /** P6: no whole folder, but one held at least half; those songs got its files, the rest search on their own. */
+        PART_FOLDER,
+        /** No folder held every song, nor half of them; they search on their own. */
         NO_WHOLE_FOLDER,
         /** Every song had already started (or finished) on its own; nothing was searched. */
         NOTHING_TO_SEARCH,

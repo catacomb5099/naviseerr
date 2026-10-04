@@ -144,9 +144,11 @@ public class DownloadStepExecutor {
                 // search. Never the raw name: "Neon Indian - Polish Girl -
                 // toomainstream" made the picker read "Neon Indian" as the title and reject all 300
                 // files Soulseek offered (post-mortem of 28-09-2026). The wording goes along too: when
-                // it did not name the artist, the picker requires the artist in the file's path.
+                // it did not name the artist, the picker requires the artist in the file's path. An
+                // album's song also holds the files to the album track's length (P6).
                 .flatMap(full -> searchResultProcessor.selectBestFiles(full,
-                                SearchQueryTiers.pickerName(task.songName()), task.searchQuery())
+                                SearchQueryTiers.pickerName(task.songName()), task.searchQuery(),
+                                task.albumTrackSeconds())
                         .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
                         .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
     }

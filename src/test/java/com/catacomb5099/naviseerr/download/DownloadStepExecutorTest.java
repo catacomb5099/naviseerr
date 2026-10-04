@@ -85,12 +85,30 @@ class DownloadStepExecutorTest {
         var summary = SlskdFixtures.searchState("s1", true, "Completed");
         var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any())).thenReturn(Mono.just(List.of()));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
 
         executor.execute(task, Map.of("s1", summary), Map.of(), none()).block();
 
-        // the picker sees the cleaned name, not the raw YouTube one, and the wording that was searched
-        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"), eq("Hello"));
+        // the picker sees the cleaned name, not the raw YouTube one, and the wording that was searched;
+        // a song that is no album's track keeps files of any length
+        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"), eq("Hello"), isNull());
+    }
+
+    @Test
+    void searchPoll_complete_anAlbumsSong_holdsTheFilesToTheAlbumTracksLength() {
+        // P6: only an album row carries a YouTube track number; a playlist row has a length but no number.
+        DownloadTask albumSong = searchPolling("s1").toBuilder().trackNumber(3).durationSeconds(270).build();
+        DownloadTask playlistSong = searchPolling("s1").toBuilder().durationSeconds(270).build();
+        var summary = SlskdFixtures.searchState("s1", true, "Completed");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
+
+        executor.execute(albumSong, Map.of("s1", summary), Map.of(), none()).block();
+        executor.execute(playlistSong, Map.of("s1", summary), Map.of(), none()).block();
+
+        verify(searchProcessor).selectBestFiles(eq(full), any(), any(), eq(270));
+        verify(searchProcessor).selectBestFiles(eq(full), any(), any(), isNull());
     }
 
     @Test
@@ -126,7 +144,7 @@ class DownloadStepExecutorTest {
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any()))
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any()))
                 .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor
@@ -137,7 +155,7 @@ class DownloadStepExecutorTest {
         assertEquals("alice", next.candidates().getFirst().username());
         assertEquals(1411, next.candidates().getFirst().bitRate());
         verify(slskdService).getSearchWithResponses("s1");
-        verify(searchProcessor, never()).selectBestFiles(eq(summary), any(), any());
+        verify(searchProcessor, never()).selectBestFiles(eq(summary), any(), any(), any());
     }
 
     @Test
@@ -145,7 +163,7 @@ class DownloadStepExecutorTest {
         var summary = SlskdFixtures.searchState("s1", true, "Completed");
         var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any())).thenReturn(Mono.just(List.of()));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
 
         DownloadDecision d = executor
                 .execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
@@ -164,7 +182,7 @@ class DownloadStepExecutorTest {
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any()))
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any()))
                 .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor

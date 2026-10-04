@@ -334,6 +334,37 @@ class SlskdSearchResultProcessorTest {
                 result.stream().map(e -> e.peer().getUsername()).toList());
     }
 
+    @Test
+    void selectBestFiles_anAlbumsSong_dropsALiveTakeOfTheSameTitle_byItsLength() {
+        // Real files from the search lab (labelled.jsonl.gz). Mr. Jones is track 3 of August and
+        // Everything After, 270 s on YouTube; the 2011 live album repeats the number and the title, so
+        // the matcher, which reads names only, calls it the requested version.
+        SlskdSearchResultProcessor real = new SlskdSearchResultProcessor(slskdService, new TrackMatchingService());
+        ReflectionTestUtils.setField(real, "minBitRate", 320);
+        ReflectionTestUtils.setField(real, "maxFilesPerDownload", 10);
+        ReflectionTestUtils.setField(real, "maxSharerQueue", 50);
+        SearchResponseItem live = peer("live", 9_000_000, true, 0,
+                file("Counting Crows/August and Everything After - Live at Town Hall (2011)/03 - Mr. Jones.flac", 379));
+        SearchResponseItem studio = peer("studio", 1_000_000, true, 0,
+                file("Counting Crows/August and Everything After/03 - Mr. Jones.flac", 272));
+        SearchResponseItem unknown = peer("unknown", 1_000_000, true, 0,
+                file("Counting Crows/August and Everything After (1993)/03 - Mr. Jones.flac", null));
+
+        var albumSong = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones", 270).block();
+        var song = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones").block();
+
+        // A file with no length is no evidence against it and stays, behind the one that agrees.
+        assertEquals(List.of("studio", "unknown"), albumSong.stream().map(pick -> pick.peer().getUsername()).toList());
+        assertEquals(Match.EXACT, song.stream().filter(pick -> pick.peer().getUsername().equals("live"))
+                .findFirst().orElseThrow().grade(), "a song request keeps the live take, graded by its name");
+    }
+
+    @Test
+    void lengthTolerance_isTenSecondsOrThreePercent() {
+        assertEquals(10, SlskdSearchResultProcessor.lengthTolerance(270));
+        assertEquals(18, SlskdSearchResultProcessor.lengthTolerance(587));
+    }
+
     private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadSlot, int queueLength, SearchFile file) {
         SearchResponseItem item = mock(SearchResponseItem.class);
         when(item.getUsername()).thenReturn(username);

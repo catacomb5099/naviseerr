@@ -46,11 +46,11 @@ What has changed since the original assessment: `DownloadTaskRunner` now filters
 - `selectBestFiles(state, query)` builds the ordered candidate list `List<Map.Entry<SearchResponseItem, SearchFile>>` — unchanged by the state-machine rewrite, kept byte-for-byte as the guard that the pipeline work did not touch ranking:
   1. flatten every `(response item, file)` pair from `state.getResponses()`,
   2. keep files that are lossless (flac, wav, aif, aiff, ape, wv, judged by the file name's suffix, not slskd's often-blank `extension`) or have bit rate `>= slskd-service.min-bit-rate`,
-  3. keep files whose filename is relevant to the query via [TrackMatchingService](#track-matching),
+  3. keep files whose filename is relevant to the query via [TrackMatchingService](#track-matching); for an album's song (P6, the 4-argument overload with the album row's length) also drop files whose slskd length is outside max(10 s, 3%) of it (`lengthTolerance`), so a live album's "03 - Mr. Jones.flac" is not taken for the studio track; a file with no length stays,
   4. sort by availability first (`hasFreeUploadSlot`, then `queueLength`, then `uploadSpeed` descending) — see `SlskdSearchResultProcessor.BY_AVAILABILITY`,
   5. cap to `slskd-service.max-files-per-download`.
 - `DownloadStepExecutor` calls this only once a `SEARCH_POLL` sees `isComplete = true`, then converts the result to `DownloadCandidate` (see [download-manager.md](download-manager.md)) for storage on the task row.
-- An album download's own search (P5) is judged by [AlbumFolderPicker](../../src/main/java/com/catacomb5099/naviseerr/download/AlbumFolderPicker.java) instead, which reuses this class's format rule (`isLosslessOrHighBitRate`) and overload test (`isOverloaded`) and `TrackMatchingService.grade`, and looks for a sharer's folder (disc subfolders merged) holding every track of the album; see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026). The 10-file cap above does not apply there.
+- An album download's own search (P5) is judged by [AlbumFolderPicker](../../src/main/java/com/catacomb5099/naviseerr/download/AlbumFolderPicker.java) instead, which reuses this class's format rule (`isLosslessOrHighBitRate`) and overload test (`isOverloaded`) and `TrackMatchingService.grade`, and looks for a sharer's folder (disc subfolders merged) holding every track of the album, else at least half of them (P6); see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026). The 10-file cap above does not apply there.
 
 ### Track matching
 

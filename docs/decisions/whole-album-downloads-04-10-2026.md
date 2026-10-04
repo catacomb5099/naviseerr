@@ -1,7 +1,7 @@
 # Whole-album downloads
 
 **Date:** 04-10-2026
-**Status:** Accepted. A1 and A2 implemented; A3 next.
+**Status:** Accepted. A1, A2 and A3 implemented.
 **Covers:** A1 (P9, many songs from one sharer), A2 (P5, whole album first), A3 (P6, the biggest part
 from one sharer). The joining and tagging half of the same request (B1-B3) has its own ADR.
 **Builds on:** `durable-download-state-machine-13-08-2026.md` (the loop, leases, one slskd call per
@@ -33,9 +33,9 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
    sharer would lose every song past the tenth minute. Details in AGENTS.md, "One sharer, many songs".
 2. **A2 / P5: whole album first.** An album download first searches for one sharer's folder holding
    every YouTube track, and downloads just those files from it. Below.
-3. **A3 / P6: part album next** (next PR). No whole folder: the folder with the most tracks (at least
-   half, at least two) supplies those, the rest search on their own, and an album song searched on its
-   own must match the album track's length.
+3. **A3 / P6: part album next.** No whole folder: the folder with the most tracks (at least half, at
+   least two) supplies those, the rest search on their own, and an album song searched on its own must
+   match the album track's length. Below.
 
 ## How whole album first works (A2)
 
@@ -67,8 +67,9 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 - **Release, one statement** (`RELEASE_ALBUM_SONGS_SQL`). Marks the search DONE (only by its lease holder,
   only once) and only then touches the songs that are still untouched: still at the start, no search of
   their own, first wording, no kept files, no live lease. A song the best whole folder holds gets its
-  file there plus the same track in the next two whole folders of other sharers, each marked
-  `source: "ALBUM_FOLDER"`, and goes straight to downloading. Every other waiting song is due now and
+  file there plus the same track from the next two later folders of other sharers that have it (whole
+  folders; since A3 part folders too), each marked `source: "ALBUM_FOLDER"`, and goes straight to
+  downloading. Every other waiting song is due now and
   searches on its own. Both get a fresh clock and no lease.
 - **Fallback.** A song whose album-folder files all fail (rejected, stalled, errored past retries) goes
   back to its own search at the first wording instead of ending "sources exhausted"; the runner removes
@@ -76,6 +77,25 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 - **Cancel and retry.** Cancelling the whole download ends its album search (`CANCELLED`), so a search
   still running cannot hand files to songs a later retry reopens. Retry is unchanged: failed songs search
   on their own (P8).
+
+## How part album next works (A3)
+
+- **A part folder.** The picker (`AlbumFolderPicker.folders`) keeps a folder that holds every song still
+  waiting, or at least half of them and at least two (11 songs: 6; 2 songs: both). Same matching rules as
+  a whole folder. Folders are ranked by how many songs they hold first, so every whole folder comes before
+  any part, then as before. On the real fixtures: raphyduck's *Definitely Maybe* (10 of 11, no *Live
+  Forever*), soneo_app's *Discovery* (11 of 14); bugliker's six of 14 is too few.
+- **Release.** When the best folder is a part, the songs it holds get its file plus the same track from
+  the next two folders of other sharers that have it (outcome `PART_FOLDER`); every other song is due now
+  and searches on its own, even when a later part folder has it, so the album comes from one sharer plus
+  single-song searches, not from a patchwork of folders.
+- **Album songs on their own search keep the album's length.** A song with a YouTube track number (only
+  album rows have one) passes the album row's length to the song picker, which drops every file whose
+  length slskd gives and that is outside max(10 s, 3%) of it, before ranking. The matcher reads names
+  only, and a live album repeats the studio title and number: Counting Crows' *Live at Town Hall* has
+  "03 - Mr. Jones.flac" at 379 s against the album's 270 s. A file with no length (3.5%) stays. This
+  applies to every own search of an album song: no folder had it, its folder files failed, or a retry.
+  Songs and playlist tracks are unchanged.
 
 ## How to flip each choice
 
@@ -85,9 +105,13 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 | How long songs wait (2 × `search-budget-ms`) | `AlbumSearchStep.holdUntil` |
 | Wordings and their order | `AlbumSearch.wordings` |
 | Candidates per song (3, other sharers) | `AlbumSearchStep.CANDIDATES_PER_SONG`, `AlbumFolderPicker.candidates` |
-| Length tolerance, last-track allowance, 30 s floor | `AlbumFolderPicker.lengthGap` |
+| Last-track allowance, 30 s floor | `AlbumFolderPicker.lengthGap` |
 | Words that mark another take | `AlbumFolderPicker.OTHER_TAKE`, `PLAIN_VERSION` |
-| Folder ranking | the comparator in `AlbumFolderPicker.wholeFolders` |
+| Folder ranking (most songs first, then as listed) | the comparator in `AlbumFolderPicker.folders` |
+| Part folders at all, and their size (half, at least two) | `fewest` in `AlbumFolderPicker.folders`: `tracks.size()` there means whole folders only |
+| Part folder songs only from the best folder | `AlbumSearchStep.settle`: drop the `retainAll` line and a later part folder's songs come from it too |
+| Album songs' own searches hold files to the album length | `DownloadTask.albumTrackSeconds`: return null and every song keeps any length |
+| Length tolerance (max(10 s, 3%)), shared by both | `SlskdSearchResultProcessor.lengthTolerance` |
 | Compilation rule (80%) | `AlbumFolderPicker.COMPILATION_ARTIST_SHARE` |
 | File format | `slskd-service.min-bit-rate`, shared with song searches |
 
@@ -112,8 +136,17 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 - **Matching inherits the song rules.** A track called "Intro" or "Clean" is rejected by the DJ-pool
   filter until F4 lands, so such an album is never whole and those songs search on their own.
 
+- **A part album is still several sharers.** The part comes from one sharer, each missing song from
+  whoever its own search finds. Two part folders that together make the album are not combined.
+- **The length check needs a length.** An album song whose file slskd sends without a length, or a live
+  take within the tolerance (a 279 s bootleg *Mr. Jones* against 270 s), still passes. An album song that
+  only exists in another length now fails "no candidates" instead of being filed as the wrong take.
+
 ## Not covered (next)
 
-- A3: the partial folder, and the length check for album songs' own searches.
+- Song and playlist tracks that B1 joins to an album are not length-checked against the album track
+  (they keep whatever length their own search found).
+- A folder word the request lacks ("Live at Wembley" in the path, not the file name) is not checked;
+  only the length catches such a take.
 - Asking a sharer for its whole folder listing (slskd's directory endpoint) when the search returned only
   part of it.
