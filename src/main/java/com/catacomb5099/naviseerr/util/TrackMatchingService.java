@@ -177,15 +177,30 @@ public class TrackMatchingService {
     /**
      * The filename carries a {@link #DJ_POOL} signature that is not one of the request's own words: "01 - Intro.flac"
      * answers "Intro - The xx", but "Wonderwall (Clean Intro DJ Edit).mp3" still fails "Wonderwall - Oasis", and
-     * "Clean (Dirty Intro).mp3" still fails "Clean - Taylor Swift".
+     * "Clean (Dirty Intro).mp3" still fails "Clean - Taylor Swift". A word in the filename's brackets is a DJ flag,
+     * excused only by the request's own brackets ("Smack That (Clean) - Akon"); otherwise "Style (Clean).mp3" would
+     * pass for "Clean - Taylor Swift", the flag standing in for the title.
      */
     private static boolean isDjPoolEdit(String request, String filename) {
-        Set<String> requested = tokens(request);
-        Matcher m = DJ_POOL.matcher(filename);
+        return hasForeignDjWord(BRACKETED.matcher(filename).replaceAll(" "), tokens(request))
+                || hasForeignDjWord(bracketText(filename), tokens(bracketText(request)));
+    }
+
+    private static boolean hasForeignDjWord(String text, Set<String> requested) {
+        Matcher m = DJ_POOL.matcher(text);
         while (m.find()) {
             if (!requested.containsAll(tokens(m.group()))) return true;
         }
         return false;
+    }
+
+    private static String bracketText(String text) {
+        StringBuilder out = new StringBuilder();
+        Matcher m = BRACKETED.matcher(text);
+        while (m.find()) {
+            out.append(m.group(1)).append(' ');
+        }
+        return out.toString();
     }
 
     /** True when the filename names a version (live, remix, ...) that the request did not ask for. */

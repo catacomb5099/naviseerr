@@ -55,7 +55,7 @@ What has changed since the original assessment: `DownloadTaskRunner` now filters
 
 [TrackMatchingService.java](../../src/main/java/com/catacomb5099/naviseerr/util/TrackMatchingService.java) uses fuzzywuzzy. `isMatch(cleanTitle, filePath)` returns true if any of: `tokenSortRatio >= 75`, `partialRatio >= 85`, or both extracted artist and title substrings appear in the normalized filename. `normalize(...)` strips extensions, track numbers, bracketed content, common metadata terms, years, and non-alphanumerics. `extractParts(...)` assumes an `"-"` separator between artist and title (noted TODO) - see [gotchas.md](gotchas.md).
 
-A filename carrying a DJ-pool signature (`Clean`/`Dirty`, `Intro`/`Outro`, `Transition`, `Hype`, key+BPM tags like `12A 125`, `dj-promo`) is not the song, unless the request itself carries that word: "Intro - The xx" may match `01 - Intro.flac` and "Rather Be - Clean Bandit" may match `Clean Bandit - Rather Be.mp3`, but "Wonderwall - Oasis" never matches `Wonderwall (Clean Intro DJ Edit).mp3` (`TrackMatchingService.isDjPoolEdit`).
+A filename carrying a DJ-pool signature (`Clean`/`Dirty`, `Intro`/`Outro`, `Transition`, `Hype`, key+BPM tags like `12A 125`, `dj-promo`) is not the song, unless the request itself carries that word: "Intro - The xx" may match `01 - Intro.flac` and "Rather Be - Clean Bandit" may match `Clean Bandit - Rather Be.mp3`, but "Wonderwall - Oasis" never matches `Wonderwall (Clean Intro DJ Edit).mp3`. A word in the file's brackets is a DJ flag, excused only when the request has it in brackets too: "Clean - Taylor Swift" never matches `Taylor Swift - Style (Clean).mp3`, while "Smack That (Clean) - Akon" may match `Akon - Smack That (Clean).mp3` (`TrackMatchingService.isDjPoolEdit`).
 
 ## Search state
 
