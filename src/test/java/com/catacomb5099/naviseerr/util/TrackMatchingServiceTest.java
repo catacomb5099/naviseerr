@@ -35,9 +35,10 @@ class TrackMatchingServiceTest {
         assertTrue(matches("Intro - The xx", "The xx/xx/01 - Intro.flac"));
         assertTrue(matches("Clean - Taylor Swift", "Taylor Swift/1989 (Deluxe)/13 - Clean.flac"));
         assertTrue(matches("Rather Be - Clean Bandit", "Clean Bandit - Rather Be.mp3"));
-        // only the request's own words pass; any other DJ-pool word still rejects the file
-        assertFalse(matches("Wonderwall - Oasis", "Wonderwall (Clean Intro DJ Edit).mp3"));
-        assertFalse(matches("Clean - Taylor Swift", "Taylor Swift - Clean (Dirty Intro).mp3"));
+        // only the request's own words pass; any other DJ-pool word still rejects the file, not even as a fallback
+        // ("Edit" alone would only make the Wonderwall file another version)
+        assertEquals(Match.NONE, grade("Wonderwall - Oasis", "Wonderwall (Clean Intro DJ Edit).mp3"));
+        assertEquals(Match.NONE, grade("Clean - Taylor Swift", "Taylor Swift - Clean (Dirty Intro).mp3"));
     }
 
     @Test
