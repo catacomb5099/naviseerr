@@ -36,6 +36,8 @@ logging:
     # GET /transfers/downloads=..."), which is the direct measure of the slskd request rate — count
     # those lines over a minute rather than inferring it from the intervals below.
     com.catacomb5099.naviseerr.download: DEBUG
+    # The tag library (SongTagger) logs routine steps at SEVERE, dozens of lines per file.
+    org.jaudiotagger: OFF
 
 # Dormant since 10-08-2026: search runs through yt-music-service below and nothing calls Last.fm.
 # LastFMService is still a @Service with an @Value on the key, so it is read at startup even though it

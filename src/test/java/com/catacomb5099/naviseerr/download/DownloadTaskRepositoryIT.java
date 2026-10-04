@@ -572,6 +572,47 @@ class DownloadTaskRepositoryIT {
         assertNull(loseYourself.albumTitle(), "looked, nothing trusted: filed by its own name, without waiting");
     }
 
+    @Test
+    void tasksToOrganise_carriesWhatTheTagsAreWrittenFrom_theAlbumDownloadsOwnAlbum_orTheSongsTrustedOne() {
+        // An album download's track: its own row's title and number (the 30th Anniversary edition lists
+        // h7-BHdjeEY0 as tracks 21 and 24), the album's artists, year, count and art; never a song album.
+        UUID album = insertDownload("SUCCEEDED", "ALBUM");
+        repository.upsertMedia(List.of(
+                new MediaItem("yt-" + album, "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"),
+                        List.of(), "https://yt3.googleusercontent.com/dm30=w544-h544-l90-rj", null, 44, 2024, "Album"),
+                new MediaItem("MPREb_dm", "Definitely Maybe", List.of("Oasis"), List.of(),
+                        "https://yt3.googleusercontent.com/dm=w544-h544-l90-rj", null, 11, 1994, "Album"),
+                new MediaItem("h7-BHdjeEY0", "Up In The Sky", List.of("Oasis"), List.of(),
+                        "https://i.ytimg.com/vi/h7-BHdjeEY0/hqdefault.jpg", 268, null),
+                new MediaItem("supersonic", "Supersonic", List.of("Oasis"), List.of(), null, 283, null),
+                new MediaItem("lose-yourself", "Lose Yourself", List.of("Eminem"), List.of(),
+                        "https://yt3.googleusercontent.com/ly=w544-h544-l90-rj", 326, null))).block();
+        songAlbum("h7-BHdjeEY0", "MPREb_dm", 4, NOW);
+        UUID albumTrack = succeededSong(album, "h7-BHdjeEY0", "x\\24.flac", NOW);
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET track_title = 'Up In The Sky (Sawmills Outtake)', track_number = 24 "
+                        + "WHERE task_id = :task")
+                .bind("task", albumTrack).fetch().rowsUpdated().block();
+        // A playlist's track with a trusted album, and one without.
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        songAlbum("supersonic", "MPREb_dm", 6, NOW);
+        songAlbum("lose-yourself", null, null, NOW);
+        UUID joined = succeededSong(playlist, "supersonic", "x\\s.flac", NOW);
+        UUID none = succeededSong(playlist, "lose-yourself", "x\\l.flac", NOW);
+
+        java.util.Map<UUID, SongTagger.Tags> tags = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW.minusSeconds(120))
+                .collectMap(LibraryOrganiser.Job::taskId, LibraryOrganiser.Job::tags).block();
+
+        assertEquals(new SongTagger.Tags("Up In The Sky (Sawmills Outtake)", List.of("Oasis"),
+                "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"), 2024, 24, 44,
+                "https://yt3.googleusercontent.com/dm30=w544-h544-l90-rj"), tags.get(albumTrack));
+        assertEquals(new SongTagger.Tags("Supersonic", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"),
+                1994, 6, 11, "https://yt3.googleusercontent.com/dm=w544-h544-l90-rj"), tags.get(joined));
+        assertEquals(new SongTagger.Tags("Lose Yourself", List.of("Eminem"), null, List.of(), null, null, null,
+                "https://yt3.googleusercontent.com/ly=w544-h544-l90-rj"), tags.get(none),
+                "no trusted album: no album tags, and the song's own picture only fills a gap");
+    }
+
     // ---- album lookup ----------------------------------------------------------------------------
 
     private UUID task(UUID downloadId, String youtubeId, String phase, Instant finishedAt) {

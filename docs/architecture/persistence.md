@@ -160,7 +160,11 @@ those changes add no migration of their own and cannot land out of order.
   SUCCEEDED, unfiled and finished after the organiser's `:cutoff` (never the history); `DISTINCT ON
   (youtube_id)` inside, oldest request first outside. `TASKS_TO_ORGANISE_SQL` LEFT JOINs it (only for
   non-ALBUM downloads) and the album's `media_items` row for the folder name, and holds a non-ALBUM
-  song with no row back until `finished_at <= :albumCutoff`.
+  song with no row back until `finished_at <= :albumCutoff`. Its `tag_` columns are what `SongTagger`
+  writes: `COALESCE(track_title, song title)`, and the album `r` the tags follow (the download's own
+  `media_items` row for an ALBUM track, the `song_albums` album's otherwise: title, artists, year,
+  `track_count`, image), with the track number from `download_tasks.track_number` for an ALBUM track
+  and from `song_albums.track_number` otherwise. No trusted album: no `r`, and the song's own image.
 - `album_searches` (one row per album download: `phase` SEARCH_INIT/SEARCH_POLL/DONE, tier, search id,
   due time, lease, outcome) with the partial index `idx_album_searches_due`: created empty, unused until
   the whole-album change lands.

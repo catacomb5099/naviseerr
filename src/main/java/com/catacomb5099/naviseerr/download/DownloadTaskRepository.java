@@ -370,18 +370,30 @@ public class DownloadTaskRepository {
      * <p>A song or playlist track with no album answer yet waits until {@code :albumCutoff} (a short
      * grace after it finished), then is filed by its own name. The wait is in the WHERE, not applied
      * after the LIMIT, so waiting songs never fill the batch and hold back ones that are ready.
+     *
+     * <p>The {@code tag_} columns are what {@link SongTagger} writes into the file: the row's own title
+     * (one id can sit on two rows of an album with two titles), and the album {@code r} the tags follow,
+     * which is the download's own album for an album track and the trusted album for anything else.
+     * No trusted album: no album, and the song's own picture as the cover.
      */
     private static final String TASKS_TO_ORGANISE_SQL = """
             SELECT t.task_id, t.slskd_filename, t.finished_at, d.download_type,
                    s.title AS song_title, s.artists AS song_artists,
                    c.title AS collection_title, c.artists AS collection_artists,
-                   al.title AS album_title, al.artists AS album_artists
+                   al.title AS album_title, al.artists AS album_artists,
+                   COALESCE(t.track_title, s.title) AS tag_title,
+                   r.title AS tag_album, r.artists AS tag_album_artists, r.year AS tag_year,
+                   CASE WHEN d.download_type = 'ALBUM' THEN t.track_number ELSE a.track_number END AS tag_track,
+                   r.track_count AS tag_track_total,
+                   CASE WHEN r.youtube_id IS NULL THEN s.image_url ELSE r.image_url END AS tag_cover
               FROM download_tasks t
               JOIN downloads d ON d.download_id = t.download_id
               LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
               LEFT JOIN media_items c ON c.youtube_id = d.youtube_id
               LEFT JOIN song_albums a ON a.youtube_id = t.youtube_id AND d.download_type <> 'ALBUM'
               LEFT JOIN media_items al ON al.youtube_id = a.album_id
+              LEFT JOIN media_items r
+                     ON r.youtube_id = CASE WHEN d.download_type = 'ALBUM' THEN d.youtube_id ELSE a.album_id END
              WHERE t.phase = 'SUCCEEDED'
                AND t.library_path IS NULL
                AND t.slskd_filename IS NOT NULL
@@ -608,7 +620,16 @@ public class DownloadTaskRepository {
                         row.get("collection_title", String.class),
                         artists(row.get("collection_artists", String[].class)),
                         row.get("album_title", String.class),
-                        artists(row.get("album_artists", String[].class))))
+                        artists(row.get("album_artists", String[].class)),
+                        new SongTagger.Tags(
+                                row.get("tag_title", String.class),
+                                artists(row.get("song_artists", String[].class)),
+                                row.get("tag_album", String.class),
+                                artists(row.get("tag_album_artists", String[].class)),
+                                row.get("tag_year", Integer.class),
+                                row.get("tag_track", Integer.class),
+                                row.get("tag_track_total", Integer.class),
+                                row.get("tag_cover", String.class))))
                 .all();
     }
 
