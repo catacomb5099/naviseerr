@@ -70,6 +70,13 @@ public final class SlskdFixtures {
                 HttpMethod.POST, URI.create("https://slskd.example/api/v0/searches"), new HttpHeaders());
     }
 
+    /** slskd 0.26.0's answer to {@code POST /searches} while it is not logged in to Soulseek (04-10-2026). */
+    public static WebClientResponseException soulseekOffline() {
+        return WebClientResponseException.create(409, "Conflict", new HttpHeaders(),
+                ("\"The server connection must be connected and logged in to perform a search "
+                        + "(currently: Disconnected)\"").getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+    }
+
     /** slskd responding with an HTTP error status, e.g. 400 (rejected) or 502 (upstream failure). */
     public static WebClientResponseException responseFailure(int statusCode) {
         return WebClientResponseException.create(statusCode, "error", new HttpHeaders(),

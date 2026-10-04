@@ -927,6 +927,31 @@ class DownloadStateMachineTest {
         assertEquals("WebClientRequestException", assertInstanceOf(DownloadDecision.Continue.class, d).next().lastError());
     }
 
+    // ---- 04-10-2026: slskd not logged in to Soulseek refuses every search with 409 and says why ----
+
+    @Test
+    void callFailed_startingASearch_whileSoulseekIsOffline_isRetried_andKeepsSlskdsReason() {
+        DownloadDecision d = machine.onCallFailed(
+                at(DownloadPhase.SEARCH_INIT), SlskdFixtures.soulseekOffline(), T0.plusSeconds(10));
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(1, next.retryIndex(), "Soulseek may come back within the budget");
+        assertTrue(next.lastError().startsWith("409"), next.lastError());
+        assertTrue(next.lastError().contains("must be connected and logged in to perform a search"), next.lastError());
+    }
+
+    @Test
+    void callFailed_startingASearch_whileSoulseekIsOffline_onceTheRetriesRunOut_failsAsSoulseekOffline() {
+        DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().retryIndex(RETRY_LIMIT).build();
+        Instant spent = T0.plus(SEARCH_BUDGET).plusSeconds(1);
+
+        assertEquals(DownloadFailureCode.SOULSEEK_OFFLINE, assertInstanceOf(DownloadDecision.Terminal.class,
+                machine.onCallFailed(task, SlskdFixtures.soulseekOffline(), spent)).failureCode());
+        assertEquals(DownloadFailureCode.SEARCH_FAILED, assertInstanceOf(DownloadDecision.Terminal.class,
+                machine.onCallFailed(task, SlskdFixtures.responseFailure(429), spent)).failureCode(),
+                "only the last refusal counts, and only a 409 means Soulseek is offline");
+    }
+
     @Test
     void callFailed_startingASearch_withKeptFiles_downloadsThemWhenTheRetriesRunOut() {
         DownloadTask task = at(DownloadPhase.SEARCH_INIT).toBuilder().searchTier(1).retryIndex(RETRY_LIMIT)

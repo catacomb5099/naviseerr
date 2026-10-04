@@ -8,6 +8,7 @@ import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 import java.time.Clock;
@@ -49,7 +50,14 @@ public class DownloadStepExecutor {
         Instant now = clock.instant();
         return step(task, searchesById, transfersById, sharers, now)
                 .onErrorResume(error -> {
-                    log.warn("Step {} for download {} failed", task.phase(), task.downloadId(), error);
+                    // slskd saying no already says why; its stack trace is 50 lines of nothing more,
+                    // 31 times per song while Soulseek is offline (04-10-2026). Anything else keeps it.
+                    if (error instanceof WebClientResponseException) {
+                        log.warn("Step {} for download {} failed: slskd answered {}", task.phase(),
+                                task.downloadId(), DownloadStateMachine.describe(error));
+                    } else {
+                        log.warn("Step {} for download {} failed", task.phase(), task.downloadId(), error);
+                    }
                     return Mono.just(stateMachine.onCallFailed(task, error, now));
                 });
     }
