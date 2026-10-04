@@ -67,8 +67,9 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 - **Release, one statement** (`RELEASE_ALBUM_SONGS_SQL`). Marks the search DONE (only by its lease holder,
   only once) and only then touches the songs that are still untouched: still at the start, no search of
   their own, first wording, no kept files, no live lease. A song the best whole folder holds gets its
-  file there plus the same track in the next two whole folders of other sharers, each marked
-  `source: "ALBUM_FOLDER"`, and goes straight to downloading. Every other waiting song is due now and
+  file there plus the same track from the next two later folders of other sharers that have it (whole
+  folders; since A3 part folders too), each marked `source: "ALBUM_FOLDER"`, and goes straight to
+  downloading. Every other waiting song is due now and
   searches on its own. Both get a fresh clock and no lease.
 - **Fallback.** A song whose album-folder files all fail (rejected, stalled, errored past retries) goes
   back to its own search at the first wording instead of ending "sources exhausted"; the runner removes
