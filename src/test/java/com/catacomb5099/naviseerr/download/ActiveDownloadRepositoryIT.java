@@ -37,6 +37,7 @@ class ActiveDownloadRepositoryIT {
 
     @BeforeEach
     void clean() {
+        template.getDatabaseClient().sql("DELETE FROM album_searches").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM media_items").fetch().rowsUpdated().block();
@@ -293,6 +294,21 @@ class ActiveDownloadRepositoryIT {
         // One song is transferring, the other has not started searching. The album is not
         // "downloading" -- the honest summary of mixed progress is the part that is not done.
         moveOneSongTo(album, "ahead", DownloadPhase.DOWNLOAD_POLL);
+
+        assertEquals(DownloadStage.STARTING, active().getFirst().stage());
+    }
+
+    @Test
+    void findActive_anAlbumWhoseSongsWaitForItsAlbumSearch_readsAsSearching() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        taskRepository.createTasks(album, List.of(DownloadTask.initial(album, "yt-a", "a", NOW),
+                DownloadTask.initial(album, "yt-b", "b", NOW)), NOW, NOW.plusSeconds(240)).block();
+
+        assertEquals(DownloadStage.SEARCHING, active().getFirst().stage(), "the album search is the songs' search");
+
+        // The album search is over and released its songs to search on their own.
+        template.getDatabaseClient().sql("UPDATE album_searches SET phase = 'DONE' WHERE download_id = :id")
+                .bind("id", album).fetch().rowsUpdated().block();
 
         assertEquals(DownloadStage.STARTING, active().getFirst().stage());
     }

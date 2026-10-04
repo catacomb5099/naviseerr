@@ -45,6 +45,7 @@ public class DownloadTaskRunner {
     private final YtMusicService ytMusicService;
     private final CuratorClient curatorClient;
     private final LibraryOrganiser organiser;
+    private final AlbumSearchStep albumSearches;
     private final Clock clock;
     private final Duration loopInterval;
     private final int batchSize;
@@ -64,6 +65,7 @@ public class DownloadTaskRunner {
             YtMusicService ytMusicService,
             CuratorClient curatorClient,
             LibraryOrganiser organiser,
+            AlbumSearchStep albumSearches,
             Clock clock,
             @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
             @Value("${download-task.batch-size:10}") int batchSize,
@@ -78,6 +80,7 @@ public class DownloadTaskRunner {
         this.ytMusicService = ytMusicService;
         this.curatorClient = curatorClient;
         this.organiser = organiser;
+        this.albumSearches = albumSearches;
         this.clock = clock;
         this.loopInterval = loopInterval;
         this.batchSize = batchSize;
@@ -192,9 +195,12 @@ public class DownloadTaskRunner {
                             null, Objects.requireNonNullElse(collection.trackCount(), songs.size()),
                             collection.year(), collection.type()));
                     songs.stream().map(MediaItem::of).forEach(media::add);
+                    // P5: an album first looks for one sharer with every song; its songs wait for that.
+                    Instant albumHold = download.getDownloadType() == DownloadType.ALBUM
+                            ? albumSearches.holdUntil(now) : null;
                     return repository.upsertMedia(media)
                             .then(alreadyFiled(download, tasks))
-                            .flatMap(ready -> repository.createTasks(download.getDownloadId(), ready, now))
+                            .flatMap(ready -> repository.createTasks(download.getDownloadId(), ready, now, albumHold))
                             .doOnNext(admitted -> {
                                 if (admitted > 0) {
                                     log.info("Admitted download {} ({} '{}') as {} task(s)",
@@ -370,17 +376,26 @@ public class DownloadTaskRunner {
      * (SEARCH_INIT). Polls of already-running searches and transfers are never gated — polling is one
      * cheap GET, and starving it stalls work slskd is happily finishing. The search gate is a count,
      * not a yes/no: slskd runs two searches at a time and queues the rest inside itself, so anything
-     * we start beyond its slots only waits in that queue while our search budget runs down.
+     * we start beyond its slots only waits in that queue while our search budget runs down. Album
+     * searches (P5) share those slots and are claimed first: the songs get only what they leave, so
+     * one pass never starts more than the free slots between them, and an album's songs (held while
+     * it searches) are never kept waiting behind another download's songs.
      */
     private Mono<Void> stepDueTasks(Instant now) {
         return Mono.zip(repository.transfersInFlight().collectList(), repository.countActiveSearches())
                 .flatMap(active -> {
                     boolean transferSlotsFree = active.getT1().size() < maxConcurrentTransfers;
                     int searchSlots = (int) Math.max(0, maxConcurrentSearches - active.getT2());
-                    return repository.claimDueTasks(batchSize, instanceId, now, leaseDuration,
-                                    transferSlotsFree, searchSlots)
+                    return repository.claimDueAlbumSearches(batchSize, instanceId, now, leaseDuration, searchSlots)
                             .collectList()
-                            .flatMap(claimed -> stepAll(claimed, active.getT1()));
+                            .flatMap(albums -> {
+                                long albumStarts = albums.stream()
+                                        .filter(album -> album.phase() == DownloadPhase.SEARCH_INIT).count();
+                                return repository.claimDueTasks(batchSize, instanceId, now, leaseDuration,
+                                                transferSlotsFree, (int) (searchSlots - albumStarts))
+                                        .collectList()
+                                        .flatMap(claimed -> stepAll(albums, claimed, active.getT1()));
+                            });
                 });
     }
 
@@ -396,9 +411,9 @@ public class DownloadTaskRunner {
      * caps at batch-size rows, so the sibling that is actually being sent is often not claimed in the
      * same pass as the one waiting behind it (P9, {@link SharerLoad}).
      */
-    private Mono<Void> stepAll(List<DownloadTask> claimed,
+    private Mono<Void> stepAll(List<AlbumSearch> albums, List<DownloadTask> claimed,
                                List<DownloadTaskRepository.TransferInFlight> ours) {
-        if (claimed.isEmpty()) {
+        if (claimed.isEmpty() && albums.isEmpty()) {
             // Nothing due this pass means the batched calls below never run, so a fully idle system
             // would otherwise make zero slskd calls between real downloads -- leaving the connection
             // pool free to go stale for however long that gap is (see SlskdConfig's timeout/pool
@@ -415,9 +430,9 @@ public class DownloadTaskRunner {
         }
         // slskd returns its whole search history, so narrow to our own rows -- and drop null ids,
         // which collectMap would otherwise key on (the nested-response bug, search-side).
-        Set<String> trackedSearchIds = claimed.stream()
-                .filter(t -> t.phase() == DownloadPhase.SEARCH_POLL)
-                .map(DownloadTask::searchId)
+        Set<String> trackedSearchIds = java.util.stream.Stream.concat(
+                        claimed.stream().filter(t -> t.phase() == DownloadPhase.SEARCH_POLL).map(DownloadTask::searchId),
+                        albums.stream().filter(a -> a.phase() == DownloadPhase.SEARCH_POLL).map(AlbumSearch::searchId))
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
         boolean needsSearches = !trackedSearchIds.isEmpty();
@@ -435,8 +450,9 @@ public class DownloadTaskRunner {
         ours.stream().map(DownloadTaskRepository.TransferInFlight::transferId).filter(Objects::nonNull)
                 .forEach(ourTransferIds::add);
 
-        log.debug("Pass stepping {} claimed row(s); slskd calls this pass: GET /searches={}, "
-                + "GET /transfers/downloads={}", claimed.size(), needsSearches, needsTransfers);
+        log.debug("Pass stepping {} claimed row(s) and {} album search(es); slskd calls this pass: "
+                + "GET /searches={}, GET /transfers/downloads={}", claimed.size(), albums.size(),
+                needsSearches, needsTransfers);
 
         Mono<Map<String, SearchState>> searches = needsSearches
                 ? slskdService.getAllSearches()
@@ -477,15 +493,24 @@ public class DownloadTaskRunner {
                 : Mono.just(Map.of());
 
         // SEARCH_INIT rows are stepped one after another: slskd answers an overlapping POST /searches
-        // with 429 ("Only one concurrent operation is permitted"). Everything else stays concurrent.
+        // with 429 ("Only one concurrent operation is permitted"). Album starts go first, in the same
+        // queue, for the same reason. Everything else stays concurrent.
         return Mono.zip(searches, transfers)
                 .flatMap(fetched -> {
                     SharerLoad sharers = SharerLoad.of(ours, fetched.getT2());
+                    Instant now = clock.instant();
                     return Flux.merge(
-                            Flux.fromIterable(claimed)
-                                    .filter(task -> task.phase() == DownloadPhase.SEARCH_INIT)
-                                    .concatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2(),
-                                            sharers)),
+                            Flux.concat(
+                                    Flux.fromIterable(albums)
+                                            .filter(album -> album.phase() == DownloadPhase.SEARCH_INIT)
+                                            .concatMap(album -> albumSearches.step(album, fetched.getT1(), now, instanceId)),
+                                    Flux.fromIterable(claimed)
+                                            .filter(task -> task.phase() == DownloadPhase.SEARCH_INIT)
+                                            .concatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2(),
+                                                    sharers))),
+                            Flux.fromIterable(albums)
+                                    .filter(album -> album.phase() != DownloadPhase.SEARCH_INIT)
+                                    .flatMap(album -> albumSearches.step(album, fetched.getT1(), now, instanceId)),
                             Flux.fromIterable(claimed)
                                     .filter(task -> task.phase() != DownloadPhase.SEARCH_INIT)
                                     .flatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2(), sharers),
@@ -517,6 +542,14 @@ public class DownloadTaskRunner {
                             advance.next().candidates().size(), advance.next().searchQuery(),
                             advance.next().searchTier() + 1, SearchQueryTiers.of(task.songName()).size());
                 }
+                // P5 fallback: every album-folder file failed and the song goes back to its own search.
+                // Those files will not be resumed, so their partial files go, as for a song that failed.
+                boolean leftAlbumFolder = advance.next().phase() == DownloadPhase.SEARCH_INIT
+                        && (task.phase() == DownloadPhase.DOWNLOAD_INIT || task.phase() == DownloadPhase.DOWNLOAD_POLL);
+                if (leftAlbumFolder) {
+                    log.info("Song '{}' of download {}: no sharer of the whole album could send it; searching "
+                            + "for it on its own", task.songName(), task.downloadId());
+                }
                 yield repository.save(advance.next(), instanceId)
                         // Zero rows means the row went terminal under us -- cancelled by the user while this
                         // step was enqueueing. slskd now has a transfer nobody tracks; stop it. A crash before
@@ -533,7 +566,7 @@ public class DownloadTaskRunner {
                                             return Mono.empty();
                                         })
                                 : Mono.empty())
-                        .then();
+                        .then(leftAlbumFolder ? organiser.deletePartials(task) : Mono.empty());
             }
             case DownloadDecision.Continue proceed -> repository.save(proceed.next(), instanceId).then();
             case DownloadDecision.Terminal terminal -> {

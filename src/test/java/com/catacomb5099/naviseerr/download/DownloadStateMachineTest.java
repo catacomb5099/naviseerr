@@ -179,7 +179,7 @@ class DownloadStateMachineTest {
     private static List<DownloadCandidate> graded(String grade, String... usernames) {
         return candidates(usernames).stream().map(c -> new DownloadCandidate(c.username(), c.filename(),
                 c.extension(), c.bitRate(), c.size(), c.code(), c.isLocked(), c.hasFreeUploadSlot(),
-                c.queueLength(), c.uploadSpeed(), grade)).toList();
+                c.queueLength(), c.uploadSpeed(), grade, null)).toList();
     }
 
     @Test
@@ -750,6 +750,65 @@ class DownloadStateMachineTest {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
                 SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), Set.of(), T0.plusSeconds(3));
+
+        assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
+                assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
+    }
+
+    // ---- files from a whole-album folder (P5) ----------------------------------------------------
+
+    @Test
+    void albumFolderFiles_allFailed_sendTheSongBackToItsOwnSearch_insteadOfFailingIt() {
+        DownloadTask fromFolders = downloadPolling(albumFolderCandidates("alice", "bob"), 1, 0, "abc")
+                .toBuilder().searchId(null).progressPercent(java.math.BigDecimal.TEN).build();
+
+        DownloadDecision d = machine.afterDownloadPoll(fromFolders,
+                SlskdFixtures.transfer("abc", "bob", "Completed, Rejected"), Set.of(), T0.plusSeconds(30));
+
+        // Advance (searched next pass), at the first wording, with nothing carried over: the folder files
+        // must not come back as "kept" candidates of its own search.
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.SEARCH_INIT, next.phase());
+        assertEquals(0, next.searchTier());
+        assertNull(next.searchId());
+        assertEquals(List.of(), next.candidates());
+        assertEquals(0, next.candidateIndex());
+        assertNull(next.slskdUsername());
+        assertNull(next.slskdTransferId());
+        assertEquals(java.math.BigDecimal.ZERO, next.progressPercent());
+        assertEquals(T0.plusSeconds(30), next.phaseEnteredAt(), "a fresh search budget");
+    }
+
+    @Test
+    void albumFolderFiles_thatStalledOrRanOutOfRetries_alsoFallBack() {
+        DownloadDecision stalled = machine.afterDownloadPoll(
+                downloadPolling(albumFolderCandidates("alice"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Queued, Remotely"),
+                Set.of(), T0.plus(QUEUED_BUDGET).plusSeconds(1));
+        DownloadDecision errored = machine.afterDownloadPoll(
+                downloadPolling(albumFolderCandidates("alice"), 0, RETRY_LIMIT, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Errored"), Set.of(), T0);
+
+        assertEquals(DownloadPhase.SEARCH_INIT, assertInstanceOf(DownloadDecision.Advance.class, stalled).next().phase());
+        assertEquals(DownloadPhase.SEARCH_INIT, assertInstanceOf(DownloadDecision.Advance.class, errored).next().phase());
+    }
+
+    @Test
+    void albumFolderFiles_withAnotherFolderLeft_failOverToIt_asAnyCandidateList() {
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(albumFolderCandidates("alice", "bob"), 0, 0, "abc"),
+                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), Set.of(), T0);
+
+        assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
+    }
+
+    @Test
+    void albumFolderFiles_whoseMarkAnOlderInstanceDropped_endAsToday() {
+        // An older naviseerr saving the row writes candidates without "source"; the song then fails
+        // SOURCES_EXHAUSTED as before this existed (documented in AGENTS.md), never loops.
+        DownloadDecision d = machine.afterDownloadPoll(
+                downloadPolling(candidates("alice"), 0, 0, "abc").toBuilder().searchId(null).build(),
+                SlskdFixtures.transfer("abc", "alice", "Completed, Rejected"), Set.of(), T0);
 
         assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());

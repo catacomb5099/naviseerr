@@ -175,8 +175,17 @@ those changes add no migration of their own and cannot land out of order.
   `copy_key` (the organiser files one copy per key per pass) and `pick_size` (the new copy is deleted
   only when its size is the pick's).
 - `album_searches` (one row per album download: `phase` SEARCH_INIT/SEARCH_POLL/DONE, tier, search id,
-  due time, lease, outcome) with the partial index `idx_album_searches_due`: created empty, unused until
-  the whole-album change lands.
+  due time, lease, outcome) with the partial index `idx_album_searches_due`: written since 04-10-2026 by
+  whole-album downloads (see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026)).
+  Inserted by `CREATE_TASKS_SQL` (an `album` CTE on `admitted`, only for an `ALBUM`, which also writes
+  the songs due at `:holdUntil`); claimed by `CLAIM_DUE_ALBUM_SEARCHES_SQL` (CLAIM_DUE_SQL's two locking
+  CTEs, joined with the album's `media_items` row for its name); written by `SAVE_ALBUM_SEARCH_SQL`
+  (lease holder only, never once DONE; re-holds the waiting songs when a wording starts); ended by
+  `RELEASE_ALBUM_SONGS_SQL` (one statement: DONE first, then the untouched songs) or by `CANCEL_SQL`'s
+  `album` CTE. Every statement that writes both locks the album row before its songs; `CANCEL_SQL`
+  reads its `album` CTE in a one-time filter for that, since an unread CTE runs after the main update
+  and the opposite order deadlocks with a release. Its `SEARCH_POLL` rows are added into `COUNT_ACTIVE_SEARCHES_SQL`. Rows are kept once
+  DONE, like task rows.
 
 ## Entity and status
 
@@ -249,7 +258,7 @@ RETURNING download_id, song_name, phase, phase_entered_at, next_attempt_at, sear
 - **`concludeDownloads()`** *(V5)* - gives a download its terminal status once every one of its tasks is terminal, `PARTIAL_SUCCESS` when there is one of each outcome. Run at the end of every pass and idempotent (`AND d.status = 'IN_PROGRESS'` stops it matching a second time). This exists because the aggregate **cannot** be folded into the per-task terminal write: two songs finishing concurrently would each see the other as still running and neither would conclude, leaving the download `IN_PROGRESS` forever. [The ADR](../decisions/collection-downloads-14-09-2026.md) has the full argument.
 - **`failUnadmitted(downloadId, code, now)`** *(V5; V6 added the code and timestamp)* - fails a request whose metadata call returned a 400/404, which is the one failure with no task row to record it on — so it writes `downloads.failure_reason` and `downloads.finished_at` itself.
 - **`upsertMedia(items)`** *(V6)* - writes the `media_items` rows for one adapter answer; see the V6 section above. Called by the runner BEFORE `createTasks`, so a crash between the two leaves harmless extra metadata rather than nameless task rows.
-- **`countActiveDownloads()`** / **`transfersInFlight()`** / **`countActiveSearches()`** - back the capacity bounds in [download-manager.md](download-manager.md#four-independent-bounds): the first counts `downloads` rows (`status = 'IN_PROGRESS'`), the second lists task rows in `DOWNLOAD_POLL` only (sharer and transfer id; its size is the transfer count, and the rows feed the per-sharer rules, `SharerLoad`), the third task rows in `SEARCH_POLL` only (same deadlock reasoning as below, with `SEARCH_INIT` in place of `DOWNLOAD_INIT`). `DOWNLOAD_INIT` is deliberately excluded: it always has a null `slskd_transfer_id` (no real transfer exists yet), so counting it against the same cap that gates claiming `DOWNLOAD_INIT` rows would let enough `DOWNLOAD_INIT` rows close the gate permanently - a durable deadlock no restart could clear.
+- **`countActiveDownloads()`** / **`transfersInFlight()`** / **`countActiveSearches()`** - back the capacity bounds in [download-manager.md](download-manager.md#four-independent-bounds): the first counts `downloads` rows (`status = 'IN_PROGRESS'`), the second lists task rows in `DOWNLOAD_POLL` only (sharer and transfer id; its size is the transfer count, and the rows feed the per-sharer rules, `SharerLoad`), the third task rows and album searches in `SEARCH_POLL` only (same deadlock reasoning as below, with `SEARCH_INIT` in place of `DOWNLOAD_INIT`). `DOWNLOAD_INIT` is deliberately excluded: it always has a null `slskd_transfer_id` (no real transfer exists yet), so counting it against the same cap that gates claiming `DOWNLOAD_INIT` rows would let enough `DOWNLOAD_INIT` rows close the gate permanently - a durable deadlock no restart could clear.
 
 ## The terminal CTE
 

@@ -1,7 +1,9 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
+import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor.Pick;
+import com.catacomb5099.naviseerr.util.TrackMatchingService;
 
 import java.util.Optional;
 
@@ -32,9 +34,27 @@ public record DownloadCandidate(
          * was not shared, or from a file whose path never named the artist because nothing better was
          * found. Null on rows written before 28-09-2026.
          */
-        String grade) {
+        String grade,
+        /**
+         * {@link #ALBUM_FOLDER} when the file came from one sharer's whole-album folder rather than from
+         * the song's own search; null otherwise. A song whose album-folder files all fail goes back to
+         * its own search instead of failing (P5). Null on every row written before 04-10-2026.
+         */
+        String source) {
+
+    /** The candidate came from the album search's whole folder (P5), not from the song's own search. */
+    public static final String ALBUM_FOLDER = "ALBUM_FOLDER";
 
     public static DownloadCandidate from(Pick pick) {
+        return from(pick, null);
+    }
+
+    /** One track's file in a whole-album folder; always the requested version (EXACT). */
+    public static DownloadCandidate fromAlbumFolder(SearchResponseItem peer, SearchFile file) {
+        return from(new Pick(peer, file, TrackMatchingService.Match.EXACT), ALBUM_FOLDER);
+    }
+
+    private static DownloadCandidate from(Pick pick, String source) {
         SearchFile file = pick.file();
         return new DownloadCandidate(
                 pick.peer().getUsername(),
@@ -47,7 +67,8 @@ public record DownloadCandidate(
                 pick.peer().getHasFreeUploadSlot(),
                 pick.peer().getQueueLength(),
                 pick.peer().getUploadSpeed(),
-                pick.grade().name());
+                pick.grade().name(),
+                source);
     }
 
     public SearchFile toSearchFile() {

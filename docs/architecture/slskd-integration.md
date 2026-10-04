@@ -50,6 +50,7 @@ What has changed since the original assessment: `DownloadTaskRunner` now filters
   4. sort by availability first (`hasFreeUploadSlot`, then `queueLength`, then `uploadSpeed` descending) — see `SlskdSearchResultProcessor.BY_AVAILABILITY`,
   5. cap to `slskd-service.max-files-per-download`.
 - `DownloadStepExecutor` calls this only once a `SEARCH_POLL` sees `isComplete = true`, then converts the result to `DownloadCandidate` (see [download-manager.md](download-manager.md)) for storage on the task row.
+- An album download's own search (P5) is judged by [AlbumFolderPicker](../../src/main/java/com/catacomb5099/naviseerr/download/AlbumFolderPicker.java) instead, which reuses this class's format rule (`isLosslessOrHighBitRate`) and overload test (`isOverloaded`) and `TrackMatchingService.grade`, and looks for a sharer's folder (disc subfolders merged) holding every track of the album; see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026). The 10-file cap above does not apply there.
 
 ### Track matching
 
