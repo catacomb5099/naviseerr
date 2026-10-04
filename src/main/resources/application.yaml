@@ -34,7 +34,8 @@ logging:
   level:
     # DEBUG here surfaces the per-pass slskd call log ("slskd calls this pass: GET /searches=...,
     # GET /transfers/downloads=..."), which is the direct measure of the slskd request rate — count
-    # those lines over a minute rather than inferring it from the intervals below.
+    # those lines over a minute rather than inferring it from the intervals below. The all-in-one
+    # compose.yaml turns this down to INFO (LOG_LEVEL in .env).
     com.catacomb5099.naviseerr.download: DEBUG
     # The tag library (SongTagger) logs routine steps at SEVERE, dozens of lines per file.
     org.jaudiotagger: OFF
