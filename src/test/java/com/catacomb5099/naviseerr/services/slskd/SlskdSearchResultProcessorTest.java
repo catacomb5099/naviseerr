@@ -154,8 +154,10 @@ class SlskdSearchResultProcessorTest {
                 94998089, 1, false, "", Optional.empty(), Optional.of(408));
         SearchFile upperFlac = new SearchFile("Music\\Daft Punk\\Discovery\\03 - Digital Love.FLAC",
                 29000000, 1, false, "", Optional.empty(), Optional.empty());
+        // The real ones also carry a bitRate (717 here) that would clear the bar anyway; without it,
+        // only reading the suffix over the wrong field keeps this file.
         SearchFile flacClaimingMp3 = new SearchFile("Music\\Daft Punk\\Discovery\\06 - Night Vision.flac",
-                9368517, 1, false, "mp3", Optional.of(717), Optional.of(104));
+                9368517, 1, false, "mp3", Optional.empty(), Optional.of(104));
         SearchFile blankWav = new SearchFile("Music\\Daft Punk\\Discovery\\01 - One More Time.wav",
                 56000000, 1, false, "", Optional.empty(), Optional.empty());
         SearchFile mp3At320 = new SearchFile("Music\\Daft Punk\\Discovery\\02 - Aerodynamic.mp3",
@@ -165,14 +167,17 @@ class SlskdSearchResultProcessorTest {
         // no suffix and no extension at all: must not throw, and has nothing to pass on
         SearchFile noFormat = new SearchFile("Music\\Mr. Big\\To Be With You",
                 3000000, 1, false, null, Optional.empty(), Optional.empty());
+        // no suffix: the extension field is all there is
+        SearchFile suffixlessFlac = new SearchFile("Music\\Mr. Big\\Wild World",
+                30000000, 1, false, "flac", Optional.empty(), Optional.empty());
         SearchResponseItem sharer = mock(SearchResponseItem.class);
         when(sharer.getUsername()).thenReturn("sharer");
-        when(sharer.getFiles()).thenReturn(List.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, mp3At128, noFormat));
+        when(sharer.getFiles()).thenReturn(List.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, mp3At128, noFormat, suffixlessFlac));
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 10);
 
         var result = processor.selectBestFiles(state(sharer), "track", "track").block();
 
-        assertEquals(java.util.Set.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320),
+        assertEquals(java.util.Set.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, suffixlessFlac),
                 java.util.Set.copyOf(result.stream().map(SlskdSearchResultProcessor.Pick::file).toList()));
     }
 
