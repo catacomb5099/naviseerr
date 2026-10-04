@@ -298,6 +298,21 @@ class ActiveDownloadRepositoryIT {
     }
 
     @Test
+    void findActive_songsWaitingTheirTurnWhileAnotherTransfers_readAsDownloading() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        admit(album, "sending", "waiting", "next");
+        moveOneSongTo(album, "sending", DownloadPhase.DOWNLOAD_INIT);
+        moveOneSongTo(album, "waiting", DownloadPhase.DOWNLOAD_INIT);
+        moveOneSongTo(album, "next", DownloadPhase.DOWNLOAD_INIT);
+        assertEquals(DownloadStage.READY_TO_DOWNLOAD, active().getFirst().stage(), "nothing transfers yet");
+
+        // One sharer sends one song while the others wait their turn with it.
+        moveOneSongTo(album, "sending", DownloadPhase.DOWNLOAD_POLL);
+
+        assertEquals(DownloadStage.DOWNLOADING, active().getFirst().stage());
+    }
+
+    @Test
     void findActive_averagesProgressAcrossAnAlbumsSongs() {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "one", "two");
