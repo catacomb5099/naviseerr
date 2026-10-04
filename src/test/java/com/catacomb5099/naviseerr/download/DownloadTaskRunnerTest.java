@@ -65,7 +65,7 @@ class DownloadTaskRunnerTest {
         when(repository.concludeDownloads()).thenReturn(Mono.just(0L));
         when(repository.failUnadmitted(any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.countActiveDownloads()).thenReturn(Mono.just(0L));
-        when(repository.countActiveTransfers()).thenReturn(Mono.just(0L));
+        when(repository.transfersInFlight()).thenReturn(Flux.empty());
         when(repository.countActiveSearches()).thenReturn(Mono.just(0L));
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.empty());
@@ -147,7 +147,7 @@ class DownloadTaskRunnerTest {
     void aSongThatFailedForGood_hasItsPartialFilesRemoved_butOnlyOnTheFirstFinish() {
         DownloadTask task = downloadPolling(candidates("alice"), 0, 0, "abc");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED)));
 
         runner.pass().block();
@@ -163,7 +163,7 @@ class DownloadTaskRunnerTest {
     void aSongThatSucceeded_keepsItsFile_forTheFilingStep() {
         DownloadTask task = downloadPolling(candidates("alice"), 0, 0, "abc");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Terminal(DownloadStatus.SUCCEEDED, null)));
 
         runner.pass().block();
@@ -225,6 +225,40 @@ class DownloadTaskRunnerTest {
         verify(repository, never()).setOrganisedAt(any(), any());
     }
 
+    private static Flux<DownloadTaskRepository.TransferInFlight> transfersWith(String sharer, int count) {
+        return Flux.range(0, count).map(i -> new DownloadTaskRepository.TransferInFlight(sharer, "t" + i));
+    }
+
+    // ---- one sharer, many songs (P9) -------------------------------------------------------------
+
+    @Test
+    void theSharersSendingUs_areJudgedFromAllOurTransfers_notJustTheClaimedOnes_andNeverFromOthers() {
+        // Only the waiting row is claimed this pass; its delivering sibling is not (batch-size).
+        DownloadTask waiting = downloadPolling(candidates("alice"), 0, 0, "w");
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
+                .thenReturn(Flux.just(waiting));
+        when(repository.transfersInFlight()).thenReturn(Flux.just(
+                new DownloadTaskRepository.TransferInFlight("alice", "w"),
+                new DownloadTaskRepository.TransferInFlight("alice", "d"),
+                new DownloadTaskRepository.TransferInFlight("bob", "b")));
+        when(slskdService.getAllDownloads()).thenReturn(Flux.just(
+                SlskdFixtures.transfer("w", "alice", "Queued, Remotely"),
+                SlskdFixtures.transfer("d", "alice", "InProgress", 30f, 300L),
+                SlskdFixtures.transfer("b", "bob", "Queued, Remotely"),
+                // Not ours (the owner's own download, another install's): must not count.
+                SlskdFixtures.transfer("x", "carol", "InProgress", 30f, 300L)));
+        when(executor.execute(eq(waiting), any(), any(), any())).thenReturn(Mono.just(
+                new DownloadDecision.Continue(waiting.dueAt(T0.plusSeconds(5)))));
+
+        runner.pass().block();
+
+        ArgumentCaptor<SharerLoad> sharers = ArgumentCaptor.forClass(SharerLoad.class);
+        verify(executor).execute(eq(waiting), any(), any(), sharers.capture());
+        assertEquals(java.util.Set.of("alice"), sharers.getValue().delivering());
+        assertEquals(2, sharers.getValue().take("alice"), "both of alice's transfers are counted");
+        assertEquals(0, sharers.getValue().take("carol"), "carol's transfer is not ours");
+    }
+
     private static LibraryOrganiser.Job job(UUID taskId) {
         return new LibraryOrganiser.Job(taskId, DownloadType.SONG, "music\\a\\c.flac", T0.minusSeconds(5),
                 "c", List.of("A"), null, List.of(), null, List.of(), null);
@@ -232,7 +266,7 @@ class DownloadTaskRunnerTest {
 
     @Test
     void atTheTransferCap_downloadInitTasksAreExcludedFromTheClaim() {
-        when(repository.countActiveTransfers()).thenReturn(Mono.just(20L));
+        when(repository.transfersInFlight()).thenReturn(transfersWith("alice", 20));
 
         runner.pass().block();
 
@@ -242,7 +276,7 @@ class DownloadTaskRunnerTest {
 
     @Test
     void belowTheTransferCap_downloadInitTasksAreClaimable() {
-        when(repository.countActiveTransfers()).thenReturn(Mono.just(19L));
+        when(repository.transfersInFlight()).thenReturn(transfersWith("alice", 19));
 
         runner.pass().block();
 
@@ -282,11 +316,11 @@ class DownloadTaskRunnerTest {
         List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
         // The first POST takes a moment; with concurrent stepping the second would be fired
         // before it returns, which is exactly what slskd answers with 429.
-        when(executor.execute(eq(first), any(), any())).thenReturn(
+        when(executor.execute(eq(first), any(), any(), any())).thenReturn(
                 Mono.delay(Duration.ofMillis(50))
                         .doOnNext(t -> order.add("first done"))
                         .thenReturn(new DownloadDecision.Continue(first.dueAt(T0.plusSeconds(2)))));
-        when(executor.execute(eq(second), any(), any())).thenAnswer(inv -> {
+        when(executor.execute(eq(second), any(), any(), any())).thenAnswer(inv -> {
             order.add("second started");
             return Mono.just(new DownloadDecision.Continue(second.dueAt(T0.plusSeconds(2))));
         });
@@ -343,7 +377,7 @@ class DownloadTaskRunnerTest {
     void aClaimedSearchPollTask_triggersGetAllSearches_butNotGetAllDownloads() {
         DownloadTask task = searchPolling("s1");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any()))
+        when(executor.execute(eq(task), any(), any(), any()))
                 .thenReturn(Mono.just(new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(2)))));
 
         runner.pass().block();
@@ -356,7 +390,7 @@ class DownloadTaskRunnerTest {
     void aClaimedDownloadPollTask_triggersGetAllDownloads_butNotGetAllSearches() {
         DownloadTask task = downloadPolling(candidates("alice"), 0, 0, "abc");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(5)))));
 
         runner.pass().block();
@@ -371,12 +405,12 @@ class DownloadTaskRunnerTest {
         SearchState state = SlskdFixtures.searchState("s1", true, "Completed");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
         when(slskdService.getAllSearches()).thenReturn(Flux.just(state));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(2)))));
 
         runner.pass().block();
 
-        verify(executor).execute(eq(task), eq(java.util.Map.of("s1", state)), eq(java.util.Map.of()));
+        verify(executor).execute(eq(task), eq(java.util.Map.of("s1", state)), eq(java.util.Map.of()), any());
     }
 
     @Test
@@ -384,7 +418,7 @@ class DownloadTaskRunnerTest {
         DownloadTask task = at(DownloadPhase.SEARCH_INIT);
         DownloadTask next = task.withPhase(DownloadPhase.SEARCH_POLL, T0);
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any()))
+        when(executor.execute(eq(task), any(), any(), any()))
                 .thenReturn(Mono.just(new DownloadDecision.Advance(next)));
 
         runner.pass().block();
@@ -398,7 +432,7 @@ class DownloadTaskRunnerTest {
         DownloadTask task = searchPolling("s1");
         DownloadTask next = task.dueAt(T0.plusSeconds(2));
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any()))
+        when(executor.execute(eq(task), any(), any(), any()))
                 .thenReturn(Mono.just(new DownloadDecision.Continue(next)));
 
         runner.pass().block();
@@ -410,7 +444,7 @@ class DownloadTaskRunnerTest {
     void terminalDecision_finishesTheDownload_andNeverSavesTheTask() {
         DownloadTask task = searchPolling("s1");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Terminal(DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES)));
 
         runner.pass().block();
@@ -431,8 +465,8 @@ class DownloadTaskRunnerTest {
         DownloadTask goodNext = good.dueAt(T0.plusSeconds(2));
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
                 .thenReturn(Flux.just(bad, good));
-        when(executor.execute(eq(bad), any(), any())).thenReturn(Mono.error(new RuntimeException("boom")));
-        when(executor.execute(eq(good), any(), any()))
+        when(executor.execute(eq(bad), any(), any(), any())).thenReturn(Mono.error(new RuntimeException("boom")));
+        when(executor.execute(eq(good), any(), any(), any()))
                 .thenReturn(Mono.just(new DownloadDecision.Continue(goodNext)));
 
         runner.pass().block();
@@ -444,7 +478,7 @@ class DownloadTaskRunnerTest {
     void aFailedWriteDoesNotStopThePass() {
         DownloadTask task = searchPolling("s1");
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(
                 new DownloadDecision.Continue(task.dueAt(T0.plusSeconds(2)))));
         when(repository.save(any(), any())).thenReturn(Mono.error(new RuntimeException("db down")));
 
@@ -459,7 +493,7 @@ class DownloadTaskRunnerTest {
         DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
                 .slskdUsername("alice").slskdTransferId("t-9").build();
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
         when(repository.save(any(), any())).thenReturn(Mono.just(0L));   // the row was cancelled meanwhile
         when(slskdService.cancelDownload("alice", "t-9")).thenReturn(Mono.empty());
 
@@ -474,7 +508,7 @@ class DownloadTaskRunnerTest {
         DownloadTask enqueued = task.withPhase(DownloadPhase.DOWNLOAD_POLL, T0).toBuilder()
                 .slskdUsername("alice").slskdTransferId("t-9").build();
         when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
-        when(executor.execute(eq(task), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
+        when(executor.execute(eq(task), any(), any(), any())).thenReturn(Mono.just(new DownloadDecision.Advance(enqueued)));
 
         runner.pass().block();
 

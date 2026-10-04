@@ -69,7 +69,7 @@ These values are unverified guesses at the real slskd API strings, not confirmed
 
 - Success: `SUCCEEDED`.
 - Failure: `CANCELLED`, `TIMED_OUT`, `ERRORED`, `REJECTED`, `ABORTED`.
-- Everything else (`QUEUED`, `INITIALIZING`, `IN_PROGRESS`, `COMPLETED`, ...) is "in progress" -> keep polling, except that after `download-task.queued-budget-ms` with no bytes moved (and not `Queued, Locally`) the candidate is abandoned for the next one.
+- Everything else (`QUEUED`, `INITIALIZING`, `IN_PROGRESS`, `COMPLETED`, ...) is "in progress" -> keep polling, except that after `download-task.queued-budget-ms` with no bytes moved (and not `Queued, Locally`) the candidate is abandoned for the next one. That clock restarts at every poll while the same sharer is sending us another of our files (P9: waiting our turn, not stalling; see [download-manager.md](download-manager.md#one-sharer-many-songs-p9-04-10-2026)).
 
 slskd reports compound states like `"Completed, Succeeded"`, so the state string is comma-split before matching. [TransferedFileUtil.getStateList](../../src/main/java/com/catacomb5099/naviseerr/util/TransferedFileUtil.java) does this parsing, matching against `TransferState.getValue()` (the slskd string, e.g. `"InProgress"`, `"TimedOut"`) — not the enum `name()`. `DownloadStateMachine.afterDownloadPoll` treats any success state as `Terminal SUCCEEDED` and any failure state as a retry/next-candidate decision.
 

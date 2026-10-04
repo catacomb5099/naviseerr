@@ -147,6 +147,13 @@ download-task:
   # (58 transfers stuck at 0%; 23 songs each lost ten minutes on one of them before succeeding
   # elsewhere), while a sharer that was merely busy is worth asking again the next day.
   stalling-sharer-cooldown-ms: 21600000
+  # How many of our transfers one sharer may hold at once. A song whose sharer is at the cap waits for
+  # one of them to finish (same sharer, no call to slskd) instead of joining that sharer's queue. With
+  # 2, a sharer holds one file it is sending us and one waiting its turn; a file waiting in the queue
+  # of a sharer that is sending us another is neither stalling nor timed out (its clock restarts at
+  # every poll while that lasts). So an album from one sharer arrives one song after another instead
+  # of every song past the tenth minute being given up on. A very large value switches the cap off.
+  max-transfers-per-sharer: 2
   # A sharer that advertises no free upload slot AND more than this many files already queued is
   # ranked behind every other candidate, even those whose file length differs from the majority.
   # High on purpose: "busy" alone should not lose a sharer its place, only "will not reach us within

@@ -23,6 +23,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -372,15 +373,15 @@ public class DownloadTaskRunner {
      * we start beyond its slots only waits in that queue while our search budget runs down.
      */
     private Mono<Void> stepDueTasks(Instant now) {
-        return Mono.zip(repository.countActiveTransfers(), repository.countActiveSearches())
-                .flatMapMany(active -> {
-                    boolean transferSlotsFree = active.getT1() < maxConcurrentTransfers;
+        return Mono.zip(repository.transfersInFlight().collectList(), repository.countActiveSearches())
+                .flatMap(active -> {
+                    boolean transferSlotsFree = active.getT1().size() < maxConcurrentTransfers;
                     int searchSlots = (int) Math.max(0, maxConcurrentSearches - active.getT2());
                     return repository.claimDueTasks(batchSize, instanceId, now, leaseDuration,
-                            transferSlotsFree, searchSlots);
-                })
-                .collectList()
-                .flatMap(this::stepAll);
+                                    transferSlotsFree, searchSlots)
+                            .collectList()
+                            .flatMap(claimed -> stepAll(claimed, active.getT1()));
+                });
     }
 
     /**
@@ -390,8 +391,13 @@ public class DownloadTaskRunner {
      * {@link DownloadStepExecutor} reading from the resulting maps instead of calling slskd itself, is
      * what turns "one call per download per poll" into "two calls per pass, however many downloads
      * are in flight."
+     *
+     * <p>{@code ours} is every transfer naviseerr has in flight, not just the claimed ones: a poll
+     * caps at batch-size rows, so the sibling that is actually being sent is often not claimed in the
+     * same pass as the one waiting behind it (P9, {@link SharerLoad}).
      */
-    private Mono<Void> stepAll(List<DownloadTask> claimed) {
+    private Mono<Void> stepAll(List<DownloadTask> claimed,
+                               List<DownloadTaskRepository.TransferInFlight> ours) {
         if (claimed.isEmpty()) {
             // Nothing due this pass means the batched calls below never run, so a fully idle system
             // would otherwise make zero slskd calls between real downloads -- leaving the connection
@@ -417,13 +423,17 @@ public class DownloadTaskRunner {
         boolean needsSearches = !trackedSearchIds.isEmpty();
 
         // slskd returns its whole transfer history, so narrow to our own rows -- and drop null ids,
-        // which collectMap would otherwise key on (the nested-response bug).
+        // which collectMap would otherwise key on (the nested-response bug). The claimed polls decide
+        // whether to fetch; every one of ours in flight is kept, for SharerLoad.
         Set<String> trackedTransferIds = claimed.stream()
                 .filter(t -> t.phase() == DownloadPhase.DOWNLOAD_POLL)
                 .map(DownloadTask::slskdTransferId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
         boolean needsTransfers = !trackedTransferIds.isEmpty();
+        Set<String> ourTransferIds = new HashSet<>(trackedTransferIds);
+        ours.stream().map(DownloadTaskRepository.TransferInFlight::transferId).filter(Objects::nonNull)
+                .forEach(ourTransferIds::add);
 
         log.debug("Pass stepping {} claimed row(s); slskd calls this pass: GET /searches={}, "
                 + "GET /transfers/downloads={}", claimed.size(), needsSearches, needsTransfers);
@@ -446,21 +456,22 @@ public class DownloadTaskRunner {
                 : Mono.just(Map.of());
         Mono<Map<String, TransferedFile>> transfers = needsTransfers
                 ? slskdService.getAllDownloads()
-                        .filter(file -> file.getId() != null && trackedTransferIds.contains(file.getId()))
+                        .filter(file -> file.getId() != null && ourTransferIds.contains(file.getId()))
                         .collectMap(TransferedFile::getId)
                         .doOnNext(byId -> {
                             // A shortfall here is the signature of a broken lookup, not of a finished
                             // download -- slskd keeps completed transfers in this list. Logged at WARN
                             // because the state machine's response is to fail the row, and a silent
                             // version of this line is what let the nested-response bug run for an hour.
-                            if (byId.size() < trackedTransferIds.size()) {
+                            List<String> unmatched = trackedTransferIds.stream()
+                                    .filter(id -> !byId.containsKey(id)).toList();
+                            if (!unmatched.isEmpty()) {
                                 log.warn("Matched only {} of {} tracked transfer(s) in the slskd "
-                                        + "response; unmatched ids: {}", byId.size(),
-                                        trackedTransferIds.size(),
-                                        trackedTransferIds.stream()
-                                                .filter(id -> !byId.containsKey(id)).toList());
+                                        + "response; unmatched ids: {}",
+                                        trackedTransferIds.size() - unmatched.size(),
+                                        trackedTransferIds.size(), unmatched);
                             } else {
-                                log.debug("Matched all {} tracked transfer(s)", byId.size());
+                                log.debug("Matched all {} tracked transfer(s)", trackedTransferIds.size());
                             }
                         })
                 : Mono.just(Map.of());
@@ -468,21 +479,25 @@ public class DownloadTaskRunner {
         // SEARCH_INIT rows are stepped one after another: slskd answers an overlapping POST /searches
         // with 429 ("Only one concurrent operation is permitted"). Everything else stays concurrent.
         return Mono.zip(searches, transfers)
-                .flatMap(fetched -> Flux.merge(
-                        Flux.fromIterable(claimed)
-                                .filter(task -> task.phase() == DownloadPhase.SEARCH_INIT)
-                                .concatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2())),
-                        Flux.fromIterable(claimed)
-                                .filter(task -> task.phase() != DownloadPhase.SEARCH_INIT)
-                                .flatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2()),
-                                        batchSize))
-                        .then());
+                .flatMap(fetched -> {
+                    SharerLoad sharers = SharerLoad.of(ours, fetched.getT2());
+                    return Flux.merge(
+                            Flux.fromIterable(claimed)
+                                    .filter(task -> task.phase() == DownloadPhase.SEARCH_INIT)
+                                    .concatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2(),
+                                            sharers)),
+                            Flux.fromIterable(claimed)
+                                    .filter(task -> task.phase() != DownloadPhase.SEARCH_INIT)
+                                    .flatMap(task -> stepOne(task, fetched.getT1(), fetched.getT2(), sharers),
+                                            batchSize))
+                            .then();
+                });
     }
 
     /** Every task is isolated: one bad step must never abort the rest of the pass. */
     private Mono<Void> stepOne(DownloadTask task, Map<String, SearchState> searchesById,
-                               Map<String, TransferedFile> transfersById) {
-        return executor.execute(task, searchesById, transfersById)
+                               Map<String, TransferedFile> transfersById, SharerLoad sharers) {
+        return executor.execute(task, searchesById, transfersById, sharers)
                 .flatMap(decision -> apply(task, decision))
                 .onErrorResume(error -> {
                     log.error("Task {} of download {} (step {}) could not be applied; the lease will "

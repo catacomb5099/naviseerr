@@ -31,7 +31,10 @@ public class ActiveDownloadRepository {
      * <p>The reported stage is the LEAST advanced song's: a collection is still "searching" while
      * any of its tracks is, because the honest summary of mixed progress is the part that is not
      * done. {@code phase} is ranked to a number to take that minimum and mapped back, rather than
-     * relying on the alphabetical order of the phase names, which is not the pipeline's order.
+     * relying on the alphabetical order of the phase names, which is not the pipeline's order. One
+     * exception: songs waiting their turn for a transfer while another song of the same download is
+     * transferring read as downloading. With at most two transfers per sharer, most songs of an album
+     * from one sharer wait their turn, and the card would say "ready to download" for most of the run.
      *
      * <p>Progress is the mean across songs, so a collection's bar tracks the collection rather than
      * whichever track happens to be transferring. {@code updated_at} is the most recent write, since
@@ -45,11 +48,8 @@ public class ActiveDownloadRepository {
             SELECT t.download_id,
                    (ARRAY['SEARCH_INIT', 'SEARCH_POLL', 'DOWNLOAD_INIT', 'DOWNLOAD_POLL',
                           'FINISHED'])[
-                       MIN(CASE t.phase WHEN 'SEARCH_INIT'   THEN 1
-                                        WHEN 'SEARCH_POLL'   THEN 2
-                                        WHEN 'DOWNLOAD_INIT' THEN 3
-                                        WHEN 'DOWNLOAD_POLL' THEN 4
-                                        ELSE 5 END)]           AS phase,
+                       CASE WHEN MIN(r.rank) = 3 AND bool_or(r.rank = 4) THEN 4
+                            ELSE MIN(r.rank) END]              AS phase,
                    AVG(t.progress_percent)                     AS progress_percent,
                    -- A real failure outranks the user's own cancel: MIN alone would sort 'CANCELLED' first.
                    COALESCE(MIN(t.failure_reason) FILTER (WHERE t.failure_reason <> 'CANCELLED'),
@@ -64,6 +64,11 @@ public class ActiveDownloadRepository {
                    COUNT(*) FILTER (WHERE t.phase = 'FAILED'
                                       AND t.failure_reason = 'CANCELLED')                 AS songs_cancelled
               FROM download_tasks t
+             CROSS JOIN LATERAL (SELECT CASE t.phase WHEN 'SEARCH_INIT'   THEN 1
+                                                     WHEN 'SEARCH_POLL'   THEN 2
+                                                     WHEN 'DOWNLOAD_INIT' THEN 3
+                                                     WHEN 'DOWNLOAD_POLL' THEN 4
+                                                     ELSE 5 END AS rank) r
              %s
              GROUP BY t.download_id""";
 

@@ -1300,13 +1300,13 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
-    void countActiveTransfers_doesNotCountDownloadInitRows_thisIsTheDeadlockRegressionGuard() {
+    void transfersInFlight_doesNotListDownloadInitRows_thisIsTheDeadlockRegressionGuard() {
         // Reproduces the durable deadlock: if DOWNLOAD_INIT counted against the transfer cap, then
         // once max-concurrent-transfers worth of downloads landed in DOWNLOAD_INIT together, the cap
         // would be "full" of rows that CLAIM_DUE_SQL simultaneously refuses to claim (since
         // transferSlotsFree would be false) -- those rows could then never advance out of
         // DOWNLOAD_INIT, so the count could never drop, and the gate would stay closed forever, even
-        // across a restart, because it is backed by the DB. This wires the REAL countActiveTransfers()
+        // across a restart, because it is backed by the DB. This wires the REAL transfersInFlight()
         // to prove DOWNLOAD_INIT rows never contribute to that count in the first place.
         int maxConcurrentTransfers = 20;
         for (int i = 0; i < maxConcurrentTransfers; i++) {
@@ -1315,9 +1315,23 @@ class DownloadTaskRepositoryIT {
 
         assertEquals(maxConcurrentTransfers, countTaskRowsInPhase("DOWNLOAD_INIT"),
                 "sanity check: every row really is sitting in DOWNLOAD_INIT");
-        assertEquals(0L, repository.countActiveTransfers().block(),
+        assertEquals(0L, repository.transfersInFlight().count().block(),
                 "DOWNLOAD_INIT rows must never count against the transfer cap -- otherwise the cap "
                         + "closes on rows that can never be claimed while it is closed, and never reopens");
+    }
+
+    @Test
+    void transfersInFlight_listsEachDownloadPollRow_withTheSharerItIsWith() {
+        UUID polling = admitOneSong("PENDING");
+        moveToPhase(polling, DownloadPhase.DOWNLOAD_POLL);
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET slskd_username = 'alice', slskd_transfer_id = 't1' "
+                        + "WHERE download_id = :id")
+                .bind("id", polling).fetch().rowsUpdated().block();
+        moveToPhase(admitOneSong("PENDING"), DownloadPhase.DOWNLOAD_INIT);
+
+        assertEquals(List.of(new DownloadTaskRepository.TransferInFlight("alice", "t1")),
+                repository.transfersInFlight().collectList().block());
     }
 
     @Test

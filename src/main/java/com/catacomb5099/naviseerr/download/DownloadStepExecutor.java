@@ -19,7 +19,8 @@ import java.util.Map;
  * The I/O shell around {@link DownloadStateMachine}. {@code SEARCH_POLL} and {@code DOWNLOAD_POLL}
  * make no slskd call of their own — they read from {@code searchesById}/{@code transfersById}, which
  * {@link DownloadTaskRunner} fetches once per pass via the two batched slskd calls. {@code SEARCH_INIT}
- * and {@code DOWNLOAD_INIT} are not batchable in slskd's API, so those two still call directly.
+ * and {@code DOWNLOAD_INIT} are not batchable in slskd's API, so those two still call directly --
+ * except a {@code DOWNLOAD_INIT} held back by {@link SharerLoad}, which calls nothing.
  *
  * <p>Never returns an error signal — an slskd failure is a decision too, so the caller always has
  * something to write.
@@ -44,9 +45,9 @@ public class DownloadStepExecutor {
     }
 
     public Mono<DownloadDecision> execute(DownloadTask task, Map<String, SearchState> searchesById,
-                                          Map<String, TransferedFile> transfersById) {
+                                          Map<String, TransferedFile> transfersById, SharerLoad sharers) {
         Instant now = clock.instant();
-        return step(task, searchesById, transfersById, now)
+        return step(task, searchesById, transfersById, sharers, now)
                 .onErrorResume(error -> {
                     log.warn("Step {} for download {} failed", task.phase(), task.downloadId(), error);
                     return Mono.just(stateMachine.onCallFailed(task, error, now));
@@ -54,7 +55,8 @@ public class DownloadStepExecutor {
     }
 
     private Mono<DownloadDecision> step(DownloadTask task, Map<String, SearchState> searchesById,
-                                        Map<String, TransferedFile> transfersById, Instant now) {
+                                        Map<String, TransferedFile> transfersById, SharerLoad sharers,
+                                        Instant now) {
         return switch (task.phase()) {
             case SEARCH_INIT -> slskdService.searchResults(task.searchQuery())
                     .map(state -> stateMachine.afterSearchInit(task, state, now));
@@ -72,15 +74,21 @@ public class DownloadStepExecutor {
             // synchronous throw here (e.g. IndexOutOfBoundsException from a corrupt/out-of-range
             // candidateIndex) would escape execute() before the onErrorResume below ever sees it,
             // aborting the whole pass exactly like the row-mapping bug this defer is paired with.
-            case DOWNLOAD_INIT -> Mono.defer(() -> slskdService.enqueueDownload(
-                            task.currentCandidate().username(), task.currentCandidate().toSearchFile())
-                    .map(response -> stateMachine.afterDownloadInit(task, response, now)));
+            case DOWNLOAD_INIT -> Mono.defer(() -> {
+                DownloadCandidate candidate = task.currentCandidate();
+                return stateMachine.beforeDownloadInit(task, sharers.take(candidate.username()), now)
+                        .map(Mono::just)
+                        .orElseGet(() -> slskdService
+                                .enqueueDownload(candidate.username(), candidate.toSearchFile())
+                                .map(response -> stateMachine.afterDownloadInit(task, response, now)));
+            });
 
             // Same "missing means still running" handling as SEARCH_POLL, via TransferedFileUtil's
             // existing null-safety — see the Javadoc on DownloadStateMachine.afterDownloadPoll.
             case DOWNLOAD_POLL -> Mono.fromSupplier(() -> {
                 TransferedFile file = transfersById.get(task.slskdTransferId());
-                DownloadDecision decision = stateMachine.afterDownloadPoll(task, file, now);
+                DownloadDecision decision =
+                        stateMachine.afterDownloadPoll(task, file, sharers.delivering(), now);
                 cancelIfAbandoned(task, file, decision);
                 return decision;
             });

@@ -408,10 +408,11 @@ public class DownloadTaskRepository {
             SELECT count(*) AS total FROM downloads WHERE status = 'IN_PROGRESS'
             """;
 
-    // Counts only DOWNLOAD_POLL, the only phase with a real live transfer; counting DOWNLOAD_INIT too
-    // would deadlock the gate, since CLAIM_DUE_SQL excludes DOWNLOAD_INIT once this count is maxed out.
-    private static final String COUNT_ACTIVE_TRANSFERS_SQL = """
-            SELECT count(*) AS total FROM download_tasks
+    // Only DOWNLOAD_POLL, the only phase with a real live transfer; counting DOWNLOAD_INIT too would
+    // deadlock the gate, since CLAIM_DUE_SQL excludes DOWNLOAD_INIT once this count is maxed out. Rows
+    // rather than a count: the same list says which sharer holds each of our transfers (P9, SharerLoad).
+    private static final String TRANSFERS_IN_FLIGHT_SQL = """
+            SELECT slskd_username, slskd_transfer_id FROM download_tasks
              WHERE phase = 'DOWNLOAD_POLL'
             """;
 
@@ -820,10 +821,15 @@ public class DownloadTaskRepository {
                 .one();
     }
 
-    public Mono<Long> countActiveTransfers() {
-        return client.sql(COUNT_ACTIVE_TRANSFERS_SQL)
-                .map((row, meta) -> row.get("total", Long.class))
-                .one();
+    /** One of our transfers that slskd is running: the sharer it is with and slskd's id for it. */
+    public record TransferInFlight(String username, String transferId) {}
+
+    /** Every transfer naviseerr has in slskd right now, across all downloads and instances. */
+    public Flux<TransferInFlight> transfersInFlight() {
+        return client.sql(TRANSFERS_IN_FLIGHT_SQL)
+                .map((row, meta) -> new TransferInFlight(row.get("slskd_username", String.class),
+                        row.get("slskd_transfer_id", String.class)))
+                .all();
     }
 
     public Mono<Long> countActiveSearches() {
