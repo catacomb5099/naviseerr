@@ -22,7 +22,8 @@ import java.util.UUID;
  * slots the songs use. While it runs, the album's songs are held (their {@code next_attempt_at} lies
  * {@link #holdUntil} ahead, re-extended at each wording), so they do not start searches of their own. It
  * ends by releasing them in one statement: songs the best folder holds go straight to downloading that
- * folder's file, the rest are due now and search on their own as before. If this step dies, the hold simply runs out and every song searches on its own.
+ * folder's file, the rest are due now and search on their own as before. If this step dies, the hold
+ * simply runs out and every song searches on its own.
  *
  * <p>Its own I/O shell and decisions in one place: two phases, one slskd call each, and every way out
  * leads to the same release.

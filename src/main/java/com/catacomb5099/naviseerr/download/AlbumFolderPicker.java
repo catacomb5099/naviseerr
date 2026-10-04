@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -120,17 +121,16 @@ public class AlbumFolderPicker {
      * folder takes over (P5). Every song the best folder holds gets the same sharer first.
      */
     public static Map<UUID, List<DownloadCandidate>> candidates(List<Folder> ranked, int perTrack) {
-        List<Folder> chosen = new ArrayList<>();
-        Set<String> sharers = new HashSet<>();
-        for (Folder folder : ranked) {
-            if (chosen.size() < perTrack && sharers.add(folder.peer().getUsername())) {
-                chosen.add(folder);
-            }
-        }
         Map<UUID, List<DownloadCandidate>> out = new LinkedHashMap<>();
-        for (Folder folder : chosen) {
-            folder.files().forEach((taskId, file) -> out.computeIfAbsent(taskId, k -> new ArrayList<>())
-                    .add(DownloadCandidate.fromAlbumFolder(folder.peer(), file)));
+        Map<UUID, Set<String>> sharers = new HashMap<>();
+        for (Folder folder : ranked) {
+            folder.files().forEach((taskId, file) -> {
+                List<DownloadCandidate> picks = out.computeIfAbsent(taskId, k -> new ArrayList<>());
+                if (picks.size() < perTrack
+                        && sharers.computeIfAbsent(taskId, k -> new HashSet<>()).add(folder.peer().getUsername())) {
+                    picks.add(DownloadCandidate.fromAlbumFolder(folder.peer(), file));
+                }
+            });
         }
         return out;
     }

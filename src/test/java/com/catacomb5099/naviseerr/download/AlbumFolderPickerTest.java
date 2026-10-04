@@ -252,6 +252,27 @@ class AlbumFolderPickerTest {
     }
 
     @Test
+    void aPartsSong_takesItsBackupsFromTheNextSharersThatHaveIt() {
+        List<DownloadTask> five = album("Oasis", "Rock 'n' Roll Star", 324, "Shakermaker", 309, "Live Forever", 277,
+                "Up in the Sky", 269, "Columbia", 377);
+        SearchFile first = file("01 - Rock 'n' Roll Star.flac", 323);
+        SearchFile second = file("02 - Shakermaker.flac", 308);
+        SearchFile third = file("03 - Live Forever.flac", 276);
+        SearchFile fourth = file("04 - Up in the Sky.flac", 268);
+        String folder = "Oasis\\Definitely Maybe\\";
+        List<AlbumFolderPicker.Folder> ranked = picker.folders(List.of(peer("a", folder, first, second, third, fourth),
+                        peer("b", folder, first, second, third), peer("c", folder, first, second, third),
+                        peer("d", folder, second, third, fourth)),
+                five, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING);
+
+        Map<UUID, List<DownloadCandidate>> picks = AlbumFolderPicker.candidates(ranked, 3);
+
+        // b and c lack Up in the Sky; d, ranked after them, has it.
+        assertEquals(List.of("a", "d"), picks.get(five.get(3).taskId()).stream().map(DownloadCandidate::username).toList());
+        assertEquals(List.of("a", "b", "c"), picks.get(five.get(1).taskId()).stream().map(DownloadCandidate::username).toList());
+    }
+
+    @Test
     void aCompilation_isTheAlbumWhenItsFilesCarryEachSongsOwnArtist() {
         List<DownloadTask> songs = List.of(
                 song("Don't You (Forget About Me)", "Simple Minds", 1, 261),
