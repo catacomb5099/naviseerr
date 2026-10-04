@@ -3,6 +3,7 @@ package com.catacomb5099.naviseerr.download;
 import lombok.extern.slf4j.Slf4j;
 import org.jaudiotagger.audio.AudioFile;
 import org.jaudiotagger.audio.AudioFileIO;
+import org.jaudiotagger.audio.SupportedFileFormat;
 import org.jaudiotagger.audio.wav.WavOptions;
 import org.jaudiotagger.audio.wav.WavSaveOptions;
 import org.jaudiotagger.tag.FieldKey;
@@ -42,6 +43,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Writes what YouTube Music knows about a finished song into its file's tags, so Navidrome and Jellyfin
@@ -104,11 +107,18 @@ public class SongTagger {
      * the album's version, compilation flag, release date, album artist or MusicBrainz album id (ID3
      * TXXX, Vorbis comment, iTunes ----). ffmpeg's TXXX:compilation, a Vorbis YEAR next to DATE and
      * foobar2000's "ALBUM ARTIST" are the common ones: Navidrome reads every album-artist spelling, so a
-     * leftover "Various Artists" beside YouTube's artist would make an album of its own.
+     * leftover "Various Artists" beside YouTube's artist would make an album of its own. ORIGINALDATE and
+     * ORIGINALYEAR are how Picard and most rippers spell the original date; the tag library's own names
+     * for it ("ORIGINAL YEAR", "ORIGINALRELEASEDATE") miss them.
      */
     private static final Set<String> RAW_SPLITS_AN_ALBUM = Set.of("ALBUMVERSION", "MUSICBRAINZ_ALBUMCOMMENT",
             "MUSICBRAINZ ALBUM COMMENT", "RELEASETYPE", "MUSICBRAINZ ALBUM TYPE", "COMPILATION", "TCMP",
-            "RELEASEDATE", "YEAR", "TOTALTRACKS", "TOTALDISCS", "ALBUM ARTIST", "MUSICBRAINZ ALBUM ID");
+            "RELEASEDATE", "YEAR", "TOTALTRACKS", "TOTALDISCS", "ALBUM ARTIST", "MUSICBRAINZ ALBUM ID",
+            "ORIGINALDATE", "ORIGINALYEAR");
+
+    /** File extensions the tag library reads and writes; anything else (Opus, APE, WavPack) is filed as it came (P10). */
+    private static final Set<String> TAGGABLE = Stream.of(SupportedFileFormat.values())
+            .map(SupportedFileFormat::getFilesuffix).collect(Collectors.toUnmodifiableSet());
 
     /** Several artists in one tag: Navidrome splits on " / " into separate artists. */
     private static final String ARTIST_SEPARATOR = " / ";
@@ -180,6 +190,12 @@ public class SongTagger {
      */
     public void tag(Path file, Tags tags, byte[] cover) {
         if (tags == null) {
+            return;
+        }
+        String name = file.getFileName().toString();
+        String suffix = name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+        if (!TAGGABLE.contains(suffix)) {
+            log.info("Filing {} with the tags it came with: the tag library cannot write .{} files", name, suffix);
             return;
         }
         try {

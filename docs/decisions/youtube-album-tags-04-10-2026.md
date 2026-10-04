@@ -131,8 +131,8 @@ the format (the tag library reads by extension; a FLAC named `.mp3` fails cleanl
   the file's picture under P1 and fills a file with none otherwise (the song's own picture then). Fetched
   once per album and kept in memory (the last 16 albums); a failed fetch files the song without one. No
   `cover.jpg` is written (Navidrome would prefer it to every file's own picture).
-- **Never blocks filing (P10):** Opus, APE and WavPack (no writer in the library), broken and
-  mislabelled files are logged and filed exactly as they came. Tagging twice gives the same file, so a
+- **Never blocks filing (P10):** Opus, APE and WavPack (no writer in the library) are filed exactly as
+  they came with one INFO line; broken and mislabelled files likewise, with a WARN. Tagging twice gives the same file, so a
   move retried next pass is harmless.
 - One file at a time process-wide: the library's options are one global and its M4A writer keeps state
   between calls. It logs routine steps at SEVERE; `logging.level.org.jaudiotagger: OFF`.

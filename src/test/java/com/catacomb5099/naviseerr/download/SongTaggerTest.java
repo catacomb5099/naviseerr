@@ -248,6 +248,8 @@ class SongTaggerTest {
         vorbis.setField("ALBUM ARTIST", "Various Artists");
         vorbis.setField("ALBUM_ARTIST", "Various Artists");
         vorbis.setField("MUSICBRAINZ ALBUM ID", "44444444-4444-4444-4444-444444444444");
+        vorbis.setField("ORIGINALDATE", "2014"); // Picard's spellings of the original date
+        vorbis.setField("ORIGINALYEAR", "2014");
         flacFile.commit();
         AudioFile mp3File = AudioFileIO.read(mp3.toFile());
         AbstractID3v2Tag id3 = (AbstractID3v2Tag) mp3File.getTag();
@@ -261,8 +263,8 @@ class SongTaggerTest {
         tagger.tag(mp3, definitelyMaybe("Live Forever", 3), SongTagger.NO_COVER);
 
         Tag flacTag = read(flac);
-        assertEquals(List.of("", "", ""), List.of(raw(flacTag, "ALBUM ARTIST"), raw(flacTag, "ALBUM_ARTIST"),
-                raw(flacTag, "MUSICBRAINZ ALBUM ID")));
+        assertEquals(List.of("", "", "", "", ""), List.of(raw(flacTag, "ALBUM ARTIST"), raw(flacTag, "ALBUM_ARTIST"),
+                raw(flacTag, "MUSICBRAINZ ALBUM ID"), raw(flacTag, "ORIGINALDATE"), raw(flacTag, "ORIGINALYEAR")));
         assertEquals("Oasis", flacTag.getFirst(FieldKey.ALBUM_ARTIST));
         assertEquals("", raw(read(mp3), "ALBUM ARTIST"));
         assertEquals("Oasis", read(mp3).getFirst(FieldKey.ALBUM_ARTIST));
