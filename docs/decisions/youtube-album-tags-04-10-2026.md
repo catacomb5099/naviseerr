@@ -125,8 +125,12 @@ trusted song whose album and track number are already filed points at the existi
 
 - Blinding Lights stays unjoined: every route YouTube offers from its ids leads to a single, and the
   search's first five rows never list it on "After Hours". Filed by its own name, as before.
-- A song YouTube only has on compilations or singles (Lose Yourself: the 8 Mile soundtrack is Various
-  Artists) is never joined.
+- A song YouTube only has on compilations or singles is never joined. Lose Yourself: the 8 Mile
+  soundtrack is Various Artists, and Eminem's own "Curtain Call: The Hits" lists it as "Lose Yourself
+  (From "8 Mile" Soundtrack)", a different title by the rule above.
+- Until B3, a song requested again after its album was downloaded whole lands in that album's folder
+  as a second copy, so Jellyfin shows it twice in the album (before, a one-song album of its own).
+- Navidrome groups by tags, not folders: until B2 writes them it shows the same albums as before.
 - An older naviseerr on the same database files songs and playlist tracks at once, by their own name.
 - A week-old "nothing trusted" answer counts as an answer for filing; a song re-requested after a week
   whose lookup has not re-run by the time it finishes is filed by its own name (`ponytail:` in
