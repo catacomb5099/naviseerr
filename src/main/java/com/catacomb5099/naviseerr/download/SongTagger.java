@@ -10,9 +10,11 @@ import org.jaudiotagger.tag.KeyNotFoundException;
 import org.jaudiotagger.tag.Tag;
 import org.jaudiotagger.tag.TagField;
 import org.jaudiotagger.tag.TagOptionSingleton;
+import org.jaudiotagger.tag.aiff.AiffTag;
 import org.jaudiotagger.tag.flac.FlacTag;
 import org.jaudiotagger.tag.id3.AbstractID3v2Frame;
 import org.jaudiotagger.tag.id3.AbstractID3v2Tag;
+import org.jaudiotagger.tag.id3.ID3v24Tag;
 import org.jaudiotagger.tag.id3.framebody.AbstractFrameBodyTextInfo;
 import org.jaudiotagger.tag.id3.framebody.FrameBodyTXXX;
 import org.jaudiotagger.tag.images.Artwork;
@@ -21,6 +23,7 @@ import org.jaudiotagger.tag.mp4.Mp4Tag;
 import org.jaudiotagger.tag.reference.ID3V2Version;
 import org.jaudiotagger.tag.reference.PictureTypes;
 import org.jaudiotagger.tag.vorbiscomment.VorbisCommentTag;
+import org.jaudiotagger.tag.wav.WavTag;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -194,6 +197,13 @@ public class SongTagger {
         // By extension, which must match the content: a FLAC named .mp3 fails here and is left alone.
         AudioFile audio = AudioFileIO.read(file.toFile());
         Tag tag = audio.getTagAndConvertOrCreateAndSetDefault();
+        // WAV and AIFF keep an ID3 tag inside, which the line above leaves at its version; Navidrome reads
+        // the release date (TDRL, v2.4 only) from it as from an MP3's.
+        switch (tag) {
+            case WavTag wav when !(wav.getID3Tag() instanceof ID3v24Tag) -> wav.setID3Tag(new ID3v24Tag(wav.getID3Tag()));
+            case AiffTag aiff when !(aiff.getID3Tag() instanceof ID3v24Tag) -> aiff.setID3Tag(new ID3v24Tag(aiff.getID3Tag()));
+            default -> { }
+        }
         Plan plan = plan(tag.getFirst(FieldKey.TITLE), tag.getFirst(FieldKey.ARTIST),
                 tag.getFirstArtwork() != null, tags);
         boolean writeCover = plan.cover() && cover.length > 0;
@@ -315,14 +325,16 @@ public class SongTagger {
                 RAW_SPLITS_AN_ALBUM.forEach(k -> mp4.deleteField("----:com.apple.iTunes:" + k));
                 mp4.deleteField("----:com.apple.iTunes:MusicBrainz Album Comment");
             }
-            default -> { } // WAV, AIFF, WMA: rare; their generic fields above are cleared
+            case WavTag wav -> clearRaw(wav.getID3Tag());
+            case AiffTag aiff -> clearRaw(aiff.getID3Tag());
+            default -> { } // WMA: rare; its generic fields above are cleared
         }
     }
 
     /**
-     * Navidrome's album key includes the release date, which it reads from TDRL (ID3v2.4), RELEASEDATE
-     * (Vorbis) or ©day (M4A, which is YEAR and already written). The year goes in each, or each is
-     * removed when YouTube has none, so an MP3, a FLAC and an M4A of one album agree.
+     * Navidrome's album key includes the release date, which it reads from TDRL (ID3v2.4, in an MP3 and
+     * inside a WAV or AIFF), RELEASEDATE (Vorbis) or ©day (M4A, which is YEAR and already written). The
+     * year goes in each, or each is removed when YouTube has none, so all the files of one album agree.
      */
     private static void releaseDate(Tag tag, String year) throws Exception {
         switch (tag) {
@@ -341,6 +353,8 @@ public class SongTagger {
             case VorbisCommentTag vorbis -> {
                 if (year != null) vorbis.setField("RELEASEDATE", year);
             }
+            case WavTag wav -> releaseDate(wav.getID3Tag(), year);
+            case AiffTag aiff -> releaseDate(aiff.getID3Tag(), year);
             default -> { } // M4A ©day and WMA WM/Year are YEAR itself
         }
     }

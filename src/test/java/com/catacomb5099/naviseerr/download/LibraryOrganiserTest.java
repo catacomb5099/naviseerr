@@ -219,13 +219,23 @@ class LibraryOrganiserTest {
 
     @Test
     void aSongIsTaggedFromYouTubeMusic_beforeItIsMovedIntoTheLibrary() throws Exception {
-        putFixture(downloads.resolve("Definitely Maybe (Remastered)"), "seeded.mp3", "03 - Live Forever.mp3");
+        Path source = putFixture(downloads.resolve("Definitely Maybe (Remastered)"), "seeded.mp3", "03 - Live Forever.mp3");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
                 "x\\Definitely Maybe (Remastered)\\03 - Live Forever.mp3", NOW.minusSeconds(5), "Live Forever",
                 List.of("Oasis"), "Definitely Maybe", List.of("Oasis"), null, List.of(), definitelyMaybe("Live Forever", 3));
+        List<Path> tagged = new java.util.ArrayList<>();
+        SongTagger recording = new SongTagger() {
+            @Override
+            public void tag(Path file, Tags tags, byte[] cover) {
+                tagged.add(file);
+                super.tag(file, tags, cover);
+            }
+        };
 
-        Path filed = organiser.file(job, NOW).block();
+        Path filed = new LibraryOrganiser(downloads.toString(), incomplete.toString(), root.toString(), LOOP, recording)
+                .file(job, NOW).block();
 
+        assertEquals(List.of(source), tagged, "tagged in slskd's folder, never inside the library");
         assertEquals(root.resolve("Oasis/Definitely Maybe/03 - Live Forever.mp3"), filed);
         var tag = AudioFileIO.read(filed.toFile()).getTag();
         assertEquals("Definitely Maybe", tag.getFirst(FieldKey.ALBUM), "was '... (Remastered)'");

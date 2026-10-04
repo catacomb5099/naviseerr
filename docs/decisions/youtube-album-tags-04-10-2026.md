@@ -114,11 +114,12 @@ the format (the tag library reads by extension; a FLAC named `.mp3` fails cleanl
 
 - **Under a trusted album (P1)**, and always for an album download: ALBUM, ALBUM ARTIST, the year in
   every field Navidrome reads as the release date (MP3 TDRL, which needs ID3v2.4, so MP3 tags are
-  converted to it; Vorbis RELEASEDATE; M4A ©day), TRACK, TRACK TOTAL, DISC 1/1 and the album's cover are
-  written over the file's. Removed: MusicBrainz release-level ids (Navidrome takes that id alone as the
-  album; Jellyfin a majority vote of them), compilation flags, album version and disc subtitle, original
-  date, sort and plural album-artist forms, label, catalogue number, barcode, and the free-form
-  leftovers other taggers write (ffmpeg's TXXX:compilation, a Vorbis YEAR beside DATE, TOTALTRACKS).
+  converted to it, as is the ID3 tag inside a WAV or AIFF; Vorbis RELEASEDATE; M4A ©day), TRACK, TRACK
+  TOTAL, DISC 1/1 and the album's cover are written over the file's. Removed: MusicBrainz release-level
+  ids (Navidrome takes that id alone as the album; Jellyfin a majority vote of them), compilation flags,
+  album version and disc subtitle, original date, sort and plural album-artist forms, label, catalogue
+  number, barcode, and the free-form leftovers other taggers write (ffmpeg's TXXX:compilation, a Vorbis
+  YEAR beside DATE, TOTALTRACKS).
   Album artist and release date are removed when YouTube has none, so every song of the album agrees;
   track numbers are only set when known. Several artists are written "A / B", which Navidrome splits.
 - **Everything else is fill-only (P2):** title (the album or playlist row's own title, else the song's)

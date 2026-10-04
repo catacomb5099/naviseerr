@@ -5,12 +5,14 @@ import com.catacomb5099.naviseerr.download.SongTagger.Tags;
 import org.jaudiotagger.audio.AudioFileIO;
 import org.jaudiotagger.tag.FieldKey;
 import org.jaudiotagger.tag.Tag;
+import org.jaudiotagger.tag.aiff.AiffTag;
 import org.jaudiotagger.tag.flac.FlacTag;
 import org.jaudiotagger.tag.id3.AbstractID3v2Frame;
 import org.jaudiotagger.tag.id3.AbstractID3v2Tag;
 import org.jaudiotagger.tag.id3.ID3v24Tag;
 import org.jaudiotagger.tag.id3.framebody.FrameBodyTXXX;
 import org.jaudiotagger.tag.mp4.Mp4Tag;
+import org.jaudiotagger.tag.wav.WavTag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -36,8 +38,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * arrive: seeded.mp3 (ID3v2.3, "Definitely Maybe (Remastered)", 2014, a MusicBrainz album id, ffmpeg's
  * TXXX:compilation and an ALBUMVERSION), seeded.flac ("Definitely Maybe [Deluxe]", DATE 1994-08-29 next
  * to RELEASEDATE 2014-05-19 and YEAR 2014, its own MusicBrainz id, TOTALTRACKS 44), seeded.m4a (©day
- * 2004, cpil, MusicBrainz ids), untagged.mp3 (no tag at all) and song.opus (a format the library cannot
- * write).
+ * 2004, cpil, MusicBrainz ids), seeded.aiff (an ID3v2.3 chunk: "(Remastered)", 2014, TCMP), untagged.mp3 and
+ * untagged.wav (no tag at all) and song.opus (a format the library cannot write).
  */
 class SongTaggerTest {
 
@@ -144,10 +146,14 @@ class SongTaggerTest {
     /**
      * The fields Navidrome builds an album's id from ({@code musicbrainz_albumid|albumartistid, album,
      * albumversion, releasedate}) plus the compilation flag, read through the same aliases it reads
-     * (its mappings.yaml): releasedate is TDRL, RELEASEDATE or YEAR, or ©day.
+     * (its mappings.yaml): releasedate is TDRL, RELEASEDATE or YEAR, or ©day. A WAV's or AIFF's is its ID3 chunk.
      */
     private static Map<String, String> navidromeAlbumKey(Path file) throws Exception {
-        Tag tag = read(file);
+        Tag tag = switch (read(file)) {
+            case WavTag wav -> wav.getID3Tag();
+            case AiffTag aiff -> aiff.getID3Tag();
+            case Tag other -> other;
+        };
         Map<String, String> key = new LinkedHashMap<>();
         key.put("album", tag.getFirst(FieldKey.ALBUM));
         key.put("albumartist", tag.getFirst(FieldKey.ALBUM_ARTIST));
@@ -178,19 +184,24 @@ class SongTaggerTest {
     }
 
     @Test
-    void anMp3AFlacAndAnM4a_taggedAsDifferentEditions_endUpWithOneNavidromeAlbum() throws Exception {
+    void anMp3AFlacAnM4aAWavAndAnAiff_taggedAsDifferentEditions_endUpWithOneNavidromeAlbum() throws Exception {
         Path mp3 = copy("seeded.mp3", "03 Live Forever.mp3");
         Path flac = copy("seeded.flac", "06 Supersonic.flac");
         Path m4a = copy("seeded.m4a", "08 Cigarettes & Alcohol.m4a");
-        assertEquals(3, Stream.of(mp3, flac, m4a).map(f -> {
+        Path wav = copy("untagged.wav", "09 Married With Children.wav");
+        Path aiff = copy("seeded.aiff", "10 Slide Away.aiff");
+        List<Path> files = List.of(mp3, flac, m4a, wav, aiff);
+        assertEquals(5, files.stream().map(f -> {
             try { return navidromeAlbumKey(f); } catch (Exception e) { throw new AssertionError(e); }
-        }).distinct().count(), "the fixtures start as three different albums");
+        }).distinct().count(), "the fixtures start as five different albums");
         byte[] cover = jpeg(Color.RED);
 
         for (int run = 0; run < 2; run++) { // twice: a filing retried after a failed move tags again
             tagger.tag(mp3, definitelyMaybe("Live Forever", 3), cover);
             tagger.tag(flac, definitelyMaybe("Supersonic", 6), cover);
             tagger.tag(m4a, definitelyMaybe("Cigarettes & Alcohol", 8), cover);
+            tagger.tag(wav, definitelyMaybe("Married With Children", 9), cover);
+            tagger.tag(aiff, definitelyMaybe("Slide Away", 10), cover);
         }
 
         Map<String, String> expected = new LinkedHashMap<>();
@@ -203,6 +214,8 @@ class SongTaggerTest {
         assertEquals(expected, navidromeAlbumKey(mp3), "mp3");
         assertEquals(expected, navidromeAlbumKey(flac), "flac");
         assertEquals(expected, navidromeAlbumKey(m4a), "m4a");
+        assertEquals(expected, navidromeAlbumKey(wav), "wav");
+        assertEquals(expected, navidromeAlbumKey(aiff), "aiff: its ID3v2.3 chunk converted, as an MP3's");
 
         Tag id3 = read(mp3);
         assertInstanceOf(ID3v24Tag.class, id3, "converted from v2.3: TDRL exists only in v2.4");
@@ -214,7 +227,7 @@ class SongTaggerTest {
         assertEquals("", raw(vorbis, "TOTALTRACKS"), "the stale Vorbis total is gone");
         assertEquals("11", vorbis.getFirst(FieldKey.TRACK_TOTAL));
         assertEquals("6", vorbis.getFirst(FieldKey.TRACK));
-        for (Path file : List.of(mp3, flac, m4a)) {
+        for (Path file : files) {
             assertArrayEquals(cover, read(file).getFirstArtwork().getBinaryData(), file.getFileName().toString());
             try (Stream<Path> siblings = Files.list(file.getParent())) {
                 assertEquals(1, siblings.count(), "no temporary file left beside " + file.getFileName());
