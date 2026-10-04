@@ -28,6 +28,14 @@ public record DownloadTask(
         /** The song's own YouTube {@code videoId}. Null for rows created before collections existed. */
         String youtubeId,
         String songName,
+        /**
+         * The album or playlist row's own title, YouTube number (albums only) and length, written at
+         * admission and never changed. On the task rather than {@code media_items} because one id can
+         * sit on two rows of one album with different values. Null for rows created before V12.
+         */
+        String trackTitle,
+        Integer trackNumber,
+        Integer durationSeconds,
         DownloadPhase phase,
         Instant phaseEnteredAt,
         Instant nextAttemptAt,

@@ -26,9 +26,17 @@ import java.util.List;
  *                        read by {@code SongInfoView}) carries an exact integer {@code viewCount}
  *                        instead, which is why this field is not set for a single-song lookup;
  *                        artist top songs, playlist tracks and search results carry nothing.
+ * @param trackNumber     nullable; YouTube's own number for the track inside its album, set only for
+ *                        an album's tracks. Not the list order: an unavailable track keeps its number.
  */
 public record YoutubeSongInfo(String id, List<String> authorNames, List<String> authorIds, String name,
-                              String imageUrl, Integer durationSeconds, String plays) {
+                              String imageUrl, Integer durationSeconds, String plays, Integer trackNumber) {
+
+    /** Every source but an album page has no track number to give. */
+    public YoutubeSongInfo(String id, List<String> authorNames, List<String> authorIds, String name,
+                           String imageUrl, Integer durationSeconds, String plays) {
+        this(id, authorNames, authorIds, name, imageUrl, durationSeconds, plays, null);
+    }
 
     /** Names without ids: the shape from before ids were carried, kept so a caller with none has no padding to do. */
     public YoutubeSongInfo(String id, List<String> authorNames, String name, String imageUrl,

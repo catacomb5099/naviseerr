@@ -228,7 +228,13 @@ the same shape:
 - **An album reports `browseId` and an `artists[]`; a playlist reports `id` and a single `author`.**
   One `YoutubeCollectionInfo` covers both — they are one title plus one track list as far as the
   download pipeline is concerned, and splitting them would mean two types and a switch at every use
-  site for one nullable field's worth of difference (`year`, which only albums have).
+  site for a few nullable fields' worth of difference (`year`, `type` and each track's
+  `trackNumber`, which only albums have).
+- **An album track's `trackNumber` is YouTube's own number, not its index.** It is carried on
+  `YoutubeSongInfo.trackNumber` (null for playlist rows), next to the album's `type`
+  (`Album`/`EP`/`Single`), its `trackCount` and its `year` (an `Integer`) on `YoutubeCollectionInfo`.
+  Admission stores them (V12). Album track ids are often the official-video id, and one id can appear
+  on two rows of one album, so each row's own title and length are kept with it.
 - **A track with `isAvailable: false` is dropped.** It is region-blocked or deleted, so a task row
   for it would spend a whole search budget to fail. Only an explicit `false` counts — album
   responses omit the field entirely, and treating null as unavailable would drop every album track.

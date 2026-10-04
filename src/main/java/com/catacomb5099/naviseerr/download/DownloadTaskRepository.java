@@ -62,9 +62,11 @@ public class DownloadTaskRepository {
      * false, and the insert then has nothing to depend on. The old order (insert first, then flip)
      * left a finished download with live song rows the loop would search for.
      *
-     * <p>{@code unnest} of two parallel arrays rather than a multi-row VALUES list, because the song
+     * <p>{@code unnest} of parallel arrays rather than a multi-row VALUES list, because the song
      * count is only known at runtime. {@code WITH ORDINALITY} numbers the songs in the provider's order.
-     * {@code song_name} is the Soulseek query wording, not a display title; see V6.
+     * {@code song_name} is the Soulseek query wording, not a display title; see V6. {@code track_title},
+     * {@code track_number} and {@code duration_seconds} are the album or playlist row's own values
+     * (V12): one id can sit on two rows of one album, so {@code media_items} cannot hold them.
      *
      * @return task rows created: N for an admitted N-song download, 0 when it was no longer PENDING
      *         or already had songs
@@ -81,12 +83,14 @@ public class DownloadTaskRepository {
                 RETURNING download_id
             )
             INSERT INTO download_tasks
-                (task_id, download_id, youtube_id, song_name, position, phase,
-                 phase_entered_at, next_attempt_at)
+                (task_id, download_id, youtube_id, song_name, position, track_title, track_number,
+                 duration_seconds, phase, phase_entered_at, next_attempt_at)
             SELECT gen_random_uuid(), :downloadId, s.youtube_id, s.song_name, s.position,
-                   'SEARCH_INIT', :now, :now
-              FROM unnest(:youtubeIds::text[], :songNames::text[])
-                   WITH ORDINALITY AS s(youtube_id, song_name, position)
+                   s.track_title, s.track_number, s.duration_seconds, 'SEARCH_INIT', :now, :now
+              FROM unnest(:youtubeIds::text[], :songNames::text[], :trackTitles::text[],
+                          :trackNumbers::int[], :durations::int[])
+                   WITH ORDINALITY AS s(youtube_id, song_name, track_title, track_number,
+                                        duration_seconds, position)
              WHERE EXISTS (SELECT 1 FROM admitted)
             """;
 
@@ -105,12 +109,13 @@ public class DownloadTaskRepository {
      */
     private static final String UPSERT_MEDIA_SQL = """
             INSERT INTO media_items (youtube_id, title, artists, artist_ids, image_url, duration_seconds,
-                                     track_count)
+                                     track_count, year, album_type)
             SELECT x."youtubeId", x.title, COALESCE(x.artists, '{}'), COALESCE(x."artistIds", '{}'),
-                   x."imageUrl", x."durationSeconds", x."trackCount"
+                   x."imageUrl", x."durationSeconds", x."trackCount", x.year, x."albumType"
               FROM jsonb_to_recordset(:items::jsonb)
                    AS x("youtubeId" text, title text, artists text[], "artistIds" text[],
-                        "imageUrl" text, "durationSeconds" int, "trackCount" int)
+                        "imageUrl" text, "durationSeconds" int, "trackCount" int, year int,
+                        "albumType" text)
              WHERE x."youtubeId" IS NOT NULL
             ON CONFLICT (youtube_id) DO UPDATE
                SET title            = COALESCE(EXCLUDED.title, media_items.title),
@@ -123,6 +128,8 @@ public class DownloadTaskRepository {
                    image_url        = COALESCE(EXCLUDED.image_url, media_items.image_url),
                    duration_seconds = COALESCE(EXCLUDED.duration_seconds, media_items.duration_seconds),
                    track_count      = COALESCE(EXCLUDED.track_count, media_items.track_count),
+                   year             = COALESCE(EXCLUDED.year, media_items.year),
+                   album_type       = COALESCE(EXCLUDED.album_type, media_items.album_type),
                    fetched_at       = now()
             """;
 
@@ -159,10 +166,10 @@ public class DownloadTaskRepository {
                SET lease_owner = :owner,
                    lease_expires_at = :leaseExpiresAt
              WHERE task_id IN (SELECT task_id FROM polls UNION ALL SELECT task_id FROM searches)
-            RETURNING task_id, download_id, youtube_id, song_name, phase, phase_entered_at,
-                      next_attempt_at, search_id, search_tier, candidates, candidate_index,
-                      retry_index, slskd_username, slskd_filename, slskd_transfer_id, last_error,
-                      progress_percent
+            RETURNING task_id, download_id, youtube_id, song_name, track_title, track_number,
+                      duration_seconds, phase, phase_entered_at, next_attempt_at, search_id,
+                      search_tier, candidates, candidate_index, retry_index, slskd_username,
+                      slskd_filename, slskd_transfer_id, last_error, progress_percent
             """;
 
     // Writes every field (DownloadTask is the complete state) and clears the lease. Guarded on the
@@ -457,6 +464,9 @@ public class DownloadTaskRepository {
                 .bind("downloadId", downloadId)
                 .bind("youtubeIds", tasks.stream().map(DownloadTask::youtubeId).toArray(String[]::new))
                 .bind("songNames", tasks.stream().map(DownloadTask::songName).toArray(String[]::new))
+                .bind("trackTitles", tasks.stream().map(DownloadTask::trackTitle).toArray(String[]::new))
+                .bind("trackNumbers", tasks.stream().map(DownloadTask::trackNumber).toArray(Integer[]::new))
+                .bind("durations", tasks.stream().map(DownloadTask::durationSeconds).toArray(Integer[]::new))
                 .bind("now", now)
                 .fetch()
                 .rowsUpdated();
@@ -673,6 +683,9 @@ public class DownloadTaskRepository {
                 .downloadId(row.get("download_id", UUID.class))
                 .youtubeId(row.get("youtube_id", String.class))
                 .songName(row.get("song_name", String.class))
+                .trackTitle(row.get("track_title", String.class))
+                .trackNumber(row.get("track_number", Integer.class))
+                .durationSeconds(row.get("duration_seconds", Integer.class))
                 .phase(DownloadPhase.valueOf(row.get("phase", String.class)))
                 .phaseEnteredAt(row.get("phase_entered_at", Instant.class))
                 .nextAttemptAt(row.get("next_attempt_at", Instant.class))
