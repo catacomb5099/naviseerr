@@ -208,7 +208,7 @@ which supersedes [the mixed-search decision](../decisions/ytmusic-mixed-search-2
 Search is not the only caller any more. `DownloadTaskRunner.gatherMetadata` resolves a download's
 YouTube id at admission time, via the first three of these methods on
 [YtMusicService](../../src/main/java/com/catacomb5099/naviseerr/services/ytmusic/YtMusicService.java)
-(the last three belong to the artist page, the song page and the view-count lookup; admission never calls them):
+(the rest belong to the artist page, the song page, the view-count lookup and radios; admission never calls them):
 
 | Method | Route | Returns |
 |---|---|---|
@@ -220,6 +220,7 @@ YouTube id at admission time, via the first three of these methods on
 | `getArtistInfo(channelId)` | `GET /v1/artists/{channelId}` | `YtMusicDetailResponse.Artist` |
 | `getSongDetails(videoId)` | `GET /v1/songs/{videoId}/details` | `YtMusicDetailResponse.SongDetails` (adapter shape; read by `SongInfoView.from` and, for its album, by the album lookup) |
 | `getSongViewCount(videoId)` | `GET /v1/songs/{videoId}` | `Long`, that one upload's exact `viewCount`; empty when none (only `GET /songs/views` reads it) |
+| `getRadioInfo(seedId)` | `GET /v1/radio/{seedId}?limit={radio-size}` | `YoutubeCollectionInfo`, playlist-mapped (each song its own thumbnail), named after the seed; only `RadioController` calls it, and saves the answer, because the adapter returns a different list each time |
 
 Three things about the mapping are easy to get wrong, because the adapter's three responses are not
 the same shape:

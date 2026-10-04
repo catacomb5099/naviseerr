@@ -60,6 +60,9 @@ yt-music-service:
     # own items[:limit] truncation from starving the categories YouTube interleaves late
     # (albums, artists). Lowering it silently drops albums from general search.
     mixed-search-limit: 100
+    # Songs in a radio (POST /radios). Kept small because "Download all" turns every one into a Soulseek
+    # search, and slskd runs two at a time. The adapter allows up to 100.
+    radio-size: 25
     timeout-ms: 15000
     # Retries apply only to YtMusicUnavailableException (adapter 429/502/504, timeout, connection
     # refused) - never to a 4xx the adapter rejected outright. See YtMusicService.
