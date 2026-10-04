@@ -31,7 +31,12 @@ public class ActiveDownloadRepository {
      * <p>The reported stage is the LEAST advanced song's: a collection is still "searching" while
      * any of its tracks is, because the honest summary of mixed progress is the part that is not
      * done. {@code phase} is ranked to a number to take that minimum and mapped back, rather than
-     * relying on the alphabetical order of the phase names, which is not the pipeline's order.
+     * relying on the alphabetical order of the phase names, which is not the pipeline's order. One
+     * exception: songs waiting their turn for a transfer while another song of the same download is
+     * transferring read as downloading. With at most two transfers per sharer, most songs of an album
+     * from one sharer wait their turn, and the card would say "ready to download" for most of the run.
+     * And songs held for their album's search for one sharer with the whole album (P5) read as
+     * searching, not as a search not yet started: that search is theirs.
      *
      * <p>Progress is the mean across songs, so a collection's bar tracks the collection rather than
      * whichever track happens to be transferring. {@code updated_at} is the most recent write, since
@@ -45,11 +50,8 @@ public class ActiveDownloadRepository {
             SELECT t.download_id,
                    (ARRAY['SEARCH_INIT', 'SEARCH_POLL', 'DOWNLOAD_INIT', 'DOWNLOAD_POLL',
                           'FINISHED'])[
-                       MIN(CASE t.phase WHEN 'SEARCH_INIT'   THEN 1
-                                        WHEN 'SEARCH_POLL'   THEN 2
-                                        WHEN 'DOWNLOAD_INIT' THEN 3
-                                        WHEN 'DOWNLOAD_POLL' THEN 4
-                                        ELSE 5 END)]           AS phase,
+                       CASE WHEN MIN(r.rank) = 3 AND bool_or(r.rank = 4) THEN 4
+                            ELSE MIN(r.rank) END]              AS phase,
                    AVG(t.progress_percent)                     AS progress_percent,
                    -- A real failure outranks the user's own cancel: MIN alone would sort 'CANCELLED' first.
                    COALESCE(MIN(t.failure_reason) FILTER (WHERE t.failure_reason <> 'CANCELLED'),
@@ -64,6 +66,13 @@ public class ActiveDownloadRepository {
                    COUNT(*) FILTER (WHERE t.phase = 'FAILED'
                                       AND t.failure_reason = 'CANCELLED')                 AS songs_cancelled
               FROM download_tasks t
+              LEFT JOIN album_searches a ON a.download_id = t.download_id
+             CROSS JOIN LATERAL (SELECT CASE WHEN t.phase = 'SEARCH_INIT' AND a.phase <> 'DONE' THEN 2
+                                             WHEN t.phase = 'SEARCH_INIT'   THEN 1
+                                             WHEN t.phase = 'SEARCH_POLL'   THEN 2
+                                             WHEN t.phase = 'DOWNLOAD_INIT' THEN 3
+                                             WHEN t.phase = 'DOWNLOAD_POLL' THEN 4
+                                             ELSE 5 END AS rank) r
              %s
              GROUP BY t.download_id""";
 
@@ -215,7 +224,7 @@ public class ActiveDownloadRepository {
                    t.phase_entered_at, t.updated_at, t.finished_at,
                    jsonb_array_length(t.candidates::jsonb) AS candidate_count,
                    t.candidate_index, t.retry_index, t.slskd_username, t.slskd_filename,
-                   t.last_error
+                   t.last_error, t.library_path
               FROM download_tasks t
               LEFT JOIN media_items m ON m.youtube_id = t.youtube_id
              WHERE t.download_id = :id
@@ -331,7 +340,8 @@ public class ActiveDownloadRepository {
                 row.get("retry_index", Integer.class),
                 row.get("slskd_username", String.class),
                 row.get("slskd_filename", String.class),
-                row.get("last_error", String.class));
+                row.get("last_error", String.class),
+                row.get("library_path", String.class));
     }
 
     /** Null from the LEFT JOIN (no media row yet) reads as "no artists", never as null. */

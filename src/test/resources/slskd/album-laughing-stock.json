@@ -1,0 +1,69 @@
+{
+  "_note": "Five of the 250 responses slskd gave for \"Laughing Stock\" on 04-10-2026, trimmed to one folder each and to the fields naviseerr reads.",
+  "id": "6d2aebb4-bab9-41ba-98b2-b9522d6d3721",
+  "isComplete": true,
+  "state": "Completed, ResponseLimitReached",
+  "searchText": "Laughing Stock",
+  "startedAt": "2026-10-04T12:17:50.781102Z",
+  "responseCount": 5,
+  "fileCount": 45,
+  "lockedFileCount": 0,
+  "token": 7619166,
+  "responses": [
+    {"fileCount": 6, "hasFreeUploadSlot": true, "lockedFileCount": 0, "lockedFiles": [], "queueLength": 0, "token": 7619166, "uploadSpeed": 1734982, "username": "moburma", "files": [
+      {"filename": "@@rekjt\\Music\\Talk Talk\\Laughing Stock\\01 Myrrhman.flac", "size": 23738307, "code": 1, "extension": "", "length": 332, "isLocked": false},
+      {"filename": "@@rekjt\\Music\\Talk Talk\\Laughing Stock\\02 Ascension Day.flac", "size": 40482464, "code": 1, "extension": "", "length": 359, "isLocked": false},
+      {"filename": "@@rekjt\\Music\\Talk Talk\\Laughing Stock\\03 After The Flood.flac", "size": 58863481, "code": 1, "extension": "", "length": 578, "isLocked": false},
+      {"filename": "@@rekjt\\Music\\Talk Talk\\Laughing Stock\\04 Taphead.flac", "size": 31858333, "code": 1, "extension": "", "length": 459, "isLocked": false},
+      {"filename": "@@rekjt\\Music\\Talk Talk\\Laughing Stock\\05 New Grass.flac", "size": 57135779, "code": 1, "extension": "", "length": 580, "isLocked": false},
+      {"filename": "@@rekjt\\Music\\Talk Talk\\Laughing Stock\\06 Runeii.flac", "size": 18750351, "code": 1, "extension": "", "length": 297, "isLocked": false}
+    ]},
+    {"fileCount": 15, "hasFreeUploadSlot": true, "lockedFileCount": 0, "lockedFiles": [], "queueLength": 0, "token": 7619166, "uploadSpeed": 8077352, "username": "llafnwod", "files": [
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\01 Monologue 1.flac", "size": 21690582, "code": 1, "extension": "flac", "length": 221, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\02 Myrrhman.flac", "size": 28085939, "code": 1, "extension": "flac", "length": 304, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\03 Monologue 2.flac", "size": 10008050, "code": 1, "extension": "flac", "length": 102, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\04 Ascension Day.flac", "size": 42541242, "code": 1, "extension": "flac", "length": 356, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\05 Monologue 3.flac", "size": 24353159, "code": 1, "extension": "flac", "length": 249, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\06 After the Flood.flac", "size": 61824684, "code": 1, "extension": "flac", "length": 558, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\07 Monologue 4.flac", "size": 30217011, "code": 1, "extension": "flac", "length": 297, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\08 Taphead.flac", "size": 37776436, "code": 1, "extension": "flac", "length": 384, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\09 Monologue 5.flac", "size": 5426796, "code": 1, "extension": "flac", "length": 53, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\10 New Grass.flac", "size": 60023601, "code": 1, "extension": "flac", "length": 543, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\11 Monologue 6.flac", "size": 8220081, "code": 1, "extension": "flac", "length": 82, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\12 Runeii.flac", "size": 26978473, "code": 1, "extension": "flac", "length": 283, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\13 Monologue 7.flac", "size": 13838082, "code": 1, "extension": "flac", "length": 136, "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\folder.jpg", "size": 170675, "code": 1, "extension": "jpg", "isLocked": false},
+      {"filename": "_music\\Talk Talk - Mark Hollis Talks About Laughing Stock (1991) {SAC 486 Cassette} [FLAC]\\foo_dr.txt", "size": 1527, "code": 1, "extension": "txt", "isLocked": false}
+    ]},
+    {"fileCount": 7, "hasFreeUploadSlot": false, "lockedFileCount": 0, "lockedFiles": [], "queueLength": 151, "token": 7619166, "uploadSpeed": 4601248, "username": "filfil", "files": [
+      {"filename": "@@gzxtr\\sounds\\2026\\04_april\\(1991) Laughing Stock\\01 Myrrhman.flac", "size": 22362142, "code": 1, "extension": "", "length": 333, "isLocked": false},
+      {"filename": "@@gzxtr\\sounds\\2026\\04_april\\(1991) Laughing Stock\\02 Ascension Day.flac", "size": 39760943, "code": 1, "extension": "", "length": 360, "isLocked": false},
+      {"filename": "@@gzxtr\\sounds\\2026\\04_april\\(1991) Laughing Stock\\03 After the Flood.flac", "size": 57318462, "code": 1, "extension": "", "length": 567, "isLocked": false},
+      {"filename": "@@gzxtr\\sounds\\2026\\04_april\\(1991) Laughing Stock\\04 Taphead.flac", "size": 30003716, "code": 1, "extension": "", "length": 421, "isLocked": false},
+      {"filename": "@@gzxtr\\sounds\\2026\\04_april\\(1991) Laughing Stock\\05 New Grass.flac", "size": 57762726, "code": 1, "extension": "", "length": 586, "isLocked": false},
+      {"filename": "@@gzxtr\\sounds\\2026\\04_april\\(1991) Laughing Stock\\06 Runeii.flac", "size": 17605589, "code": 1, "extension": "", "length": 298, "isLocked": false},
+      {"filename": "@@gzxtr\\sounds\\2026\\04_april\\(1991) Laughing Stock\\cover.jpg", "size": 35101, "code": 1, "extension": "", "isLocked": false}
+    ]},
+    {"fileCount": 11, "hasFreeUploadSlot": true, "lockedFileCount": 0, "lockedFiles": [], "queueLength": 0, "token": 7619166, "uploadSpeed": 1482385, "username": "Baron53", "files": [
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\1-01 Myrrhman.mp3", "size": 13499048, "code": 1, "extension": "", "bitRate": 320, "length": 333, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\1-02 Ascension Day.mp3", "size": 14598281, "code": 1, "extension": "", "bitRate": 320, "length": 360, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\1-03 After The Flood.mp3", "size": 22839391, "code": 1, "extension": "", "bitRate": 320, "length": 566, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\1-04 Taphead.mp3", "size": 17008860, "code": 1, "extension": "", "bitRate": 320, "length": 421, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\1-05 New Grass.mp3", "size": 23619930, "code": 1, "extension": "", "bitRate": 320, "length": 586, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\1-06 Runeii.mp3", "size": 12105154, "code": 1, "extension": "", "bitRate": 320, "length": 298, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\2-01 5-09.mp3", "size": 12716419, "code": 1, "extension": "", "bitRate": 320, "length": 313, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\2-02 Stump.mp3", "size": 11575391, "code": 1, "extension": "", "bitRate": 320, "length": 285, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\2-03 After The Flood Outtake.mp3", "size": 10338232, "code": 1, "extension": "", "bitRate": 320, "length": 254, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\2-04 Piano.mp3", "size": 35346819, "code": 1, "extension": "", "bitRate": 320, "length": 879, "isLocked": false},
+      {"filename": "@@mspbi\\T\\TALK TALK\\LAUGHING STOCK\\Cover.jpg", "size": 157858, "code": 1, "extension": "", "isLocked": false}
+    ]},
+    {"fileCount": 6, "hasFreeUploadSlot": true, "lockedFileCount": 0, "lockedFiles": [], "queueLength": 11, "token": 7619166, "uploadSpeed": 1478588, "username": "Nilkse", "files": [
+      {"filename": "@@buhty\\Music\\Talk talk\\Laughing Stock\\01 Myrrhman.flac", "size": 21965939, "code": 1, "extension": "", "length": 333, "isLocked": false},
+      {"filename": "@@buhty\\Music\\Talk talk\\Laughing Stock\\02 Ascension Day.flac", "size": 39220351, "code": 1, "extension": "", "length": 360, "isLocked": false},
+      {"filename": "@@buhty\\Music\\Talk talk\\Laughing Stock\\03 After the Flood.flac", "size": 56527173, "code": 1, "extension": "", "length": 566, "isLocked": false},
+      {"filename": "@@buhty\\Music\\Talk talk\\Laughing Stock\\04 Taphead.flac", "size": 29156407, "code": 1, "extension": "", "length": 421, "isLocked": false},
+      {"filename": "@@buhty\\Music\\Talk talk\\Laughing Stock\\05 New Grass.flac", "size": 56895052, "code": 1, "extension": "", "length": 586, "isLocked": false},
+      {"filename": "@@buhty\\Music\\Talk talk\\Laughing Stock\\06 Runeii.flac", "size": 17205439, "code": 1, "extension": "", "length": 299, "isLocked": false}
+    ]}
+  ]
+}

@@ -29,7 +29,8 @@ class CollectionControllerTest {
         return new YoutubeCollectionInfo("MPREb_1", List.of(
                 new YoutubeSongInfo("vid1", List.of("Oasis"), "Rock 'n' Roll Star", "https://img/a.jpg", 322, "28M plays"),
                 new YoutubeSongInfo("vid2", List.of("Oasis"), "Shakermaker", "https://img/a.jpg", null)),
-                "1994", "Definitely Maybe", List.of("Oasis"), "https://img/a.jpg");
+                1994, "Definitely Maybe", List.of("Oasis"), List.of(), "https://img/a.jpg", "OLAK5uy_1",
+                null, null);
     }
 
     private static YoutubeCollectionInfo playlist() {
@@ -55,6 +56,7 @@ class CollectionControllerTest {
                     assertEquals(1994, view.year());
                     assertEquals(2, view.trackCount());
                     assertEquals(2, view.tracks().size());
+                    assertEquals("OLAK5uy_1", view.playlistId(), "the client links Play album with it");
 
                     CollectionView.CollectionTrackView first = view.tracks().get(0);
                     assertEquals("vid1", first.id());
@@ -151,8 +153,8 @@ class CollectionControllerTest {
     }
 
     @Test
-    void nonNumericYear_isNull_notAnError() {
-        YoutubeCollectionInfo odd = new YoutubeCollectionInfo("MPREb_2", List.of(), "n/a",
+    void anAlbumWithNoYearOrTracks_isEmpty_notAnError() {
+        YoutubeCollectionInfo odd = new YoutubeCollectionInfo("MPREb_2", List.of(), null,
                 "Untitled", List.of(), null);
         when(ytMusicService.getAlbumInfo("MPREb_2")).thenReturn(Mono.just(odd));
 

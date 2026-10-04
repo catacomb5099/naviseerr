@@ -140,6 +140,53 @@ d.youtube_id` (LEFT: a QUEUED download has no row yet), and by `SONGS_SQL` via
 Artist"` — not a display field. `download_tasks.position` is written from `unnest(...) WITH
 ORDINALITY` in `CREATE_TASKS_SQL`.
 
+### V12: album metadata
+
+[V12__album_metadata.sql](../../src/main/resources/db/migration/V12__album_metadata.sql) holds the
+schema for all of the album work (tagging, joining songs to their album, whole-album downloads), so
+those changes add no migration of their own and cannot land out of order.
+
+- `download_tasks.track_title`, `track_number`, `duration_seconds`: the album or playlist row's own
+  title, YouTube track number (albums only) and length, written by `CREATE_TASKS_SQL` from three more
+  parallel arrays in the same `unnest(...) WITH ORDINALITY` and returned by `CLAIM_DUE_SQL`. On the
+  task because one video id can appear on two rows of one album with different titles, and
+  `media_items` holds one row per id. `position` stays list order. Null on rows written before V12.
+- `media_items.year`, `album_type`: album rows only, upserted with `COALESCE` like every other field.
+- `song_albums` (`youtube_id` PK, `album_id`, `track_number`, `resolved_at`): the trusted YouTube
+  Music album of a song or playlist track and its number there, `album_id` NULL for "looked, nothing
+  trusted". Written by `SAVE_SONG_ALBUM_SQL` (upsert: a re-look replaces the answer), always after the
+  album's own `media_items` row. `SONGS_TO_RESOLVE_SQL` selects what still needs an answer: non-ALBUM
+  tasks with no row or a NULL row older than `:relookBefore`, not FAILED, and either still running or
+  SUCCEEDED, unfiled and finished after the organiser's `:cutoff` (never the history); `DISTINCT ON
+  (youtube_id)` inside, oldest request first outside. `TASKS_TO_ORGANISE_SQL` LEFT JOINs it (only for
+  non-ALBUM downloads) and the album's `media_items` row for the folder name, and holds a non-ALBUM
+  song with no row back until `finished_at <= :albumCutoff`. Its `tag_` columns are what `SongTagger`
+  writes: `COALESCE(track_title, song title)`, and the album `r` the tags follow (the download's own
+  `media_items` row for an ALBUM track, the `song_albums` album's otherwise: title, artists, year,
+  `track_count`, image), with the track number from `download_tasks.track_number` for an ALBUM track
+  and from `song_albums.track_number` otherwise. No trusted album: no `r`, and the song's own image.
+- Songs already in the library (no schema of their own): `FILED_SONGS` is the filed history, SUCCEEDED
+  rows with a `library_path`, each with its title, album, track number and whether its pick was EXACT
+  (a song's `song_albums` album counts only when it was saved within `ALBUM_LOOKUP_GRACE` of the song's
+  `finished_at`). `FILED_COPIES_SQL` matches it against the songs about to be admitted, and
+  `CREATE_TASKS_SQL` writes a song whose copy is still on disk `SUCCEEDED` from birth: `finished_at =
+  :now`, progress 100 and that `library_path`, so nothing ever claims it. `TASKS_TO_ORGANISE_SQL` adds
+  `filed_copy` (the library's copy of the same album track, or with no album the same id and title),
+  `copy_key` (the organiser files one copy per key per pass) and `pick_size` (the new copy is deleted
+  only when its size is the pick's).
+- `album_searches` (one row per album download: `phase` SEARCH_INIT/SEARCH_POLL/DONE, tier, search id,
+  due time, lease, outcome) with the partial index `idx_album_searches_due`: written since 04-10-2026 by
+  whole-album downloads (see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026)).
+  Inserted by `CREATE_TASKS_SQL` (an `album` CTE on `admitted`, only for an `ALBUM`, which also writes
+  the songs due at `:holdUntil`); claimed by `CLAIM_DUE_ALBUM_SEARCHES_SQL` (CLAIM_DUE_SQL's two locking
+  CTEs, joined with the album's `media_items` row for its name); written by `SAVE_ALBUM_SEARCH_SQL`
+  (lease holder only, never once DONE; re-holds the waiting songs when a wording starts); ended by
+  `RELEASE_ALBUM_SONGS_SQL` (one statement: DONE first, then the untouched songs) or by `CANCEL_SQL`'s
+  `album` CTE. Every statement that writes both locks the album row before its songs; `CANCEL_SQL`
+  reads its `album` CTE in a one-time filter for that, since an unread CTE runs after the main update
+  and the opposite order deadlocks with a release. Its `SEARCH_POLL` rows are added into `COUNT_ACTIVE_SEARCHES_SQL`. Rows are kept once
+  DONE, like task rows.
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.
@@ -211,7 +258,7 @@ RETURNING download_id, song_name, phase, phase_entered_at, next_attempt_at, sear
 - **`concludeDownloads()`** *(V5)* - gives a download its terminal status once every one of its tasks is terminal, `PARTIAL_SUCCESS` when there is one of each outcome. Run at the end of every pass and idempotent (`AND d.status = 'IN_PROGRESS'` stops it matching a second time). This exists because the aggregate **cannot** be folded into the per-task terminal write: two songs finishing concurrently would each see the other as still running and neither would conclude, leaving the download `IN_PROGRESS` forever. [The ADR](../decisions/collection-downloads-14-09-2026.md) has the full argument.
 - **`failUnadmitted(downloadId, code, now)`** *(V5; V6 added the code and timestamp)* - fails a request whose metadata call returned a 400/404, which is the one failure with no task row to record it on — so it writes `downloads.failure_reason` and `downloads.finished_at` itself.
 - **`upsertMedia(items)`** *(V6)* - writes the `media_items` rows for one adapter answer; see the V6 section above. Called by the runner BEFORE `createTasks`, so a crash between the two leaves harmless extra metadata rather than nameless task rows.
-- **`countActiveDownloads()`** / **`countActiveTransfers()`** / **`countActiveSearches()`** - back the capacity bounds in [download-manager.md](download-manager.md#four-independent-bounds): the first counts `downloads` rows (`status = 'IN_PROGRESS'`), the second counts task rows in `DOWNLOAD_POLL` only, the third task rows in `SEARCH_POLL` only (same deadlock reasoning as below, with `SEARCH_INIT` in place of `DOWNLOAD_INIT`). `DOWNLOAD_INIT` is deliberately excluded: it always has a null `slskd_transfer_id` (no real transfer exists yet), so counting it against the same cap that gates claiming `DOWNLOAD_INIT` rows would let enough `DOWNLOAD_INIT` rows close the gate permanently - a durable deadlock no restart could clear.
+- **`countActiveDownloads()`** / **`transfersInFlight()`** / **`countActiveSearches()`** - back the capacity bounds in [download-manager.md](download-manager.md#four-independent-bounds): the first counts `downloads` rows (`status = 'IN_PROGRESS'`), the second lists task rows in `DOWNLOAD_POLL` only (sharer and transfer id; its size is the transfer count, and the rows feed the per-sharer rules, `SharerLoad`), the third task rows and album searches in `SEARCH_POLL` only (same deadlock reasoning as below, with `SEARCH_INIT` in place of `DOWNLOAD_INIT`). `DOWNLOAD_INIT` is deliberately excluded: it always has a null `slskd_transfer_id` (no real transfer exists yet), so counting it against the same cap that gates claiming `DOWNLOAD_INIT` rows would let enough `DOWNLOAD_INIT` rows close the gate permanently - a durable deadlock no restart could clear.
 
 ## The terminal CTE
 

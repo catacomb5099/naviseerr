@@ -10,7 +10,8 @@ import java.util.List;
 public class SearchResponseItem {
     int fileCount;
     List<SearchFile> files;
-    Boolean hasFreeUploadsSlot;
+    // slskd's exact name. Spelt hasFreeUploadsSlot until 04-10-2026, which silently read null for every sharer.
+    Boolean hasFreeUploadSlot;
     int lockedFileCount;
     List<SearchFile> lockedFiles;
     int queueLength;

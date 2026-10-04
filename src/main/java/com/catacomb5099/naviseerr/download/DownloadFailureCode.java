@@ -14,6 +14,13 @@ package com.catacomb5099.naviseerr.download;
 public enum DownloadFailureCode {
     /** slskd rejected or errored the search itself. */
     SEARCH_FAILED,
+    /**
+     * The search could not start because slskd is not logged in to Soulseek (a taken name, a wrong
+     * password, a network that blocks it): slskd refused the last {@code POST /searches} with 409.
+     * Retried exactly like {@link #SEARCH_FAILED}, since slskd reconnects by itself; this is only the
+     * reason given once the retries run out. slskd's own sentence is in {@code last_error}.
+     */
+    SOULSEEK_OFFLINE,
     /** The search completed and nothing in it was usable. */
     NO_CANDIDATES,
     /** Every candidate was tried to its retry limit. */

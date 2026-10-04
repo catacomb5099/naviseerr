@@ -35,6 +35,7 @@ class DownloadRecoveryIT {
 
     @BeforeEach
     void clean() {
+        template.getDatabaseClient().sql("DELETE FROM album_searches").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
     }
@@ -116,7 +117,7 @@ class DownloadRecoveryIT {
         insert("SUCCEEDED");
 
         assertTrue(repository.admitDownloads(10).collectList().block().isEmpty());
-        assertEquals(0L, repository.countActiveTransfers().block());
+        assertEquals(0L, repository.transfersInFlight().count().block());
     }
 
     @Test
