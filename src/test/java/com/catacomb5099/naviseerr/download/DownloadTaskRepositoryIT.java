@@ -507,6 +507,9 @@ class DownloadTaskRepositoryIT {
         UUID album = insertDownload("SUCCEEDED", "ALBUM");
         media("yt-" + album, "Doolittle", "Pixies");
         media("song-1", "Debaser", "Pixies", "Someone");
+        // The same song also requested on its own once, and looked up: the album track must ignore that.
+        media("MPREb_doolittle_deluxe", "Doolittle (Deluxe)", "Pixies");
+        songAlbum("song-1", "MPREb_doolittle_deluxe", 1, NOW);
         UUID taskId = succeededSong(album, "song-1", "music\\Pixies\\Doolittle\\01 - Debaser.flac", NOW);
 
         List<LibraryOrganiser.Job> jobs = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW.minusSeconds(120))
