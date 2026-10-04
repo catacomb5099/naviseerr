@@ -299,6 +299,21 @@ class ActiveDownloadRepositoryIT {
     }
 
     @Test
+    void findActive_anAlbumWhoseSongsWaitForItsAlbumSearch_readsAsSearching() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        taskRepository.createTasks(album, List.of(DownloadTask.initial(album, "yt-a", "a", NOW),
+                DownloadTask.initial(album, "yt-b", "b", NOW)), NOW, NOW.plusSeconds(240)).block();
+
+        assertEquals(DownloadStage.SEARCHING, active().getFirst().stage(), "the album search is the songs' search");
+
+        // The album search is over and released its songs to search on their own.
+        template.getDatabaseClient().sql("UPDATE album_searches SET phase = 'DONE' WHERE download_id = :id")
+                .bind("id", album).fetch().rowsUpdated().block();
+
+        assertEquals(DownloadStage.STARTING, active().getFirst().stage());
+    }
+
+    @Test
     void findActive_songsWaitingTheirTurnWhileAnotherTransfers_readAsDownloading() {
         UUID album = insertDownload("PENDING", "ALBUM");
         admit(album, "sending", "waiting", "next");

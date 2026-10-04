@@ -6,6 +6,7 @@ import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -97,8 +98,16 @@ public class AlbumSearchStep {
                                             .then();
                                 })
                                 .onErrorResume(error -> {
-                                    log.warn("Album search of download {} could not be started; its songs will "
-                                            + "search on their own", album.downloadId(), error);
+                                    // slskd saying no (409 while Soulseek is offline) already says why; its
+                                    // stack trace is 48 lines of nothing more. Anything else keeps it.
+                                    if (error instanceof WebClientResponseException refused) {
+                                        log.warn("Album search of download {} could not be started; its songs will "
+                                                + "search on their own: slskd answered {} {}", album.downloadId(),
+                                                refused.getStatusCode(), refused.getResponseBodyAsString());
+                                    } else {
+                                        log.warn("Album search of download {} could not be started; its songs will "
+                                                + "search on their own", album.downloadId(), error);
+                                    }
                                     return finish(album, AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), now, owner);
                                 }));
     }

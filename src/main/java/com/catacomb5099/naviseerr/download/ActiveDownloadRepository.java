@@ -35,6 +35,8 @@ public class ActiveDownloadRepository {
      * exception: songs waiting their turn for a transfer while another song of the same download is
      * transferring read as downloading. With at most two transfers per sharer, most songs of an album
      * from one sharer wait their turn, and the card would say "ready to download" for most of the run.
+     * And songs held for their album's search for one sharer with the whole album (P5) read as
+     * searching, not as a search not yet started: that search is theirs.
      *
      * <p>Progress is the mean across songs, so a collection's bar tracks the collection rather than
      * whichever track happens to be transferring. {@code updated_at} is the most recent write, since
@@ -64,11 +66,13 @@ public class ActiveDownloadRepository {
                    COUNT(*) FILTER (WHERE t.phase = 'FAILED'
                                       AND t.failure_reason = 'CANCELLED')                 AS songs_cancelled
               FROM download_tasks t
-             CROSS JOIN LATERAL (SELECT CASE t.phase WHEN 'SEARCH_INIT'   THEN 1
-                                                     WHEN 'SEARCH_POLL'   THEN 2
-                                                     WHEN 'DOWNLOAD_INIT' THEN 3
-                                                     WHEN 'DOWNLOAD_POLL' THEN 4
-                                                     ELSE 5 END AS rank) r
+              LEFT JOIN album_searches a ON a.download_id = t.download_id
+             CROSS JOIN LATERAL (SELECT CASE WHEN t.phase = 'SEARCH_INIT' AND a.phase <> 'DONE' THEN 2
+                                             WHEN t.phase = 'SEARCH_INIT'   THEN 1
+                                             WHEN t.phase = 'SEARCH_POLL'   THEN 2
+                                             WHEN t.phase = 'DOWNLOAD_INIT' THEN 3
+                                             WHEN t.phase = 'DOWNLOAD_POLL' THEN 4
+                                             ELSE 5 END AS rank) r
              %s
              GROUP BY t.download_id""";
 
