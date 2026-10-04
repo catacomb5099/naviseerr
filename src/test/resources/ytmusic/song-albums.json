@@ -1,0 +1,167 @@
+{
+ "_source": "Live ytmusic-adapter answers (localhost:8000, 04-10-2026), trimmed to the fields the album lookup reads. Albums whose trust check fails before their tracks are read keep only their first tracks; the 44-track Deluxe keeps 1-11 and the 30th Anniversary edition 20-26 (the repeated ids).",
+ "details": {
+  "1HqpFoHv6qg": {"videoId": "1HqpFoHv6qg", "title": "Live Forever", "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "album": {"name": "Definitely Maybe (Deluxe Edition Remastered)", "browseId": "MPREb_VXk6OaxfNsY"}, "durationSeconds": 277},
+  "2n5OwsJtrfg": {"videoId": "2n5OwsJtrfg", "title": "Supersonic", "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "album": {"name": "Definitely Maybe", "browseId": "MPREb_Hl8XJR59OrY"}, "durationSeconds": 284},
+  "4NRXx6U8ABQ": {"videoId": "4NRXx6U8ABQ", "title": "Blinding Lights (Official Video)", "artists": [{"name": "The Weeknd", "channelId": "UClYV6hHlupm_S_ObS1W-DYw"}], "album": null, "durationSeconds": 263},
+  "4wOLVrGHiIU": {"videoId": "4wOLVrGHiIU", "title": "Lose Yourself", "artists": [{"name": "Eminem", "channelId": "UCedvOgsKFzcK3hA5taf3KoQ"}], "album": {"name": "Just Lose It", "browseId": "MPREb_WEtHcp9WJWl"}, "durationSeconds": 322},
+  "6hzrDeceEKc": {"videoId": "6hzrDeceEKc", "title": "Wonderwall", "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "album": null, "durationSeconds": 279},
+  "IL5TvxJqRBU": {"videoId": "IL5TvxJqRBU", "title": "Don't You (Forget About Me) [2001 Remastered Version]", "artists": [{"name": "Simple Minds", "channelId": "UCE_svhtO1EX9jG8KV2-njfA"}], "album": {"name": "Driving", "browseId": "MPREb_EawXzBZLriI"}, "durationSeconds": 261},
+  "J7p4bzqLvCw": {"videoId": "J7p4bzqLvCw", "title": "Blinding Lights", "artists": [{"name": "The Weeknd", "channelId": "UClYV6hHlupm_S_ObS1W-DYw"}], "album": {"name": "Blinding Lights", "browseId": "MPREb_4U7yfKKFZLv"}, "durationSeconds": 202},
+  "h7-BHdjeEY0": {"videoId": "h7-BHdjeEY0", "title": "Up In The Sky (Sawmills Outtake)", "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "album": null, "durationSeconds": 272}
+ },
+ "albums": {
+  "MPREb_4U7yfKKFZLv": {"browseId": "MPREb_4U7yfKKFZLv", "title": "Blinding Lights", "type": "Single", "year": 2019, "trackCount": 1, "artists": [{"name": "The Weeknd", "channelId": "UClYV6hHlupm_S_ObS1W-DYw"}], "thumbnailUrl": "https://yt3.googleusercontent.com/R_cjQK3wwLPEzri1jerx-79zgzGocoKvwGU3NMONaTsaMM0Idd641pfB8r5jgfpn6I8JAoFtf9RBIcI=w544-h544-l90-rj", "tracks": [
+    {"videoId": "4NRXx6U8ABQ", "title": "Blinding Lights", "durationSeconds": 202, "trackNumber": 1}
+   ], "otherVersions": [
+    {"browseId": "MPREb_mV9I3IKlaZK", "title": "Blinding Lights", "type": "Single", "artists": [{"name": "The Weeknd"}]}
+   ]},
+  "MPREb_EawXzBZLriI": {"browseId": "MPREb_EawXzBZLriI", "title": "Driving", "type": "Album", "year": 2008, "trackCount": 19, "artists": [{"name": "Various Artists", "channelId": null}], "thumbnailUrl": "https://yt3.googleusercontent.com/pVnwnKSQfBKDCq6OUsZWcYxgf8096p1wQU7EzXBcF7QGRmhPn7o5PxFa8xfaaqD_tqoH6WW0MRJ8CDzi=w544-h544-l90-rj", "tracks": [
+    {"videoId": "CdqoNKCCt7A", "title": "Don't You (Forget About Me) [2001 Remastered Version]", "durationSeconds": 261, "trackNumber": 1},
+    {"videoId": "ntG50eXbBtc", "title": "Gold (Non Stop Edit)", "durationSeconds": 235, "trackNumber": 2},
+    {"videoId": "0n3OepDn5GU", "title": "Love Is The Drug (1999 Remastered Version)", "durationSeconds": 247, "trackNumber": 3}
+   ], "otherVersions": [
+   ]},
+  "MPREb_Hl8XJR59OrY": {"browseId": "MPREb_Hl8XJR59OrY", "title": "Definitely Maybe", "type": "Album", "year": 1994, "trackCount": 11, "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "thumbnailUrl": "https://yt3.googleusercontent.com/AQHkMsob37t4X5pBGKNbyfv7gQzEQmvexCkJ6pCsmPhz_3H7Gg4helc_oMvFiL_oiJM8vGUrC4ml0KlVyA=w544-h544-l90-rj", "tracks": [
+    {"videoId": "3aatEBIZHNU", "title": "Rock 'n' Roll Star", "durationSeconds": 324, "trackNumber": 1},
+    {"videoId": "3FpNw3286y8", "title": "Shakermaker", "durationSeconds": 309, "trackNumber": 2},
+    {"videoId": "TDe1DqxwJoc", "title": "Live Forever", "durationSeconds": 277, "trackNumber": 3},
+    {"videoId": "wKkgoi8_mgE", "title": "Up in the Sky", "durationSeconds": 269, "trackNumber": 4},
+    {"videoId": "7QyF5UdhBJI", "title": "Columbia", "durationSeconds": 377, "trackNumber": 5},
+    {"videoId": "BJKpUH2kJQg", "title": "Supersonic", "durationSeconds": 284, "trackNumber": 6},
+    {"videoId": "GQbT1CqlLvo", "title": "Bring It on Down", "durationSeconds": 258, "trackNumber": 7},
+    {"videoId": "SaeLKhRnkhQ", "title": "Cigarettes & Alcohol", "durationSeconds": 290, "trackNumber": 8},
+    {"videoId": "t7U2opOC2p8", "title": "Digsy's Dinner", "durationSeconds": 153, "trackNumber": 9},
+    {"videoId": "X5QBFoDhaH4", "title": "Slide Away", "durationSeconds": 393, "trackNumber": 10},
+    {"videoId": "EOoidN2s5qY", "title": "Married with Children", "durationSeconds": 193, "trackNumber": 11}
+   ], "otherVersions": [
+    {"browseId": "MPREb_rAj03C3fO0c", "title": "Definitely Maybe (30th Anniversary Deluxe Edition)", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_VXk6OaxfNsY", "title": "Definitely Maybe (Deluxe Edition Remastered)", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_8k7WQz36zgN", "title": "Definitely Maybe (Deluxe Edition Remastered)", "type": "Album", "artists": [{"name": "Oasis"}]}
+   ]},
+  "MPREb_IInSY5QXXrW": {"browseId": "MPREb_IInSY5QXXrW", "title": "(What's The Story) Morning Glory?", "type": "Album", "year": 1995, "trackCount": 12, "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "thumbnailUrl": "https://yt3.googleusercontent.com/fyQACpdbGxnxcwWa6ogy2qujdidjDvv3WvpGJRthh8ffCCAYs85MnKp1tQ4tpNhZLvizPhYE7T0kiMDI=w544-h544-l90-rj", "tracks": [
+    {"videoId": "7HF1Sfos3v4", "title": "Hello", "durationSeconds": 203, "trackNumber": 1},
+    {"videoId": "DrARl0dzd-0", "title": "Roll with It", "durationSeconds": 241, "trackNumber": 2},
+    {"videoId": "6hzrDeceEKc", "title": "Wonderwall", "durationSeconds": 259, "trackNumber": 3},
+    {"videoId": "r8OipmKFDeM", "title": "Don't Look Back in Anger", "durationSeconds": 290, "trackNumber": 4},
+    {"videoId": "Rl5DRpBqs4Q", "title": "Hey Now", "durationSeconds": 342, "trackNumber": 5},
+    {"videoId": "rO24y0KRFfY", "title": "The Swamp Song (Version 1 - Remastered)", "durationSeconds": 45, "trackNumber": 6},
+    {"videoId": "oxOjIj18I9E", "title": "Some Might Say", "durationSeconds": 328, "trackNumber": 7},
+    {"videoId": "p28UH0fY-7Y", "title": "Cast No Shadow", "durationSeconds": 295, "trackNumber": 8},
+    {"videoId": "h9JZWhjQDvc", "title": "She's Electric", "durationSeconds": 220, "trackNumber": 9},
+    {"videoId": "Wm54XyLwBAk", "title": "Morning Glory", "durationSeconds": 305, "trackNumber": 10},
+    {"videoId": "uQP7S_rE7-s", "title": "The Swamp Song (Version 2 - Remastered)", "durationSeconds": 41, "trackNumber": 11},
+    {"videoId": "tI-5uv4wryI", "title": "Champagne Supernova", "durationSeconds": 449, "trackNumber": 12}
+   ], "otherVersions": [
+    {"browseId": "MPREb_SmEdOAdN7en", "title": "(What's The Story) Morning Glory? (Deluxe Remastered Edition)", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_OYY1I8cRqC8", "title": "(What's The Story) Morning Glory? (Deluxe Remastered Edition)", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_PITqkpE6ExP", "title": "(What's The Story) Morning Glory?", "type": "Album", "artists": [{"name": "Oasis"}]}
+   ]},
+  "MPREb_PITqkpE6ExP": {"browseId": "MPREb_PITqkpE6ExP", "title": "(What's The Story) Morning Glory?", "type": "Album", "year": 1995, "trackCount": 12, "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "thumbnailUrl": "https://yt3.googleusercontent.com/SP0cN9Mypy_WeKEajm03ERYOU_53KkHZpu4EQpSJUzcQ1H_3HhS1FmjR34KTstf-0DX83JLCCj9ouc-k1g=w544-h544-l90-rj", "tracks": [
+    {"videoId": "7HF1Sfos3v4", "title": "Hello", "durationSeconds": 204, "trackNumber": 1},
+    {"videoId": "DrARl0dzd-0", "title": "Roll With It", "durationSeconds": 240, "trackNumber": 2},
+    {"videoId": "6hzrDeceEKc", "title": "Wonderwall", "durationSeconds": 259, "trackNumber": 3},
+    {"videoId": "r8OipmKFDeM", "title": "Don't Look Back In Anger", "durationSeconds": 288, "trackNumber": 4},
+    {"videoId": "Rl5DRpBqs4Q", "title": "Hey Now!", "durationSeconds": 342, "trackNumber": 5},
+    {"videoId": "IR6mBUalr30", "title": "The Swamp Song (Version 1)", "durationSeconds": 45, "trackNumber": 6},
+    {"videoId": "oxOjIj18I9E", "title": "Some Might Say", "durationSeconds": 328, "trackNumber": 7},
+    {"videoId": "p28UH0fY-7Y", "title": "Cast No Shadow", "durationSeconds": 295, "trackNumber": 8},
+    {"videoId": "h9JZWhjQDvc", "title": "She's Electric", "durationSeconds": 221, "trackNumber": 9},
+    {"videoId": "Wm54XyLwBAk", "title": "Morning Glory", "durationSeconds": 304, "trackNumber": 10},
+    {"videoId": "dT7BscyFtnQ", "title": "The Swamp Song (Version 2)", "durationSeconds": 40, "trackNumber": 11},
+    {"videoId": "tI-5uv4wryI", "title": "Champagne Supernova", "durationSeconds": 451, "trackNumber": 12}
+   ], "otherVersions": [
+    {"browseId": "MPREb_IInSY5QXXrW", "title": "(What's The Story) Morning Glory?", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_SmEdOAdN7en", "title": "(What's The Story) Morning Glory? (Deluxe Remastered Edition)", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_OYY1I8cRqC8", "title": "(What's The Story) Morning Glory? (Deluxe Remastered Edition)", "type": "Album", "artists": [{"name": "Oasis"}]}
+   ]},
+  "MPREb_VXk6OaxfNsY": {"browseId": "MPREb_VXk6OaxfNsY", "title": "Definitely Maybe (Deluxe Edition Remastered)", "type": "Album", "year": 1994, "trackCount": 44, "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "thumbnailUrl": "https://yt3.googleusercontent.com/UL0h9FfYwEZZVGdgCBoyOR22JR7ZXYkbNfDscMNdAck-PZcCLiydJkqTdIWUrncJbi_BSBt-UUIcKbFL=w544-h544-l90-rj", "tracks": [
+    {"videoId": "3aatEBIZHNU", "title": "Rock 'n' Roll Star", "durationSeconds": 322, "trackNumber": 1},
+    {"videoId": "3FpNw3286y8", "title": "Shakermaker", "durationSeconds": 309, "trackNumber": 2},
+    {"videoId": "TDe1DqxwJoc", "title": "Live Forever", "durationSeconds": 277, "trackNumber": 3},
+    {"videoId": "wKkgoi8_mgE", "title": "Up In The Sky", "durationSeconds": 268, "trackNumber": 4},
+    {"videoId": "7QyF5UdhBJI", "title": "Columbia", "durationSeconds": 378, "trackNumber": 5},
+    {"videoId": "BJKpUH2kJQg", "title": "Supersonic", "durationSeconds": 284, "trackNumber": 6},
+    {"videoId": "GQbT1CqlLvo", "title": "Bring It On Down", "durationSeconds": 258, "trackNumber": 7},
+    {"videoId": "SaeLKhRnkhQ", "title": "Cigarettes & Alcohol", "durationSeconds": 290, "trackNumber": 8},
+    {"videoId": "t7U2opOC2p8", "title": "Digsy's Dinner", "durationSeconds": 153, "trackNumber": 9},
+    {"videoId": "X5QBFoDhaH4", "title": "Slide Away", "durationSeconds": 393, "trackNumber": 10},
+    {"videoId": "EOoidN2s5qY", "title": "Married With Children", "durationSeconds": 193, "trackNumber": 11}
+   ], "otherVersions": [
+    {"browseId": "MPREb_Hl8XJR59OrY", "title": "Definitely Maybe", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_rAj03C3fO0c", "title": "Definitely Maybe (30th Anniversary Deluxe Edition)", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_8k7WQz36zgN", "title": "Definitely Maybe (Deluxe Edition Remastered)", "type": "Album", "artists": [{"name": "Oasis"}]}
+   ]},
+  "MPREb_WEtHcp9WJWl": {"browseId": "MPREb_WEtHcp9WJWl", "title": "Just Lose It", "type": "Single", "year": 2004, "trackCount": 2, "artists": [{"name": "Eminem", "channelId": "UCedvOgsKFzcK3hA5taf3KoQ"}], "thumbnailUrl": "https://yt3.googleusercontent.com/8aW-ynltCML7Hwi4_XWQykhMaIYeL11W8WxBHyWvcuQABlNaJQf-1CTW_QpEglC8taIi9JDfXH9B-9ob=w544-h544-s-l90-rj", "tracks": [
+    {"videoId": "9dcVOmEQzKA", "title": "Just Lose It", "durationSeconds": 251, "trackNumber": 1},
+    {"videoId": "xFYQQPAOz7Y", "title": "Lose Yourself", "durationSeconds": 323, "trackNumber": 2}
+   ], "otherVersions": [
+    {"browseId": "MPREb_7VtLy3uZcRJ", "title": "Just Lose It", "type": "Single", "artists": [{"name": "Eminem"}]},
+    {"browseId": "MPREb_xIFtZpEYfNo", "title": "Just Lose It", "type": "Single", "artists": [{"name": "Eminem"}]}
+   ]},
+  "MPREb_awmOBzybmCq": {"browseId": "MPREb_awmOBzybmCq", "title": "Mega 50 - Die 80er Jahre", "type": "Album", "year": 2010, "trackCount": 50, "artists": [{"name": "Various Artists", "channelId": null}], "thumbnailUrl": "https://yt3.googleusercontent.com/a77U3IxjNG1MYzlDv7157nq41IuCs5mPp-uFlQWHqAhR1FnG5u_Fophs-UjJiQVQLzIU8b4DuEP8E_kC=w544-h544-l90-rj", "tracks": [
+    {"videoId": "VBW6kKetTrE", "title": "Hallo, guten Morgen Deutschland", "durationSeconds": 164, "trackNumber": 1},
+    {"videoId": "JugzBS12wBc", "title": "I bin a bayrisches Cowgirl (Remastered 2006)", "durationSeconds": 239, "trackNumber": 2},
+    {"videoId": "QYrCyl6OR0o", "title": "Schickeria (Remastered 2007)", "durationSeconds": 221, "trackNumber": 3}
+   ], "otherVersions": [
+   ]},
+  "MPREb_iwMjyngE7Gd": {"browseId": "MPREb_iwMjyngE7Gd", "title": "8 Mile (Music From And Inspired By The Motion Picture)", "type": "Album", "year": 2002, "trackCount": 16, "artists": [{"name": "Various Artists", "channelId": null}], "thumbnailUrl": "https://yt3.googleusercontent.com/2moJtcAYOkXNBpRllYC9qiJcONdI9k29nH9Q-Hjl_tdh229x0pOlPEPWvhHmO8gqhVrZrWKuNQrpi9pJ=w544-h544-s-l90-rj", "tracks": [
+    {"videoId": "xFYQQPAOz7Y", "title": "Lose Yourself", "durationSeconds": 321, "trackNumber": 1},
+    {"videoId": "47X_hh4WYLA", "title": "Love Me", "durationSeconds": 271, "trackNumber": 2},
+    {"videoId": "-T5I__Jdl3w", "title": "8 Mile", "durationSeconds": 360, "trackNumber": 3}
+   ], "otherVersions": [
+    {"browseId": "MPREb_yrtpXzRruyF", "title": "8 Mile (Music From And Inspired By The Motion Picture)", "type": "Album", "artists": []}
+   ]},
+  "MPREb_mV9I3IKlaZK": {"browseId": "MPREb_mV9I3IKlaZK", "title": "Blinding Lights", "type": "Single", "year": 2019, "trackCount": 4, "artists": [{"name": "The Weeknd", "channelId": "UClYV6hHlupm_S_ObS1W-DYw"}], "thumbnailUrl": "https://yt3.googleusercontent.com/ucLZx2UlY3ZSOWEegQfsbBWiYElW7ogWIZ594vh-3sDKKXxC2I3I9myuXimekgTFUiiaqkj5NfgOR0Y=w544-h544-l90-rj", "tracks": [
+    {"videoId": "4NRXx6U8ABQ", "title": "Blinding Lights", "durationSeconds": 201, "trackNumber": 1},
+    {"videoId": "9-YvMytXD9E", "title": "Blinding Lights (Major Lazer Remix) (feat. Major Lazer)", "durationSeconds": 198, "trackNumber": 2},
+    {"videoId": "imOUKPruPHk", "title": "Blinding Lights (Chromatics Remix) (feat. Chromatics)", "durationSeconds": 262, "trackNumber": 3},
+    {"videoId": "rrr9yvZvRJc", "title": "Blinding Lights (Instrumental)", "durationSeconds": 203, "trackNumber": 4}
+   ], "otherVersions": [
+    {"browseId": "MPREb_4U7yfKKFZLv", "title": "Blinding Lights", "type": "Single", "artists": [{"name": "The Weeknd"}]}
+   ]},
+  "MPREb_rAj03C3fO0c": {"browseId": "MPREb_rAj03C3fO0c", "title": "Definitely Maybe (30th Anniversary Deluxe Edition)", "type": "Album", "year": 2024, "trackCount": 27, "artists": [{"name": "Oasis", "channelId": "UCmMUZbaYdNH0bEd1PAlAqsA"}], "thumbnailUrl": "https://yt3.googleusercontent.com/1-_oC_dlyjvjIGxNSMgjm-Zk6eeuxBcV6NuOzFU3mA2IHeRDkNZGNj0a-yvmx9_eS9cwqR2r5jpZxl8UgA=w544-h544-l90-rj", "tracks": [
+    {"videoId": "dIa8iz77KdU", "title": "Rock 'n' Roll Star (Sawmills Outtake)", "durationSeconds": 393, "trackNumber": 20},
+    {"videoId": "h7-BHdjeEY0", "title": "Up In The Sky (Sawmills Outtake)", "durationSeconds": 273, "trackNumber": 21},
+    {"videoId": "QVjjrOZDKNo", "title": "Columbia (Sawmills Outtake)", "durationSeconds": 438, "trackNumber": 22},
+    {"videoId": "F2WySRKLB24", "title": "Bring It On Down (Sawmills Outtake)", "durationSeconds": 263, "trackNumber": 23},
+    {"videoId": "h7-BHdjeEY0", "title": "Cigarettes & Alcohol (Sawmills Outtake)", "durationSeconds": 307, "trackNumber": 24},
+    {"videoId": "biSDr4ttaYU", "title": "Digsy's Dinner (Sawmills Outtake)", "durationSeconds": 184, "trackNumber": 25},
+    {"videoId": "QVjjrOZDKNo", "title": "Slide Away (Sawmills Outtake)", "durationSeconds": 364, "trackNumber": 26}
+   ], "otherVersions": [
+    {"browseId": "MPREb_Hl8XJR59OrY", "title": "Definitely Maybe", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_VXk6OaxfNsY", "title": "Definitely Maybe (Deluxe Edition Remastered)", "type": "Album", "artists": [{"name": "Oasis"}]},
+    {"browseId": "MPREb_8k7WQz36zgN", "title": "Definitely Maybe (Deluxe Edition Remastered)", "type": "Album", "artists": [{"name": "Oasis"}]}
+   ]}
+ },
+ "searches": {
+  "Blinding Lights - The Weeknd": [
+    {"videoId": "J7p4bzqLvCw", "title": "Blinding Lights", "artists": [{"name": "The Weeknd"}], "album": {"name": "Blinding Lights", "browseId": "MPREb_4U7yfKKFZLv"}, "durationSeconds": 202},
+    {"videoId": "H64a2ggVIWc", "title": "Blinding Lights", "artists": [{"name": "The Weeknd"}], "album": {"name": "Blinding Lights", "browseId": "MPREb_mV9I3IKlaZK"}, "durationSeconds": 201},
+    {"videoId": "riVIK5tiYJQ", "title": "Blinding Lights (Acoustic) (Acoustic)", "artists": [{"name": "Lunity"}], "album": {"name": "Blinding Lights (Acoustic)", "browseId": "MPREb_ISymYIlabvW"}, "durationSeconds": 161},
+    {"videoId": "RmYCOm4ehKs", "title": "Save Your Tears", "artists": [{"name": "The Weeknd"}], "album": {"name": "After Hours", "browseId": "MPREb_TH6Wut5eTMQ"}, "durationSeconds": 216},
+    {"videoId": "kcbI_1v_RwU", "title": "Blinding Lights", "artists": [{"name": "Simply Three"}], "album": {"name": "Blinding Lights", "browseId": "MPREb_jIR5gCVCC1Q"}, "durationSeconds": 205}
+  ],
+  "Don't You - Simple Minds": [
+    {"videoId": "IL5TvxJqRBU", "title": "Don't You (Forget About Me) [2001 Remastered Version]", "artists": [{"name": "Simple Minds"}], "album": {"name": "Driving", "browseId": "MPREb_EawXzBZLriI"}, "durationSeconds": 261},
+    {"videoId": "UR-B4tHmaF8", "title": "Don't You (Forget About Me) (12\" Version)", "artists": [{"name": "Simple Minds"}], "album": {"name": "Once Upon A Time (Super Deluxe)", "browseId": "MPREb_5uXXSBzgj26"}, "durationSeconds": 397},
+    {"videoId": "lrZyKDk-bL0", "title": "Don't You (Forget About Me)", "artists": [{"name": "Simple Minds"}], "album": {"name": "Acoustic", "browseId": "MPREb_mXv5s3bODnO"}, "durationSeconds": 316},
+    {"videoId": "uXsrPV2HVus", "title": "Don't You (Forget About Me)", "artists": [{"name": "Simple Minds"}], "album": {"name": "Mega 50 - Die 80er Jahre", "browseId": "MPREb_awmOBzybmCq"}, "durationSeconds": 263},
+    {"videoId": "vt5vm6Uxj5Y", "title": "Alive And Kicking", "artists": [{"name": "Simple Minds"}], "album": {"name": "Once Upon A Time (Super Deluxe)", "browseId": "MPREb_5uXXSBzgj26"}, "durationSeconds": 326}
+  ],
+  "Lose Yourself - Eminem": [
+    {"videoId": "zlJ0Aj9y67c", "title": "Lose Yourself", "artists": [{"name": "Eminem"}], "album": {"name": "8 Mile (Music From And Inspired By The Motion Picture)", "browseId": "MPREb_iwMjyngE7Gd"}, "durationSeconds": 321},
+    {"videoId": "4wOLVrGHiIU", "title": "Lose Yourself", "artists": [{"name": "Eminem"}], "album": {"name": "Just Lose It", "browseId": "MPREb_WEtHcp9WJWl"}, "durationSeconds": 323},
+    {"videoId": "9kznlAwE-8o", "title": "Mockingbird", "artists": [{"name": "Eminem"}], "album": {"name": "Encore", "browseId": "MPREb_xFN2XG22AXC"}, "durationSeconds": 251},
+    {"videoId": "RnkShwdXfyc", "title": "Love The Way You Lie (feat. Rihanna)", "artists": [{"name": "Eminem"}], "album": {"name": "Recovery", "browseId": "MPREb_UUFKiZYr3uO"}, "durationSeconds": 264},
+    {"videoId": "Wj7lL6eDOqc", "title": "Lose Yourself (From \"8 Mile\" Soundtrack)", "artists": [{"name": "Eminem"}], "album": {"name": "Curtain Call: The Hits", "browseId": "MPREb_yqgLQ6ULp6o"}, "durationSeconds": 322}
+  ],
+  "Wonderwall - Oasis": [
+    {"videoId": "hpSrLjc5SMs", "title": "Wonderwall", "artists": [{"name": "Oasis"}], "album": {"name": "(What's The Story) Morning Glory?", "browseId": "MPREb_PITqkpE6ExP"}, "durationSeconds": 259},
+    {"videoId": "ghg0JafF4Ic", "title": "Wonderwall", "artists": [{"name": "Our Last Night"}], "album": {"name": "OLN Goes 90's", "browseId": "MPREb_Wr9WrRmsfUG"}, "durationSeconds": 200},
+    {"videoId": "FVdjZYfDuLE", "title": "Wonderwall", "artists": [{"name": "Oasis"}], "album": {"name": "(What's The Story) Morning Glory? (Deluxe Remastered Edition)", "browseId": "MPREb_SmEdOAdN7en"}, "durationSeconds": 259},
+    {"videoId": "Hj0aJ1R2UAw", "title": "Wonderwall (Unplugged)", "artists": [{"name": "Oasis"}], "album": {"name": "(What's The Story) Morning Glory? (30th Anniversary Deluxe Edition)", "browseId": "MPREb_9rUb85NwrKk"}, "durationSeconds": 252},
+    {"videoId": "5aYDRVs1eDQ", "title": "Wonderwall", "artists": [{"name": "Lucky Luke"}], "album": {"name": "Wonderwall", "browseId": "MPREb_xTZUsDCa08H"}, "durationSeconds": 216}
+  ]
+ }
+}

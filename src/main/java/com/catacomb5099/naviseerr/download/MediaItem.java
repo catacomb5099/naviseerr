@@ -15,9 +15,19 @@ import java.util.List;
  *
  * @param artistIds the channel id behind each {@link #artists} entry, {@code ""} where unknown;
  *                  index-aligned, so the two are written and replaced together.
+ * @param year      an album's release year; null for anything else.
+ * @param albumType an album's kind of release as YouTube words it ({@code "Album"}, {@code "EP"},
+ *                  {@code "Single"}); null for anything else.
  */
 public record MediaItem(String youtubeId, String title, List<String> artists, List<String> artistIds,
-                        String imageUrl, Integer durationSeconds, Integer trackCount) {
+                        String imageUrl, Integer durationSeconds, Integer trackCount, Integer year,
+                        String albumType) {
+
+    /** Everything but an album row: no year, no release type. */
+    public MediaItem(String youtubeId, String title, List<String> artists, List<String> artistIds,
+                     String imageUrl, Integer durationSeconds, Integer trackCount) {
+        this(youtubeId, title, artists, artistIds, imageUrl, durationSeconds, trackCount, null, null);
+    }
 
     public static MediaItem of(YoutubeSongInfo song) {
         return new MediaItem(song.id(), song.name(), song.authorNames(), song.authorIds(),

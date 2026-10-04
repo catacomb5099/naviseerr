@@ -20,15 +20,15 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 ## 3. `SlskdSearchState`'s values were unverified guesses (closed 27-09-2026)
 
 - Where: [SlskdSearchState.java](../../src/main/java/com/catacomb5099/naviseerr/schema/slskd/SlskdSearchState.java).
-- Status: **closed.** On 27-09-2026 slskd's own search list (slskd 0.26.0) was read for all 50 searches of one playlist: every finished search reported `"Completed, TimedOut"` (results dried up; `searchTimeout` is an inactivity window from the last response, not a total) or `"Completed, ResponseLimitReached"` (250 responses arrived first), each with `isComplete: true`. Both parse to the values the enum already had; `SlskdSearchStateTest` pins them. The failure values (`Cancelled`, `Errored`) were not observed live and remain fail-safe as described below.
+- Status: **closed.** On 27-09-2026 slskd's own search list (slskd 0.26.0) was read for all 50 searches of one playlist: every finished search reported `"Completed, TimedOut"` (results dried up; `searchTimeout` is an inactivity window from the last response, not a total) or `"Completed, ResponseLimitReached"` (250 responses arrived first), each with `isComplete: true`. Both parse to the values the enum already had; `SlskdSearchStateTest` pins them. `Cancelled` was not observed live. `"Completed, Errored"` was, on 04-10-2026: 5 of 1,463 searches in slskd's history, each holding 251-252 responses, so slskd says it when its response cap overflows. naviseerr used to fail those songs with `SEARCH_FAILED` and throw the responses away; `isFailure(state, responseCount)` now treats Errored with responses as a normal completed search, and Errored with none still fails.
 - Why a wrong string was always low-risk: an unrecognised state falls through to `SlskdSearchState.isFailure`'s default of `false`, which routes to "completed with no usable candidates" (`NO_CANDIDATES`) rather than being misclassified as success.
 - What that same reading DID find: the searches were fine, naviseerr was flooding slskd. slskd runs two searches at a time (hard-coded in slskd 0.24+, via Soulseek.NET's `MaximumConcurrentSearches`) and queues the rest inside itself while answering every `POST /searches` with 200 immediately. 26 of the 50 searches had been failed by naviseerr's 120 s `search-budget-ms` — a clock that starts at submission — and then completed normally in slskd minutes later. Fixed by `download-task.max-concurrent-searches` (see [download-manager.md](download-manager.md#four-independent-bounds)).
 
-## 4. The `"flac"` extension check is case-sensitive
+## 4. The FLAC check trusted slskd's `extension` field (fixed 04-10-2026)
 
-- Where: [SlskdSearchResultProcessor.isFlacAndHighBitrate](../../src/main/java/com/catacomb5099/naviseerr/services/slskd/SlskdSearchResultProcessor.java) - `file.getExtension().equals("flac")`.
-- Impact: a file reported with extension `"FLAC"` or `"Flac"` fails this check and is kept only if it also clears the bitrate filter, so some genuine FLAC files can be silently excluded from candidates.
-- Suggested action: `equalsIgnoreCase("flac")`. Left as-is deliberately through the durable-download-state-machine work — `selectBestFiles` and everything under it stayed byte-for-byte unchanged so its existing tests passing unmodified could serve as the guard that the pipeline rewrite did not also touch ranking/filtering; fixing this is a small, separate, well-scoped change.
+- Where: [SlskdSearchResultProcessor.isLosslessOrHighBitRate](../../src/main/java/com/catacomb5099/naviseerr/services/slskd/SlskdSearchResultProcessor.java), formerly `isFlacAndHighBitrate` with `file.getExtension().equals("flac")`.
+- What it was: worse than the case-sensitivity issue first logged here. slskd leaves `extension` blank on most files (8,972 of 14,188 FLAC files on 04-10-2026), sometimes gets it wrong (218 FLAC files claimed `"mp3"`), and lossless files carry no `bitRate`, so most FLAC failed both halves of the filter and MP3 won (Ticket To Ride kept 8 of 520 files). A null extension would also have thrown.
+- Status: **fixed.** The format comes from the file name's suffix, case-insensitive, falling back to `extension` only for a name with no suffix. Lossless suffixes (`flac`, `wav`, `aif`, `aiff`, `ape`, `wv`) always pass; everything else still needs `bitRate >= slskd-service.min-bit-rate`, so VBR MP3, m4a and opus (no or lower reported bit rate) are still dropped.
 
 ## 5. `@EnableWebFlux` + wide-open CORS
 
@@ -68,6 +68,12 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - Where: [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java), as of 14-09-2026.
 - What/impact: replaced by `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=`. A `naviseerr-client` image older than this server gets a 404 on every download request. Normally a self-hosted service would keep a shim for a release; here the old route inserts a row with no YouTube id, which admission cannot resolve, so every download through it would fail — and a route that reliably produces failures is worse for the user than a 404, because they cannot tell "my server is newer than my client" from "Soulseek had nothing".
 - Suggested action: ship the client change alongside the server. Nothing to fix here.
+
+## 11. A misspelt slskd field reads as null, silently (free-slot flag fixed 04-10-2026)
+
+- Where: the DTOs under [schema/slskd](../../src/main/java/com/catacomb5099/naviseerr/schema/slskd/), which bind by field name and ignore unknown JSON keys.
+- What happened: `SearchResponseItem` spelt the free-slot flag `hasFreeUploadsSlot`, but slskd sends `hasFreeUploadSlot`. It read null for every sharer, so `BY_AVAILABILITY`'s first key never told sharers apart, `isOverloaded` demoted every sharer with more than `max-sharer-queue` waiting even when it had a slot free, and every stored `DownloadCandidate.hasFreeUploadSlot` was null (all 681 rows checked on 04-10-2026). In real searches 86% of sharers report a free slot.
+- Suggested action: name new fields from a captured slskd response, and pin them with real JSON as `SlskdServiceSearchShapeTest` and `SlskdServiceTransfersShapeTest` do. Tests that mock the getters cannot catch this.
 
 ## Related docs
 

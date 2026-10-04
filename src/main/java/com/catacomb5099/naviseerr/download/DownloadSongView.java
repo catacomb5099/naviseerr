@@ -29,6 +29,9 @@ import java.util.UUID;
  * @param slskdUsername   the peer the current (or last) transfer was from.
  * @param slskdFilename   the file, as the peer shares it.
  * @param lastError       slskd's last error text for this song, verbatim. Diagnostic, not for users.
+ * @param libraryPath     where the song's file is in the library, once filed; null until then and
+ *                        with the organiser off. A song the library already had when it was requested
+ *                        is SUCCEEDED from the start with this set and no peer or file of its own.
  */
 public record DownloadSongView(
         UUID taskId,
@@ -50,5 +53,6 @@ public record DownloadSongView(
         int retryIndex,
         String slskdUsername,
         String slskdFilename,
-        String lastError) {
+        String lastError,
+        String libraryPath) {
 }

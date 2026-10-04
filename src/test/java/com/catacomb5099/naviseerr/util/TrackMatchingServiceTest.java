@@ -31,6 +31,20 @@ class TrackMatchingServiceTest {
     }
 
     @Test
+    void aDjPoolWordTheRequestItselfCarries_isNotADjPoolEdit() {
+        assertTrue(matches("Intro - The xx", "The xx/xx/01 - Intro.flac"));
+        assertTrue(matches("Clean - Taylor Swift", "Taylor Swift/1989 (Deluxe)/13 - Clean.flac"));
+        assertTrue(matches("Rather Be - Clean Bandit", "Clean Bandit - Rather Be.mp3"));
+        // only the request's own words pass; any other DJ-pool word still rejects the file, not even as a fallback
+        // ("Edit" alone would only make the Wonderwall file another version)
+        assertEquals(Match.NONE, grade("Wonderwall - Oasis", "Wonderwall (Clean Intro DJ Edit).mp3"));
+        assertEquals(Match.NONE, grade("Clean - Taylor Swift", "Taylor Swift - Clean (Dirty Intro).mp3"));
+        // a bracketed flag is a DJ flag, even when it is the title's word, unless the request has it in brackets too
+        assertEquals(Match.NONE, grade("Clean - Taylor Swift", "Taylor Swift - Style (Clean).mp3"));
+        assertTrue(matches("Smack That (Clean) - Akon", "Akon - Smack That (Clean).mp3"));
+    }
+
+    @Test
     void requestedVersionMustAppearInFilename() {
         assertFalse(matcher.isMatch("Wonderwall (Live) - Oasis", "Oasis - Wonderwall.flac"));
         assertTrue(matcher.isMatch("Wonderwall (Live) - Oasis", "Oasis - Wonderwall (Live at Wembley).flac"));

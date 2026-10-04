@@ -46,7 +46,12 @@ public enum SlskdSearchState {
                 .toList();
     }
 
-    public static boolean isFailure(String state) {
-        return parse(state).stream().anyMatch(SlskdSearchState::isFailure);
+    /**
+     * {@code "Completed, Errored"} with responses is not a failure: slskd says that when more answers
+     * arrive than its 250-response cap allows, and it still holds 251-252 good ones (5 of 1,463 searches in
+     * slskd's history on 04-10-2026, "Daft Punk Discovery" among them). Errored with none is a failure.
+     */
+    public static boolean isFailure(String state, int responseCount) {
+        return parse(state).stream().anyMatch(s -> s.failure && (s != ERRORED || responseCount == 0));
     }
 }

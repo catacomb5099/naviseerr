@@ -21,8 +21,8 @@ import java.util.List;
  * keys — an album's id is {@code browseId} and its artists a list, a playlist's id is {@code id} and
  * its single author an object. Declaring all four and letting {@code ignoreUnknown} drop whichever
  * pair is absent is cheaper than two near-identical classes and a switch at the use site. Fields the
- * download pipeline does not read (descriptions, an album's other-versions buckets) are deliberately
- * left off rather than mirrored.
+ * download pipeline does not read (descriptions, related recommendations) are deliberately left off
+ * rather than mirrored.
  */
 public final class YtMusicDetailResponse {
 
@@ -108,12 +108,39 @@ public final class YtMusicDetailResponse {
         private String title;
         /** Albums only; a playlist has no year. */
         private Integer year;
+        /** Albums only: YouTube's kind of release, {@code "Album"}, {@code "EP"} or {@code "Single"}. */
+        private String type;
+        /**
+         * YouTube's own count for the album or playlist, which can be more than {@link #tracks} holds
+         * (an unavailable track, or a playlist longer than the adapter's page).
+         */
+        private Integer trackCount;
         /** Albums. */
         private List<YtMusicSearchResponse.ArtistRef> artists;
         /** Playlists. */
         private YtMusicSearchResponse.ArtistRef author;
         private String thumbnailUrl;
         private List<Track> tracks;
+        /**
+         * Albums only: the same album's other editions (Deluxe, Remastered, 30th Anniversary), as
+         * YouTube Music lists them under "Other versions". Read by {@code SongAlbumResolver} to file
+         * a song with the plainest one.
+         */
+        private List<RelatedAlbum> otherVersions;
+    }
+
+    /** One entry of an album's {@code otherVersions[]}: enough to tell whether it is the same artist's album. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class RelatedAlbum {
+        private String browseId;
+        private String title;
+        /** {@code "Album"}, {@code "EP"} or {@code "Single"}. */
+        private String type;
+        private List<YtMusicSearchResponse.ArtistRef> artists;
     }
 
     /**
@@ -131,6 +158,11 @@ public final class YtMusicDetailResponse {
         private String title;
         private List<YtMusicSearchResponse.ArtistRef> artists;
         private Integer durationSeconds;
+        /**
+         * The number YouTube Music prints beside an album's row, 1-based; null on playlist rows and
+         * top songs. Not the list index: an unavailable track keeps its number while the list skips it.
+         */
+        private Integer trackNumber;
         /**
          * YouTube's own wording ("28M plays"). Present on album tracks and an artist's top songs, null
          * on playlist rows. Passed through, never parsed: the adapter warns the figure is lossy upstream.

@@ -144,6 +144,44 @@ class SlskdSearchResultProcessorTest {
     }
 
     @Test
+    void selectBestFiles_takesTheFormatFromTheFileName_notSlskdsExtensionField() {
+        ReflectionTestUtils.setField(processor, "minBitRate", 320);
+        when(trackMatchingService.grade(anyString(), anyString(), anyString())).thenReturn(Match.EXACT);
+
+        // Shapes as slskd sent them on 04-10-2026: lossless files carry no bitRate, and extension is
+        // usually "" and sometimes wrong.
+        SearchFile blankFlac = new SearchFile("Music\\Enno Velthuys - (1984) - A Glimpse Of Light\\03 - Discovery.flac",
+                94998089, 1, false, "", Optional.empty(), Optional.of(408));
+        SearchFile upperFlac = new SearchFile("Music\\Daft Punk\\Discovery\\03 - Digital Love.FLAC",
+                29000000, 1, false, "", Optional.empty(), Optional.empty());
+        // The real ones also carry a bitRate (717 here) that would clear the bar anyway; without it,
+        // only reading the suffix over the wrong field keeps this file.
+        SearchFile flacClaimingMp3 = new SearchFile("Music\\Daft Punk\\Discovery\\06 - Night Vision.flac",
+                9368517, 1, false, "mp3", Optional.empty(), Optional.of(104));
+        SearchFile blankWav = new SearchFile("Music\\Daft Punk\\Discovery\\01 - One More Time.wav",
+                56000000, 1, false, "", Optional.empty(), Optional.empty());
+        SearchFile mp3At320 = new SearchFile("Music\\Daft Punk\\Discovery\\02 - Aerodynamic.mp3",
+                8000000, 1, false, "", Optional.of(320), Optional.empty());
+        SearchFile mp3At128 = new SearchFile("Music\\Daft Punk\\Discovery\\04 - Harder Better.mp3",
+                3000000, 1, false, "", Optional.of(128), Optional.empty());
+        // no suffix and no extension at all: must not throw, and has nothing to pass on
+        SearchFile noFormat = new SearchFile("Music\\Mr. Big\\To Be With You",
+                3000000, 1, false, null, Optional.empty(), Optional.empty());
+        // no suffix: the extension field is all there is
+        SearchFile suffixlessFlac = new SearchFile("Music\\Mr. Big\\Wild World",
+                30000000, 1, false, "flac", Optional.empty(), Optional.empty());
+        SearchResponseItem sharer = mock(SearchResponseItem.class);
+        when(sharer.getUsername()).thenReturn("sharer");
+        when(sharer.getFiles()).thenReturn(List.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, mp3At128, noFormat, suffixlessFlac));
+        ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 10);
+
+        var result = processor.selectBestFiles(state(sharer), "track", "track").block();
+
+        assertEquals(java.util.Set.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, suffixlessFlac),
+                java.util.Set.copyOf(result.stream().map(SlskdSearchResultProcessor.Pick::file).toList()));
+    }
+
+    @Test
     void selectBestFiles_ordersByUploadSpeed_descending() {
         // three responses with different upload speeds, all relevant and above min bitrate
         SearchResponseItem fast = mock(SearchResponseItem.class);
@@ -296,11 +334,42 @@ class SlskdSearchResultProcessorTest {
                 result.stream().map(e -> e.peer().getUsername()).toList());
     }
 
-    private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadsSlot, int queueLength, SearchFile file) {
+    @Test
+    void selectBestFiles_anAlbumsSong_dropsALiveTakeOfTheSameTitle_byItsLength() {
+        // Real files from the search lab (labelled.jsonl.gz). Mr. Jones is track 3 of August and
+        // Everything After, 270 s on YouTube; the 2011 live album repeats the number and the title, so
+        // the matcher, which reads names only, calls it the requested version.
+        SlskdSearchResultProcessor real = new SlskdSearchResultProcessor(slskdService, new TrackMatchingService());
+        ReflectionTestUtils.setField(real, "minBitRate", 320);
+        ReflectionTestUtils.setField(real, "maxFilesPerDownload", 10);
+        ReflectionTestUtils.setField(real, "maxSharerQueue", 50);
+        SearchResponseItem live = peer("live", 9_000_000, true, 0,
+                file("Counting Crows/August and Everything After - Live at Town Hall (2011)/03 - Mr. Jones.flac", 379));
+        SearchResponseItem studio = peer("studio", 1_000_000, true, 0,
+                file("Counting Crows/August and Everything After/03 - Mr. Jones.flac", 272));
+        SearchResponseItem unknown = peer("unknown", 1_000_000, true, 0,
+                file("Counting Crows/August and Everything After (1993)/03 - Mr. Jones.flac", null));
+
+        var albumSong = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones", 270).block();
+        var song = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones").block();
+
+        // A file with no length is no evidence against it and stays, behind the one that agrees.
+        assertEquals(List.of("studio", "unknown"), albumSong.stream().map(pick -> pick.peer().getUsername()).toList());
+        assertEquals(Match.EXACT, song.stream().filter(pick -> pick.peer().getUsername().equals("live"))
+                .findFirst().orElseThrow().grade(), "a song request keeps the live take, graded by its name");
+    }
+
+    @Test
+    void lengthTolerance_isTenSecondsOrThreePercent() {
+        assertEquals(10, SlskdSearchResultProcessor.lengthTolerance(270));
+        assertEquals(18, SlskdSearchResultProcessor.lengthTolerance(587));
+    }
+
+    private SearchResponseItem peer(String username, int uploadSpeed, boolean hasFreeUploadSlot, int queueLength, SearchFile file) {
         SearchResponseItem item = mock(SearchResponseItem.class);
         when(item.getUsername()).thenReturn(username);
         when(item.getUploadSpeed()).thenReturn(uploadSpeed);
-        when(item.getHasFreeUploadsSlot()).thenReturn(hasFreeUploadsSlot);
+        when(item.getHasFreeUploadSlot()).thenReturn(hasFreeUploadSlot);
         when(item.getQueueLength()).thenReturn(queueLength);
         when(item.getFiles()).thenReturn(List.of(file));
         return item;

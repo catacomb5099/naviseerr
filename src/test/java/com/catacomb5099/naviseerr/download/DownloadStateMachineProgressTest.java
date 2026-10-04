@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -26,7 +27,7 @@ class DownloadStateMachineProgressTest {
 
     private final DownloadStateMachine machine = new DownloadStateMachine(
             SEARCH_POLL, DOWNLOAD_POLL, SEARCH_BUDGET, DOWNLOAD_BUDGET, Duration.ofMinutes(10),
-            MISSING_GRACE, RETRY_LIMIT, 3, new StallingSharers(Duration.ofHours(6)));
+            MISSING_GRACE, RETRY_LIMIT, 3, 2, new StallingSharers(Duration.ofHours(6)));
 
     // --- toProgress -----------------------------------------------------------------------------
 
@@ -66,7 +67,7 @@ class DownloadStateMachineProgressTest {
     void downloadPoll_inProgress_capturesPercentComplete() {
         DownloadDecision d = machine.afterDownloadPoll(
                 downloadPolling(candidates("alice"), 0, 0, "abc"),
-                SlskdFixtures.transfer("abc", "alice", "InProgress", 43f), T0.plusSeconds(10));
+                SlskdFixtures.transfer("abc", "alice", "InProgress", 43f), Set.of(), T0.plusSeconds(10));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(0, next.progressPercent().compareTo(new BigDecimal("43.00")));
@@ -78,7 +79,7 @@ class DownloadStateMachineProgressTest {
                 .withProgress(new BigDecimal("60.00"));
 
         DownloadDecision d = machine.afterDownloadPoll(
-                task, SlskdFixtures.transfer("abc", "alice", "InProgress", null), T0.plusSeconds(10));
+                task, SlskdFixtures.transfer("abc", "alice", "InProgress", null), Set.of(), T0.plusSeconds(10));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(0, next.progressPercent().compareTo(new BigDecimal("60.00")),
@@ -90,7 +91,7 @@ class DownloadStateMachineProgressTest {
         DownloadTask task = downloadPolling(candidates("alice"), 0, 0, "abc")
                 .withProgress(new BigDecimal("60.00"));
 
-        DownloadDecision d = machine.afterDownloadPoll(task, null, T0.plusSeconds(10));
+        DownloadDecision d = machine.afterDownloadPoll(task, null, Set.of(), T0.plusSeconds(10));
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(0, next.progressPercent().compareTo(new BigDecimal("60.00")),
@@ -105,7 +106,7 @@ class DownloadStateMachineProgressTest {
                 .withProgress(new BigDecimal("87.00"));
 
         DownloadDecision d = machine.afterDownloadPoll(
-                task, SlskdFixtures.transfer("abc", "alice", "Completed, TimedOut"), T0);
+                task, SlskdFixtures.transfer("abc", "alice", "Completed, TimedOut"), Set.of(), T0);
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(0, next.progressPercent().compareTo(BigDecimal.ZERO),
@@ -118,7 +119,7 @@ class DownloadStateMachineProgressTest {
                 .withProgress(new BigDecimal("99.00"));
 
         DownloadDecision d = machine.afterDownloadPoll(
-                task, SlskdFixtures.transfer("abc", "alice", "Errored"), T0);
+                task, SlskdFixtures.transfer("abc", "alice", "Errored"), Set.of(), T0);
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
         assertEquals(1, next.candidateIndex());

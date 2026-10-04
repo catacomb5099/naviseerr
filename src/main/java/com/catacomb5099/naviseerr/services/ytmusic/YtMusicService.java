@@ -136,9 +136,9 @@ public class YtMusicService {
 
     /**
      * The song page: everything {@link #getSongInfo} knows plus artists with ids, album, year, view
-     * count, the explicit flag and the credits panel. Returned as the adapter shape; the only consumer
-     * is {@code SongInfoView.from}, and a domain record between the two would be a third copy of the
-     * same ten fields.
+     * count, the explicit flag and the credits panel. Returned as the adapter shape; the consumers are
+     * {@code SongInfoView.from} and the album lookup ({@code SongAlbumResolver}, which reads only the
+     * album), and a domain record between them would be a third copy of the same ten fields.
      */
     public Mono<YtMusicDetailResponse.SongDetails> getSongDetails(String id) {
         return execute(uriBuilder -> uriBuilder.path(SONG_PATH_PREFIX + id + SONG_DETAILS_PATH_SUFFIX).build(),
@@ -162,9 +162,31 @@ public class YtMusicService {
      * why they are not split. Both are one GET returning a track list.
      */
     public Mono<YoutubeCollectionInfo> getAlbumInfo(String id) {
-        return execute(uriBuilder -> uriBuilder.path(ALBUM_PATH_PREFIX + id).build(),
-                        YtMusicDetailResponse.Collection.class, "album", id)
-                .map(album -> toCollectionInfo(album, id));
+        return getAlbum(id).map(album -> toCollectionInfo(album, id));
+    }
+
+    /**
+     * The album page as the adapter sends it: its type, artists, every track with its number, and its
+     * other editions. Read by the album lookup ({@code SongAlbumResolver}), which needs all of those;
+     * everything else wants {@link #getAlbumInfo}.
+     */
+    public Mono<YtMusicDetailResponse.Collection> getAlbum(String browseId) {
+        return execute(uriBuilder -> uriBuilder.path(ALBUM_PATH_PREFIX + browseId).build(),
+                YtMusicDetailResponse.Collection.class, "album", browseId);
+    }
+
+    /**
+     * The song search's rows as the adapter sends them, each with its album id and length, which the
+     * mapped {@link #getResults} answer drops. Read by the album lookup only. An empty list, never null.
+     */
+    public Mono<List<YtMusicSearchResponse.Item>> searchSongRows(String query, int limit) {
+        return execute(uriBuilder -> uriBuilder
+                        .path(SEARCH_PATH_PREFIX + YtMusicSearchType.SONGS.getPathSegment())
+                        .queryParam(QUERY_PARAM, query)
+                        .queryParam(LIMIT_PARAM, limit)
+                        .build(),
+                YtMusicSearchResponse.class, "song-rows", query)
+                .map(response -> response.getItems() == null ? List.of() : response.getItems());
     }
 
     public Mono<YoutubeCollectionInfo> getPlaylistInfo(String id) {
@@ -210,9 +232,12 @@ public class YtMusicService {
      * come from anywhere, so giving them the playlist's cover would be wrong; they get YouTube's
      * per-video thumbnail instead ({@link #fallbackThumbnail}). The two cases are told apart by
      * which id field the adapter filled in.
+     *
+     * <p>Public because the album lookup builds an album's {@code media_items} row from the same
+     * reading of a page it fetched with {@link #getAlbum}.
      */
-    private YoutubeCollectionInfo toCollectionInfo(YtMusicDetailResponse.Collection collection,
-                                                   String requestedId) {
+    public static YoutubeCollectionInfo toCollectionInfo(YtMusicDetailResponse.Collection collection,
+                                                         String requestedId) {
         String id = collection.getBrowseId() != null ? collection.getBrowseId()
                 : collection.getId() != null ? collection.getId() : requestedId;
         List<YtMusicSearchResponse.ArtistRef> authors = collection.getArtists() != null
@@ -228,12 +253,12 @@ public class YtMusicService {
                                         ? collection.getThumbnailUrl()
                                         : track.getVideoId() == null ? null
                                         : fallbackThumbnail(track.getVideoId()),
-                                track.getDurationSeconds(), track.getViews()))
+                                track.getDurationSeconds(), track.getViews(), track.getTrackNumber()))
                         .toList();
-        return new YoutubeCollectionInfo(id, songs,
-                collection.getYear() == null ? null : String.valueOf(collection.getYear()),
-                collection.getTitle(), names(authors), ids(authors), collection.getThumbnailUrl(),
-                isAlbum ? collection.getAudioPlaylistId() : id.replaceFirst("^VL", ""));
+        return new YoutubeCollectionInfo(id, songs, collection.getYear(), collection.getTitle(),
+                names(authors), ids(authors), collection.getThumbnailUrl(),
+                isAlbum ? collection.getAudioPlaylistId() : id.replaceFirst("^VL", ""),
+                collection.getType(), collection.getTrackCount());
     }
 
     private static List<String> names(List<YtMusicSearchResponse.ArtistRef> artists) {

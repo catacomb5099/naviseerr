@@ -28,6 +28,20 @@ public record DownloadTask(
         /** The song's own YouTube {@code videoId}. Null for rows created before collections existed. */
         String youtubeId,
         String songName,
+        /**
+         * The album or playlist row's own title, YouTube number (albums only) and length, written at
+         * admission and never changed. On the task rather than {@code media_items} because one id can
+         * sit on two rows of one album with different values. Null for rows created before V12.
+         */
+        String trackTitle,
+        Integer trackNumber,
+        Integer durationSeconds,
+        /**
+         * Set only when admission finds the song already in the library: the row is then created
+         * SUCCEEDED, pointing at that file, and never searched for. The organiser writes the column
+         * for every other song once it is filed; the claim never reads it (a live row has none).
+         */
+        String libraryPath,
         DownloadPhase phase,
         Instant phaseEnteredAt,
         Instant nextAttemptAt,
@@ -88,6 +102,15 @@ public record DownloadTask(
     public String searchQuery() {
         List<String> tiers = SearchQueryTiers.of(songName);
         return tiers.get(Math.clamp(searchTier, 0, tiers.size() - 1));
+    }
+
+    /**
+     * P6: the length this song's own search holds files to, when it is an album's track (only an album
+     * row has a YouTube track number), so a live take of the same title is not filed as the album's;
+     * null for a song or playlist track, which keeps any length.
+     */
+    public Integer albumTrackSeconds() {
+        return trackNumber == null ? null : durationSeconds;
     }
 
     public DownloadCandidate currentCandidate() {

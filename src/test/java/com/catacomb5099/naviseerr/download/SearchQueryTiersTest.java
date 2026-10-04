@@ -256,4 +256,15 @@ class SearchQueryTiersTest {
         assertEquals("(Official Video)", SearchQueryTiers.pickerName("(Official Video)"));
         assertFalse(SearchQueryTiers.pickerName("Hello (Official Lyric Video) - Oasis").contains("("));
     }
+
+    @Test
+    void titleAndArtist_arePickerNamesHalves_withTheArtistNamedInTheTitle_notTheChannel() {
+        assertEquals(new SearchQueryTiers.TitleAndArtist("Don't You (Forget About Me) (2001 Remastered Version)", "Simple Minds"),
+                SearchQueryTiers.titleAndArtist("Don't You (Forget About Me) [2001 Remastered Version] - Simple Minds"));
+        assertEquals(new SearchQueryTiers.TitleAndArtist("Blinding Lights", "The Weeknd"),
+                SearchQueryTiers.titleAndArtist("Blinding Lights (Official Video) - The Weeknd"));
+        assertEquals(new SearchQueryTiers.TitleAndArtist("Polish Girl", "Neon Indian"),
+                SearchQueryTiers.titleAndArtist("Neon Indian - Polish Girl - toomainstream"));
+        assertEquals(new SearchQueryTiers.TitleAndArtist("Wonderwall", ""), SearchQueryTiers.titleAndArtist("Wonderwall"));
+    }
 }

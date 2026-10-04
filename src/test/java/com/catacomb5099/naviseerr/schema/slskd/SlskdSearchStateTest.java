@@ -10,17 +10,17 @@ class SlskdSearchStateTest {
 
     @Test
     void erroredIsAFailure() {
-        assertTrue(SlskdSearchState.isFailure("Errored"));
+        assertTrue(SlskdSearchState.isFailure("Errored", 0));
     }
 
     @Test
     void timedOutIsNotAFailureForASearch() {
-        assertFalse(SlskdSearchState.isFailure("Completed, TimedOut"));
+        assertFalse(SlskdSearchState.isFailure("Completed, TimedOut", 0));
     }
 
     @Test
     void unknownStateIsNotTreatedAsFailure_soItFallsThroughToTheNoCandidateGuard() {
-        assertFalse(SlskdSearchState.isFailure("SomethingSlskdAddedLater"));
+        assertFalse(SlskdSearchState.isFailure("SomethingSlskdAddedLater", 0));
     }
 
     /**
@@ -35,12 +35,20 @@ class SlskdSearchStateTest {
                 SlskdSearchState.parse("Completed, TimedOut"));
         assertEquals(List.of(SlskdSearchState.COMPLETED, SlskdSearchState.RESPONSE_LIMIT_REACHED),
                 SlskdSearchState.parse("Completed, ResponseLimitReached"));
-        assertFalse(SlskdSearchState.isFailure("Completed, ResponseLimitReached"));
+        assertFalse(SlskdSearchState.isFailure("Completed, ResponseLimitReached", 0));
+    }
+
+    /** The response cap overflowed: seen live for 5 of 1,463 searches by 04-10-2026, each with 251-252 responses. */
+    @Test
+    void erroredWithResponsesIsNotAFailure_erroredWithNoneStillIs() {
+        assertFalse(SlskdSearchState.isFailure("Completed, Errored", 252));
+        assertTrue(SlskdSearchState.isFailure("Completed, Errored", 0));
+        assertTrue(SlskdSearchState.isFailure("Completed, Cancelled", 252));
     }
 
     @Test
     void nullAndBlankAreSafe() {
-        assertFalse(SlskdSearchState.isFailure(null));
-        assertFalse(SlskdSearchState.isFailure("  "));
+        assertFalse(SlskdSearchState.isFailure(null, 0));
+        assertFalse(SlskdSearchState.isFailure("  ", 0));
     }
 }

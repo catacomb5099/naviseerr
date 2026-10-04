@@ -39,9 +39,14 @@ class DownloadStepExecutorTest {
         DownloadStateMachine machine = new DownloadStateMachine(
                 Duration.ofSeconds(2), Duration.ofSeconds(5),
                 Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofMinutes(10),
-                Duration.ofSeconds(60), 2, 3, new StallingSharers(Duration.ofHours(6)));
+                Duration.ofSeconds(60), 2, 3, 2, new StallingSharers(Duration.ofHours(6)));
         executor = new DownloadStepExecutor(slskdService, searchProcessor, machine,
                 Clock.fixed(T0, ZoneOffset.UTC));
+    }
+
+    /** A pass with none of our transfers in flight. */
+    private static SharerLoad none() {
+        return SharerLoad.of(List.of(), Map.of());
     }
 
     @Test
@@ -50,7 +55,7 @@ class DownloadStepExecutorTest {
                 .thenReturn(Mono.just(SlskdFixtures.searchState("s1", false, "InProgress")));
 
         DownloadDecision d = executor
-                .execute(at(DownloadPhase.SEARCH_INIT), Map.of(), Map.of()).block();
+                .execute(at(DownloadPhase.SEARCH_INIT), Map.of(), Map.of(), none()).block();
 
         assertEquals(DownloadPhase.SEARCH_POLL,
                 assertInstanceOf(DownloadDecision.Advance.class, d).next().phase());
@@ -65,7 +70,7 @@ class DownloadStepExecutorTest {
         when(slskdService.searchResults("Hello"))
                 .thenReturn(Mono.just(SlskdFixtures.searchState("s2", false, "InProgress")));
 
-        DownloadDecision d = executor.execute(task, Map.of(), Map.of()).block();
+        DownloadDecision d = executor.execute(task, Map.of(), Map.of(), none()).block();
 
         assertEquals("s2", assertInstanceOf(DownloadDecision.Advance.class, d).next().searchId());
         verify(slskdService).searchResults("Hello");
@@ -80,12 +85,30 @@ class DownloadStepExecutorTest {
         var summary = SlskdFixtures.searchState("s1", true, "Completed");
         var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any())).thenReturn(Mono.just(List.of()));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
 
-        executor.execute(task, Map.of("s1", summary), Map.of()).block();
+        executor.execute(task, Map.of("s1", summary), Map.of(), none()).block();
 
-        // the picker sees the cleaned name, not the raw YouTube one, and the wording that was searched
-        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"), eq("Hello"));
+        // the picker sees the cleaned name, not the raw YouTube one, and the wording that was searched;
+        // a song that is no album's track keeps files of any length
+        verify(searchProcessor).selectBestFiles(eq(full), eq("Hello - Oasis"), eq("Hello"), isNull());
+    }
+
+    @Test
+    void searchPoll_complete_anAlbumsSong_holdsTheFilesToTheAlbumTracksLength() {
+        // P6: only an album row carries a YouTube track number; a playlist row has a length but no number.
+        DownloadTask albumSong = searchPolling("s1").toBuilder().trackNumber(3).durationSeconds(270).build();
+        DownloadTask playlistSong = searchPolling("s1").toBuilder().durationSeconds(270).build();
+        var summary = SlskdFixtures.searchState("s1", true, "Completed");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
+
+        executor.execute(albumSong, Map.of("s1", summary), Map.of(), none()).block();
+        executor.execute(playlistSong, Map.of("s1", summary), Map.of(), none()).block();
+
+        verify(searchProcessor).selectBestFiles(eq(full), any(), any(), eq(270));
+        verify(searchProcessor).selectBestFiles(eq(full), any(), any(), isNull());
     }
 
     @Test
@@ -93,7 +116,7 @@ class DownloadStepExecutorTest {
         SearchState state = SlskdFixtures.searchState("s1", false, "InProgress");
 
         DownloadDecision d = executor
-                .execute(searchPolling("s1"), Map.of("s1", state), Map.of()).block();
+                .execute(searchPolling("s1"), Map.of("s1", state), Map.of(), none()).block();
 
         assertInstanceOf(DownloadDecision.Continue.class, d);
         verify(slskdService, never()).getAllSearches();
@@ -102,7 +125,7 @@ class DownloadStepExecutorTest {
 
     @Test
     void searchPoll_missingFromTheBatch_treatedAsStillRunning() {
-        DownloadDecision d = executor.execute(searchPolling("s1"), Map.of(), Map.of()).block();
+        DownloadDecision d = executor.execute(searchPolling("s1"), Map.of(), Map.of(), none()).block();
 
         assertInstanceOf(DownloadDecision.Continue.class, d);
         verifyNoInteractions(searchProcessor);
@@ -121,18 +144,18 @@ class DownloadStepExecutorTest {
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any()))
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any()))
                 .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor
-                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
+                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
 
         DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
         assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
         assertEquals("alice", next.candidates().getFirst().username());
         assertEquals(1411, next.candidates().getFirst().bitRate());
         verify(slskdService).getSearchWithResponses("s1");
-        verify(searchProcessor, never()).selectBestFiles(eq(summary), any(), any());
+        verify(searchProcessor, never()).selectBestFiles(eq(summary), any(), any(), any());
     }
 
     @Test
@@ -140,10 +163,10 @@ class DownloadStepExecutorTest {
         var summary = SlskdFixtures.searchState("s1", true, "Completed");
         var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any())).thenReturn(Mono.just(List.of()));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
 
         DownloadDecision d = executor
-                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
+                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
 
         assertEquals(DownloadFailureCode.NO_CANDIDATES,
                 assertInstanceOf(DownloadDecision.Terminal.class, d).failureCode());
@@ -159,11 +182,11 @@ class DownloadStepExecutorTest {
         var full = SlskdFixtures.searchStateWithResponses("s1", true,
                 "Completed, ResponseLimitReached", List.of(peer));
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.selectBestFiles(eq(full), any(), any()))
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any()))
                 .thenReturn(Mono.just(List.of(new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT))));
 
         DownloadDecision d = executor
-                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of()).block();
+                .execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
 
         assertInstanceOf(DownloadDecision.Advance.class, d);
     }
@@ -172,7 +195,7 @@ class DownloadStepExecutorTest {
     void searchPoll_stillRunning_makesNoRefetch() {
         var state = SlskdFixtures.searchState("s1", false, "InProgress");
 
-        executor.execute(searchPolling("s1"), Map.of("s1", state), Map.of()).block();
+        executor.execute(searchPolling("s1"), Map.of("s1", state), Map.of(), none()).block();
 
         verify(slskdService, never()).getSearchWithResponses(any());
     }
@@ -183,7 +206,7 @@ class DownloadStepExecutorTest {
                 .thenReturn(Mono.just(SlskdFixtures.enqueued("abc", "alice")));
 
         DownloadDecision d = executor
-                .execute(downloadInit(candidates("alice"), 0, 0), Map.of(), Map.of()).block();
+                .execute(downloadInit(candidates("alice"), 0, 0), Map.of(), Map.of(), none()).block();
 
         assertEquals("abc",
                 assertInstanceOf(DownloadDecision.Advance.class, d).next().slskdTransferId());
@@ -191,11 +214,63 @@ class DownloadStepExecutorTest {
     }
 
     @Test
+    void downloadInit_whenTheSharerAlreadyHoldsTwoOfOurs_waitsWithoutAskingSlskd() {
+        SharerLoad sharers = SharerLoad.of(List.of(
+                new DownloadTaskRepository.TransferInFlight("alice", "t1"),
+                new DownloadTaskRepository.TransferInFlight("alice", "t2")), Map.of());
+
+        DownloadDecision d = executor
+                .execute(downloadInit(candidates("alice", "bob"), 0, 0), Map.of(), Map.of(), sharers).block();
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals(T0.plusSeconds(5), next.nextAttemptAt());
+        verify(slskdService, never()).enqueueDownload(any(), any());
+    }
+
+    @Test
+    void downloadInit_twoSongsForOneSharerInOnePass_onlyOneTakesItsLastFreePlace() {
+        when(slskdService.enqueueDownload(eq("alice"), any()))
+                .thenReturn(Mono.just(SlskdFixtures.enqueued("abc", "alice")));
+        SharerLoad sharers = SharerLoad.of(List.of(
+                new DownloadTaskRepository.TransferInFlight("alice", "t1")), Map.of());
+
+        DownloadDecision first = executor
+                .execute(downloadInit(candidates("alice"), 0, 0), Map.of(), Map.of(), sharers).block();
+        DownloadDecision second = executor
+                .execute(downloadInit(candidates("alice"), 0, 0), Map.of(), Map.of(), sharers).block();
+
+        assertInstanceOf(DownloadDecision.Advance.class, first);
+        assertEquals(DownloadPhase.DOWNLOAD_INIT,
+                assertInstanceOf(DownloadDecision.Continue.class, second).next().phase());
+        verify(slskdService, times(1)).enqueueDownload(eq("alice"), any());
+    }
+
+    @Test
+    void downloadPoll_waitingBehindASiblingTheSharerIsSending_isKept_andNotCancelled() {
+        TransferedFile queued = SlskdFixtures.transfer("abc", "alice", "Queued, Remotely");
+        TransferedFile sending = SlskdFixtures.transfer("sib", "alice", "InProgress", 50f, 500L);
+        SharerLoad sharers = SharerLoad.of(List.of(
+                new DownloadTaskRepository.TransferInFlight("alice", "abc"),
+                new DownloadTaskRepository.TransferInFlight("alice", "sib")),
+                Map.of("abc", queued, "sib", sending));
+        DownloadTask task = downloadPolling(candidates("alice", "bob"), 0, 0, "abc").toBuilder()
+                .phaseEnteredAt(T0.minus(Duration.ofMinutes(70))).build();
+
+        DownloadDecision d = executor.execute(task, Map.of(), Map.of("abc", queued), sharers).block();
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Continue.class, d).next();
+        assertEquals(0, next.candidateIndex());
+        assertEquals(T0, next.phaseEnteredAt());
+        verify(slskdService, never()).cancelDownload(any(), any());
+    }
+
+    @Test
     void downloadPoll_readsFromTheBatchedMap_makesNoPerRowCall() {
         TransferedFile file = SlskdFixtures.transfer("abc", "alice", "Completed, Succeeded");
 
         DownloadDecision d = executor
-                .execute(downloadPolling(candidates("alice"), 0, 0, "abc"), Map.of(), Map.of("abc", file))
+                .execute(downloadPolling(candidates("alice"), 0, 0, "abc"), Map.of(), Map.of("abc", file), none())
                 .block();
 
         assertEquals(DownloadStatus.SUCCEEDED,
@@ -211,7 +286,7 @@ class DownloadStepExecutorTest {
         DownloadTask task = downloadPolling(candidates("alice", "bob"), 0, 0, "abc").toBuilder()
                 .phaseEnteredAt(T0.minus(Duration.ofMinutes(11))).build();
 
-        DownloadDecision d = executor.execute(task, Map.of(), Map.of("abc", stuck)).block();
+        DownloadDecision d = executor.execute(task, Map.of(), Map.of("abc", stuck), none()).block();
 
         assertEquals(1, assertInstanceOf(DownloadDecision.Continue.class, d).next().candidateIndex());
         verify(slskdService).cancelDownload("alice", "abc");
@@ -222,7 +297,7 @@ class DownloadStepExecutorTest {
         TransferedFile done = SlskdFixtures.transfer("abc", "alice", "Completed, Rejected");
 
         executor.execute(downloadPolling(candidates("alice", "bob"), 0, 0, "abc"), Map.of(),
-                Map.of("abc", done)).block();
+                Map.of("abc", done), none()).block();
 
         verify(slskdService, never()).cancelDownload(any(), any());
     }
@@ -230,7 +305,7 @@ class DownloadStepExecutorTest {
     @Test
     void downloadPoll_missingFromTheBatch_treatedAsStillRunning() {
         DownloadDecision d = executor
-                .execute(downloadPolling(candidates("alice"), 0, 0, "abc"), Map.of(), Map.of()).block();
+                .execute(downloadPolling(candidates("alice"), 0, 0, "abc"), Map.of(), Map.of(), none()).block();
 
         assertInstanceOf(DownloadDecision.Continue.class, d);
     }
@@ -240,7 +315,7 @@ class DownloadStepExecutorTest {
         when(slskdService.searchResults(any()))
                 .thenReturn(Mono.error(new RuntimeException("slskd is down")));
 
-        StepVerifier.create(executor.execute(at(DownloadPhase.SEARCH_INIT), Map.of(), Map.of()))
+        StepVerifier.create(executor.execute(at(DownloadPhase.SEARCH_INIT), Map.of(), Map.of(), none()))
                 .assertNext(d -> assertEquals(DownloadStatus.FAILED,
                         assertInstanceOf(DownloadDecision.Terminal.class, d).status()))
                 .verifyComplete();
@@ -256,7 +331,7 @@ class DownloadStepExecutorTest {
         // and no further candidates, this resolves deterministically to Terminal/SOURCES_EXHAUSTED.
         DownloadTask task = downloadInit(List.of(), 0, 2);
 
-        DownloadDecision d = executor.execute(task, Map.of(), Map.of()).block();
+        DownloadDecision d = executor.execute(task, Map.of(), Map.of(), none()).block();
 
         DownloadDecision.Terminal terminal = assertInstanceOf(DownloadDecision.Terminal.class, d);
         assertEquals(DownloadStatus.FAILED, terminal.status());
@@ -269,7 +344,7 @@ class DownloadStepExecutorTest {
                 .thenReturn(Mono.error(new RuntimeException("slskd is down")));
 
         StepVerifier.create(executor.execute(
-                        downloadInit(candidates("alice", "bob"), 0, 0), Map.of(), Map.of()))
+                        downloadInit(candidates("alice", "bob"), 0, 0), Map.of(), Map.of(), none()))
                 .assertNext(d -> assertEquals(1,
                         assertInstanceOf(DownloadDecision.Continue.class, d).next().retryIndex()))
                 .verifyComplete();

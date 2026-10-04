@@ -37,6 +37,7 @@ class ActiveDownloadRepositoryIT {
 
     @BeforeEach
     void clean() {
+        template.getDatabaseClient().sql("DELETE FROM album_searches").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM download_tasks").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM downloads").fetch().rowsUpdated().block();
         template.getDatabaseClient().sql("DELETE FROM media_items").fetch().rowsUpdated().block();
@@ -295,6 +296,36 @@ class ActiveDownloadRepositoryIT {
         moveOneSongTo(album, "ahead", DownloadPhase.DOWNLOAD_POLL);
 
         assertEquals(DownloadStage.STARTING, active().getFirst().stage());
+    }
+
+    @Test
+    void findActive_anAlbumWhoseSongsWaitForItsAlbumSearch_readsAsSearching() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        taskRepository.createTasks(album, List.of(DownloadTask.initial(album, "yt-a", "a", NOW),
+                DownloadTask.initial(album, "yt-b", "b", NOW)), NOW, NOW.plusSeconds(240)).block();
+
+        assertEquals(DownloadStage.SEARCHING, active().getFirst().stage(), "the album search is the songs' search");
+
+        // The album search is over and released its songs to search on their own.
+        template.getDatabaseClient().sql("UPDATE album_searches SET phase = 'DONE' WHERE download_id = :id")
+                .bind("id", album).fetch().rowsUpdated().block();
+
+        assertEquals(DownloadStage.STARTING, active().getFirst().stage());
+    }
+
+    @Test
+    void findActive_songsWaitingTheirTurnWhileAnotherTransfers_readAsDownloading() {
+        UUID album = insertDownload("PENDING", "ALBUM");
+        admit(album, "sending", "waiting", "next");
+        moveOneSongTo(album, "sending", DownloadPhase.DOWNLOAD_INIT);
+        moveOneSongTo(album, "waiting", DownloadPhase.DOWNLOAD_INIT);
+        moveOneSongTo(album, "next", DownloadPhase.DOWNLOAD_INIT);
+        assertEquals(DownloadStage.READY_TO_DOWNLOAD, active().getFirst().stage(), "nothing transfers yet");
+
+        // One sharer sends one song while the others wait their turn with it.
+        moveOneSongTo(album, "sending", DownloadPhase.DOWNLOAD_POLL);
+
+        assertEquals(DownloadStage.DOWNLOADING, active().getFirst().stage());
     }
 
     @Test
