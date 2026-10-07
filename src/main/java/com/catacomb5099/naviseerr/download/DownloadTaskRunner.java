@@ -114,7 +114,15 @@ public class DownloadTaskRunner {
     Mono<Void> pass() {
         Instant now = clock.instant();
         return admit(now)
-                .then(stepDueTasks(now))
+                .then(stepDueTasks(now)
+                        // slskd being unreachable is one fact, worth one line: the rest of the pass
+                        // (concluding finished downloads, filing their files) needs no slskd at all,
+                        // so it must not be skipped because the batched calls failed (07-10-2026).
+                        .onErrorResume(error -> {
+                            log.warn("Could not step downloads this pass; slskd may be unreachable: {}",
+                                    error.toString());
+                            return Mono.empty();
+                        }))
                 .then(repository.concludeDownloads()
                         .doOnNext(concluded -> {
                             if (concluded > 0) log.info("Concluded {} download(s)", concluded);
@@ -235,9 +243,11 @@ public class DownloadTaskRunner {
                     return fail(download, DownloadFailureCode.METADATA_UNAVAILABLE);
                 })
                 .onErrorResume(error -> {
+                    // The message only: a stack trace per pending download per pass while the adapter
+                    // is down said nothing the two "Retrying ytmusic-adapter request" lines had not.
                     log.warn("Could not gather metadata for download {} ({} {}); leaving it PENDING "
-                            + "for the next pass", download.getDownloadId(),
-                            download.getDownloadType(), download.getYoutubeId(), error);
+                            + "for the next pass: {}", download.getDownloadId(),
+                            download.getDownloadType(), download.getYoutubeId(), error.toString());
                     return Mono.empty();
                 });
     }
@@ -443,7 +453,8 @@ public class DownloadTaskRunner {
             return slskdService.getServerState()
                     .then()
                     .onErrorResume(error -> {
-                        log.warn("slskd keep-alive check failed", error);
+                        // One line every pass while slskd is down is plenty; its stack trace is not.
+                        log.warn("slskd keep-alive check failed: {}", error.toString());
                         return Mono.empty();
                     });
         }

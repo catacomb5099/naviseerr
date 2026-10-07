@@ -8,7 +8,7 @@ import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.reactive.function.client.WebClientException;
 import reactor.core.publisher.Mono;
 
 import java.time.Clock;
@@ -51,9 +51,11 @@ public class DownloadStepExecutor {
         return step(task, searchesById, transfersById, sharers, now)
                 .onErrorResume(error -> {
                     // slskd saying no already says why; its stack trace is 50 lines of nothing more,
-                    // 31 times per song while Soulseek is offline (04-10-2026). Anything else keeps it.
-                    if (error instanceof WebClientResponseException) {
-                        log.warn("Step {} for download {} failed: slskd answered {}", task.phase(),
+                    // 31 times per song while Soulseek is offline (04-10-2026). The same for slskd not
+                    // answering at all (refused, timed out: WebClientRequestException, 07-10-2026).
+                    // Anything else keeps it.
+                    if (error instanceof WebClientException) {
+                        log.warn("Step {} for download {} failed talking to slskd: {}", task.phase(),
                                 task.downloadId(), DownloadStateMachine.describe(error));
                     } else {
                         log.warn("Step {} for download {} failed", task.phase(), task.downloadId(), error);

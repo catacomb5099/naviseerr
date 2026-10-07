@@ -8,8 +8,13 @@ import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import com.catacomb5099.naviseerr.util.TrackMatchingService;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -336,6 +341,28 @@ class DownloadStepExecutorTest {
         DownloadDecision.Terminal terminal = assertInstanceOf(DownloadDecision.Terminal.class, d);
         assertEquals(DownloadStatus.FAILED, terminal.status());
         assertEquals(DownloadFailureCode.SOURCES_EXHAUSTED, terminal.failureCode());
+    }
+
+    @Test
+    void slskdNotAnswering_costsOneWarningLine_withoutAStackTrace() {
+        Logger logger = (Logger) LoggerFactory.getLogger(DownloadStepExecutor.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            when(slskdService.searchResults(any())).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
+
+            executor.execute(at(DownloadPhase.SEARCH_INIT), Map.of(), Map.of(), none()).block();
+
+            // Connection refused or timed out says it all; the stack trace per attempt did not
+            // (04-10-2026 handled slskd's 409 this way, 07-10-2026 slskd not answering at all).
+            assertEquals(1, logs.list.size(), () -> "one line: " + logs.list);
+            assertEquals(Level.WARN, logs.list.getFirst().getLevel());
+            assertNull(logs.list.getFirst().getThrowableProxy(), "no stack trace");
+            assertTrue(logs.list.getFirst().getFormattedMessage().contains("Operation timed out"));
+        } finally {
+            logger.detachAppender(logs);
+        }
     }
 
     @Test
