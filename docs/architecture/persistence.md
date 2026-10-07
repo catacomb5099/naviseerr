@@ -213,7 +213,15 @@ write volume is unchanged and `DownloadTask` does not carry them. JSONB rather t
 Read by `cachedSearch(downloadId, taskId)` (one song's row with its files: `CachedSearch`) and
 `cachedAlbumSearch(downloadId)` (the download's type, its album search's phase/outcome/tier, the album's
 name and the folders: `CachedAlbumSearch`). Both writes swallow and log their own errors at the call
-site: a cache miss must never fail a search.
+site: a cache miss must never fail a search. `songPicks(downloadId)` lists a download's songs with the
+file each currently points at, for the album picker's "which folder is current".
+
+The pick itself is `PICK_SQL` (`pick(downloadId, picks, now)`): `RETRY_SQL`'s reset, but to
+`DOWNLOAD_INIT` with `candidates` replaced by the one chosen file (`unnest` of task ids and index-aligned
+JSON), the lease cleared, a `FAILED`/`PARTIAL_SUCCESS` download reopened in a second CTE, and `RETURNING`
+the OLD row's candidates, index, sharer and transfer id through a self-join (`FROM download_tasks old`,
+the statement's snapshot) so the caller can stop the old transfer and delete the right partial files.
+`phase <> 'SUCCEEDED'` refuses a filed song; tasks are locked before the download row, as in `RETRY_SQL`.
 
 ## Entity and status
 

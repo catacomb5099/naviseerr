@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
@@ -218,6 +219,56 @@ public class DownloadController {
 
     private static ResponseEntity<Object> notFound(String message) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", message));
+    }
+
+    /** Body of both pick routes: a song pick names a file, an album pick a folder; both verbatim from the lists. */
+    public record PickRequest(String username, String filename, String folder) {}
+
+    /**
+     * A person chose the file one song downloads from. 202 with the fresh card (like retry: the work
+     * follows), 409 with the current card when nothing changed (the file is not in the song's list, or
+     * the song already succeeded), 400 {@code {message}} without both fields, 404 {@code {message}} for
+     * unknown ids.
+     */
+    @PostMapping("/downloads/{id}/tasks/{taskId}/pick")
+    Mono<ResponseEntity<Object>> pick(@PathVariable UUID id, @PathVariable UUID taskId, @RequestBody PickRequest body) {
+        if (isBlank(body.username()) || isBlank(body.filename())) {
+            return Mono.just(badRequest("username and filename are required"));
+        }
+        return picked(id, downloadService.pick(id, taskId, body.username(), body.filename(), clock.instant()),
+                "No song " + taskId + " in download " + id);
+    }
+
+    /**
+     * A person chose the folder an album downloads from: every unfinished song the folder holds is
+     * re-pointed at its file there. 202 card / 409 card (folder not in the list, or every song it holds
+     * already succeeded) / 409 {@code NOT_AN_ALBUM} / 400 / 404 as above.
+     */
+    @PostMapping("/downloads/{id}/album-pick")
+    Mono<ResponseEntity<Object>> albumPick(@PathVariable UUID id, @RequestBody PickRequest body) {
+        if (isBlank(body.username()) || isBlank(body.folder())) {
+            return Mono.just(badRequest("username and folder are required"));
+        }
+        return picked(id, downloadService.albumPick(id, body.username(), body.folder(), clock.instant()), "No download " + id)
+                .onErrorResume(DownloadService.NotAnAlbumException.class, notAnAlbum -> Mono.just(
+                        ResponseEntity.status(HttpStatus.CONFLICT).body(
+                                Map.of("reason", "NOT_AN_ALBUM", "message", notAnAlbum.getMessage()))));
+    }
+
+    /** Like {@link #outcome}, but an empty count means the ids were unknown: 404 with a message, not a card. */
+    private Mono<ResponseEntity<Object>> picked(UUID id, Mono<Long> rows, String missing) {
+        return rows.flatMap(n -> activeDownloadRepository.findByIds(List.of(id)).next()
+                        .map(card -> ResponseEntity.status(n > 0 ? HttpStatus.ACCEPTED : HttpStatus.CONFLICT).<Object>body(card))
+                        .defaultIfEmpty(notFound(missing)))
+                .defaultIfEmpty(notFound(missing));
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static ResponseEntity<Object> badRequest(String message) {
+        return ResponseEntity.badRequest().body(Map.of("message", message));
     }
 
     /**

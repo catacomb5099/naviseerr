@@ -79,6 +79,32 @@ When a song's `ALBUM_FOLDER` candidates are all used up, `nextCandidate` returns
 
 An album's song on its own search (`DownloadStepExecutor`, `DownloadTask.albumTrackSeconds`: a task with a YouTube track number) passes the album row's length to `selectBestFiles`, which drops every graded file slskd gives a length for that is outside `SlskdSearchResultProcessor.lengthTolerance` (max(10 s, 3%), shared with the picker) before the unverified-artist rule and the ranking. So the tier rule and the no-candidates failure see only files of the right length; a song or playlist track passes null and keeps any length.
 
+### Choosing the file by hand (manual pick, 07-10-2026)
+
+A person can replace the file a song downloads from, or the folder an album downloads from, with one
+Soulseek offered ([ADR](../decisions/manual-pick-07-10-2026.md)). Three pieces:
+
+- **Remembering what the search found** (V15, see [persistence.md](persistence.md#v15-what-a-search-found-remembered-manual-pick-07-10-2026)):
+  `DownloadStepExecutor.remember` writes every graded file of the completed search (any format, the
+  picker's order, up to `REMEMBERED_FILES` = 100, `SlskdSearchResultProcessor.relevantFiles`) to
+  `download_tasks.search_results` right after the one refetch, before `selectBestFiles` runs;
+  `AlbumSearchStep.judge` writes the judged folders (up to `REMEMBERED_FOLDERS` = 20, `StoredFolder`) to
+  `album_searches.folders`, also when it moves on to the next wording. Both swallow and log their own
+  errors: a cache miss costs a person a retry, a failed search costs them the song.
+- **The lists** (`DownloadService.candidates` / `albumCandidates`): read whole from the caches, never
+  from slskd. A song with no list of its own that got its file from the album search lists the
+  remembered folders that hold it. `status` is `READY`, `SEARCHING` (the loop is still searching; the
+  client polls again) or `NONE` with a reason; nothing is searched from the request thread.
+- **The pick** (`DownloadService.pick` / `albumPick`, `PICK_SQL`): the song is reset in place to
+  `DOWNLOAD_INIT` with the chosen file as its ONLY candidate (grade EXACT, source `MANUAL`), index and
+  retries 0, slskd columns and progress cleared, lease cleared, and a `FAILED`/`PARTIAL_SUCCESS` download
+  reopened -- `RETRY_SQL`'s shape. The statement returns the OLD row (a second scan of the table in the
+  same statement), and `stopInSlskd` then cancels its transfer and deletes its partial files exactly as
+  cancel does. An album pick does this for every unfinished song the folder holds and leaves the rest
+  alone. From there the ordinary loop enqueues the file, subject to the transfer gate and
+  `max-transfers-per-sharer`. If the chosen file fails, the one-element list ends `SOURCES_EXHAUSTED`
+  (no fallback to the automatic list) and the person picks again. A `SUCCEEDED` song is refused (409).
+
 The two batched maps now handle a missing entry **differently**, and the asymmetry is deliberate.
 
 - **A search missing from `GET /searches`** is still treated as "still running". There is no reliable way to distinguish "not there yet" from "slskd forgot it", and it resolves via `search-budget-ms`.
