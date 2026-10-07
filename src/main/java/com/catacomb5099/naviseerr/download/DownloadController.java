@@ -14,6 +14,7 @@ import reactor.core.publisher.Mono;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -186,6 +187,37 @@ public class DownloadController {
         return rows.flatMap(n -> activeDownloadRepository.findByIds(List.of(id)).next()
                 .map(view -> ResponseEntity.status(n > 0 ? onSuccess : HttpStatus.CONFLICT).body(view))
                 .defaultIfEmpty(ResponseEntity.notFound().build()));
+    }
+
+    /**
+     * Every file one song's search found, for a person to choose from (manual pick). 200 with the list
+     * (possibly empty, with {@code status} saying why: still searching, or never will), 404 with a
+     * message for an unknown download or song.
+     */
+    @GetMapping("/downloads/{id}/tasks/{taskId}/candidates")
+    Mono<ResponseEntity<Object>> candidates(@PathVariable UUID id, @PathVariable UUID taskId) {
+        return downloadService.candidates(id, taskId)
+                .map(view -> ResponseEntity.<Object>ok(view))
+                .defaultIfEmpty(notFound("No song " + taskId + " in download " + id));
+    }
+
+    /**
+     * The folders an album's search judged, for a person to choose one from. 200 with the list, 409
+     * {@code NOT_AN_ALBUM} for a download that is not an album (playlists get no album picker), 404
+     * with a message for an unknown download.
+     */
+    @GetMapping("/downloads/{id}/album-candidates")
+    Mono<ResponseEntity<Object>> albumCandidates(@PathVariable UUID id) {
+        return downloadService.albumCandidates(id)
+                .map(view -> ResponseEntity.<Object>ok(view))
+                .defaultIfEmpty(notFound("No download " + id))
+                .onErrorResume(DownloadService.NotAnAlbumException.class, notAnAlbum -> Mono.just(
+                        ResponseEntity.status(HttpStatus.CONFLICT).body(
+                                Map.of("reason", "NOT_AN_ALBUM", "message", notAnAlbum.getMessage()))));
+    }
+
+    private static ResponseEntity<Object> notFound(String message) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", message));
     }
 
     /**
