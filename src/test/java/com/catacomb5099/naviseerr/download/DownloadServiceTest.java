@@ -247,7 +247,7 @@ class DownloadServiceTest {
         AlbumCandidatesView view = service.albumCandidates(id).block();
 
         assertEquals(PickListStatus.READY, view.status());
-        assertEquals("Definitely Maybe - Oasis", view.query());
+        assertEquals("Definitely Maybe", view.query());
         assertEquals(2, view.songCount());
         AlbumCandidatesView.Folder bob = view.folders().getFirst();
         assertEquals("music\\bob\\Definitely Maybe", bob.folder());
