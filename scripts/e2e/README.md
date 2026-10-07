@@ -33,7 +33,9 @@ prints `PASS: ...` at the end, or `FAIL: <what>` plus the last 40 log lines of n
    stack up to look at (web app http://localhost:5096, Navidrome http://localhost:4533);
    `scripts/e2e/playlist-file.sh down` removes it later.
 
-Needs on the machine: Docker with Compose 2.24 or newer (`!override`), `ffmpeg`, `jq`, `curl`.
+Needs on the machine: Docker with Compose 2.24 or newer (`!override`), `ffmpeg`, `jq`, `curl`. Another
+web-app port: `NAVISEERR_PORT=5097 scripts/e2e/playlist-file.sh` (an exported `NAVISEERR_PORT` is also
+honoured, so a shell that sourced its own `.env` still curls the port it published).
 
 ## What it proves, and what it cannot
 
@@ -67,7 +69,7 @@ If `docker pull` hangs there too, `fetch-image.sh deluan/navidrome:0.64.2` copie
 |---|---|
 | `playlist-file.sh` | the check; `down` as its only argument removes the stack |
 | `compose.e2e.yaml` | the sealing override and the optional local build contexts |
-| `e2e.env` | the install settings for the run (no secrets; the account never logs in) |
+| `e2e.env` | the install settings for the run (no secrets: the account never logs in and its password is generated inside the stack) |
 | `stage-playlist.sql` | the finished-playlist rows |
 | `expected.m3u8` | the playlist file, byte for byte (UTF-8, no BOM, LF, NFC) |
 | `fetch-image.sh` | skopeo fallback for laptops where `docker pull` hangs |

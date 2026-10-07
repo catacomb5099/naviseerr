@@ -9,7 +9,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 E2E=$ROOT/scripts/e2e
 P=${E2E_PROJECT:-naviseerr-e2e}
-PORT=$(sed -n 's/^NAVISEERR_PORT=//p' "$E2E/e2e.env")
+PORT=${NAVISEERR_PORT:-$(sed -n 's/^NAVISEERR_PORT=//p' "$E2E/e2e.env")}
+export NAVISEERR_PORT=$PORT          # the shell wins over --env-file in Compose: keep the two the same
 WORK=$ROOT/build/e2e                        # build/ is gitignored
 LIB=$WORK/library
 export LIBRARY_DIR=$LIB PUID=$(id -u) PGID=$(id -g)
@@ -67,8 +68,8 @@ sleep 6; cmp "$M3U" "$E2E/expected.m3u8" || fail "re-run changed the file"
 cat "$M3U"
 
 say "5. Navidrome imports it"
-docker image inspect "$NAVIDROME_IMAGE" >/dev/null 2>&1 || timeout 180 docker pull "$NAVIDROME_IMAGE" \
-  || "$E2E/fetch-image.sh" "$NAVIDROME_IMAGE"
+pull() { if command -v timeout >/dev/null; then timeout 180 docker pull "$1"; else docker pull "$1"; fi; }   # no GNU timeout on macOS
+docker image inspect "$NAVIDROME_IMAGE" >/dev/null 2>&1 || pull "$NAVIDROME_IMAGE" || "$E2E/fetch-image.sh" "$NAVIDROME_IMAGE"
 docker run -d --name "$ND" -p "127.0.0.1:$ND_PORT:4533" -v "$LIB:/music:ro" -e ND_MUSICFOLDER=/music \
   -e ND_DEVAUTOCREATEADMINPASSWORD=$ND_PASS -e ND_ENABLEEXTERNALSERVICES=false \
   -e ND_ENABLEINSIGHTSCOLLECTOR=false -e ND_LOGLEVEL=warn "$NAVIDROME_IMAGE" >/dev/null
