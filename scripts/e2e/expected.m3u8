@@ -1,0 +1,8 @@
+#EXTM3U
+#PLAYLIST:E2E Road Trip: Été
+#EXTINF:2,Alpha Artist - Alpha Song
+../Alpha Artist/Alpha Song/01 - Alpha Artist - Alpha Song.mp3
+#EXTINF:2,Beta Band - Beta Tune
+../Beta Band/Beta Tune/02 - Beta Band - Beta Tune.mp3
+#EXTINF:2,Gamma Group - Gamma Track
+../Gamma Group/Gamma Track/03 - Gamma Group - Gamma Track.mp3
