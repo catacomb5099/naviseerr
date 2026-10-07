@@ -43,5 +43,7 @@ it already has and for the client to grey out anything in progress so it cannot 
 
 - A client that does not understand the 409 shows its generic "couldn't request" message -- no worse than
   the silent duplicate it used to get. The web client greys the button and announces "Already downloading"
-  / "You already have" instead (client PRs of the same date).
+  / "You already have" instead (client PRs of the same date). The refused item's button then reads
+  "Downloaded" for the panel's usual 30 seconds and is green again until the next click, which the server
+  refuses again; pre-greying something finished hours ago needs a lookup-by-id endpoint, not built.
 - Existing histories with several rows per id are read newest-first; nothing is migrated or deleted.

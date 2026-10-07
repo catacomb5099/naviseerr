@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.UUID;
 
 @RestController
+@Slf4j
 public class DownloadController {
 
     /**
@@ -93,6 +95,8 @@ public class DownloadController {
                 // Deferred, so the insert is not even built unless the lookup came back empty.
                 .switchIfEmpty(Mono.defer(() -> downloadService.requestDownload(id, type)
                         .map(download -> ResponseEntity.status(HttpStatus.ACCEPTED).body(download))))
+                // The 500 has no body; the log line is the only trace a self-hoster gets of a broken lookup or insert.
+                .doOnError(error -> log.warn("Download request for {} {} failed", type, id, error))
                 .onErrorResume(error -> Mono.just(
                         ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));
     }
