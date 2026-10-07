@@ -53,11 +53,11 @@ public class DownloadController {
      * whose title contains a {@code /} requestable, which it was not while the title was the path.
      */
     @PostMapping("/download/song/{songId}")
-    Mono<ResponseEntity<Download>> downloadSong(@PathVariable String songId) {
+    Mono<ResponseEntity<?>> downloadSong(@PathVariable String songId) {
         if (songId == null || songId.isBlank()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return accept(downloadService.requestDownload(songId, DownloadType.SONG));
+        return request(songId, DownloadType.SONG);
     }
 
     /**
@@ -72,17 +72,27 @@ public class DownloadController {
      * track has its own route.
      */
     @PostMapping("/download/collection/{collectionId}")
-    Mono<ResponseEntity<Download>> downloadCollection(@PathVariable String collectionId,
-                                                      @RequestParam DownloadType type) {
+    Mono<ResponseEntity<?>> downloadCollection(@PathVariable String collectionId,
+                                               @RequestParam DownloadType type) {
         if (collectionId == null || collectionId.isBlank() || !type.isCollection()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return accept(downloadService.requestDownload(collectionId, type));
+        return request(collectionId, type);
     }
 
-    /** Fast ack: the row is inserted, nothing else happens on the request thread. */
-    private Mono<ResponseEntity<Download>> accept(Mono<Download> saved) {
-        return saved.map(download -> ResponseEntity.status(HttpStatus.ACCEPTED).body(download))
+    /**
+     * One request: 409 with the existing download's card when the same id and type is already
+     * queued, running, downloaded or partly downloaded (the body cancel and retry use, so the client
+     * applies it as a row), else the fast ack -- 202 with the inserted row, nothing else on the
+     * request thread. A FAILED or cancelled download is not "existing": nothing was fetched, so asking
+     * again is a new row. See {@link ActiveDownloadRepository#findCurrent}.
+     */
+    private Mono<ResponseEntity<?>> request(String id, DownloadType type) {
+        return activeDownloadRepository.findCurrent(type, id)
+                .<ResponseEntity<?>>map(existing -> ResponseEntity.status(HttpStatus.CONFLICT).body(existing))
+                // Deferred, so the insert is not even built unless the lookup came back empty.
+                .switchIfEmpty(Mono.defer(() -> downloadService.requestDownload(id, type)
+                        .map(download -> ResponseEntity.status(HttpStatus.ACCEPTED).body(download))))
                 .onErrorResume(error -> Mono.just(
                         ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));
     }
