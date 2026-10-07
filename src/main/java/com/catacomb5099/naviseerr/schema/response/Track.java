@@ -12,7 +12,13 @@ public class Track {
     String iconURL;
     String streamURL;
     String name;
-    List<String> artists; // List of artist IDs
+    List<String> artists; // artist display names; the client shows them as-is
+    /**
+     * The YouTube Music channel id behind each entry of {@code artists}, index-aligned, so the client
+     * can link a name to {@code /artists/{id}}; null where YouTube gave no channel. Same contract as
+     * the downloads' {@code artistIds}.
+     */
+    List<String> artistIds;
     String albumId;
     int year;
     /**
@@ -21,4 +27,3 @@ public class Track {
      */
     String plays;
 }
-

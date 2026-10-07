@@ -22,9 +22,13 @@ import java.util.stream.IntStream;
  * @param playlistId the playlist YouTube Music plays this as, so the client can link "play it on
  *                   YouTube Music": an album's {@code OLAK5uy_...}, a playlist's bare id. Null when
  *                   the adapter gave none.
+ * @param artistIds  the channel id behind each {@code artists} entry, index-aligned, null where YouTube
+ *                   gave none (the {@code ""} placeholder {@link YoutubeCollectionInfo#authorIds()}
+ *                   carries becomes null on the wire, as on the downloads routes). For a playlist this
+ *                   is its author's channel, which the client does not link.
  */
 public record CollectionView(String id, DownloadType type, String name, List<String> artists,
-                             String iconURL, Integer year, int trackCount,
+                             List<String> artistIds, String iconURL, Integer year, int trackCount,
                              List<CollectionTrackView> tracks, String playlistId) {
 
     /**
@@ -32,14 +36,14 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
      * @param plays    YouTube's own wording ("28M plays") on an album's tracks; null on a playlist's,
      *                 where YouTube gives none. Passed through unparsed for the client to show as-is.
      */
-    public record CollectionTrackView(String id, String name, List<String> artists, String iconURL,
-                                      Integer durationSeconds, int position, String plays) {
+    public record CollectionTrackView(String id, String name, List<String> artists, List<String> artistIds,
+                                      String iconURL, Integer durationSeconds, int position, String plays) {
     }
 
     static CollectionView from(YoutubeCollectionInfo info, DownloadType type, String requestedId) {
         List<CollectionTrackView> tracks = tracksOf(info);
-        return new CollectionView(requestedId, type, info.name(), info.authorNames(), info.imageUrl(),
-                info.year(), tracks.size(), tracks, info.playlistId());
+        return new CollectionView(requestedId, type, info.name(), info.authorNames(), blankToNull(info.authorIds()),
+                info.imageUrl(), info.year(), tracks.size(), tracks, info.playlistId());
     }
 
     /** Every song with an id, numbered from 1: what a download of this collection would create task rows for. */
@@ -47,8 +51,13 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
         List<YoutubeSongInfo> songs = info.songs().stream().filter(song -> song.id() != null).toList();
         return IntStream.range(0, songs.size())
                 .mapToObj(i -> new CollectionTrackView(songs.get(i).id(), songs.get(i).name(),
-                        songs.get(i).authorNames(), songs.get(i).imageUrl(),
+                        songs.get(i).authorNames(), blankToNull(songs.get(i).authorIds()), songs.get(i).imageUrl(),
                         songs.get(i).durationSeconds(), i + 1, songs.get(i).plays()))
                 .toList();
+    }
+
+    /** "" (the in-memory "no channel" placeholder) becomes null on the wire; {@code Stream.toList()} keeps nulls. */
+    private static List<String> blankToNull(List<String> ids) {
+        return ids.stream().map(id -> id == null || id.isEmpty() ? null : id).toList();
     }
 }

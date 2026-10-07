@@ -16,7 +16,8 @@ import java.util.Objects;
  * Maps ytmusic-adapter search results onto the existing {@code schema.response} DTOs.
  *
  * The frontend contract this must honour (naviseerr-client has no normalization layer):
- * - {@code artists} must hold display NAMES, not channel ids -- the UI joins them directly.
+ * - {@code artists} must hold display NAMES, not channel ids -- the UI joins them directly;
+ *   {@code artistIds} carries the channel ids beside them, index-aligned, for the artist links.
  * - {@code Track.iconURL} / {@code Album.iconURL} are capital-URL; {@code Artist.iconUrl} is
  *   lowercase -- both must be preserved exactly as the client mirrors this inconsistency.
  * - Every list is non-null (empty, never null) -- {@code id}/{@code name} are React keys /
@@ -79,6 +80,7 @@ public class YtMusicSearchResponseMapper {
                 "", // the adapter deliberately exposes no streaming path; unread by the client
                 orEmpty(item.getTitle()),
                 mapArtistNames(item.getArtists()),
+                mapArtistIds(item.getArtists()),
                 item.getAlbum() != null ? orEmpty(item.getAlbum().getBrowseId()) : "",
                 0, // song search items carry no year; Track.year has no reader in the client
                 plays(item.getViews())
@@ -91,6 +93,7 @@ public class YtMusicSearchResponseMapper {
                 orEmpty(item.getThumbnailUrl()),
                 orEmpty(item.getTitle()),
                 mapArtistNames(item.getArtists()),
+                mapArtistIds(item.getArtists()),
                 item.getYear() != null ? item.getYear() : 0
         );
     }
@@ -114,6 +117,7 @@ public class YtMusicSearchResponseMapper {
                 orEmpty(item.getThumbnailUrl()),
                 orEmpty(item.getTitle()),
                 mapArtistNames(item.getArtists()),
+                mapArtistIds(item.getArtists()),
                 item.getTrackCount() != null ? item.getTrackCount() : 0
         );
     }
@@ -138,6 +142,21 @@ public class YtMusicSearchResponseMapper {
         return artists.stream()
                 .map(YtMusicSearchResponse.ArtistRef::getName)
                 .filter(Objects::nonNull)
+                .toList();
+    }
+
+    /**
+     * The channel id behind each {@link #mapArtistNames} entry: the SAME {@code name != null} filter,
+     * so the two lists line up entry for entry, and null (not "") where YouTube gave no channel, so
+     * the client tests one thing. {@code Stream.toList()} keeps nulls; {@code List.of} would not.
+     */
+    public static List<String> mapArtistIds(List<YtMusicSearchResponse.ArtistRef> artists) {
+        if (artists == null) {
+            return Collections.emptyList();
+        }
+        return artists.stream()
+                .filter(artist -> artist.getName() != null)
+                .map(YtMusicSearchResponse.ArtistRef::getChannelId)
                 .toList();
     }
 

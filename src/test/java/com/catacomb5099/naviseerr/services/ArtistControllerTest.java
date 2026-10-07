@@ -56,7 +56,7 @@ class ArtistControllerTest {
     }
 
     private static Playlist playlist(String id, String title) {
-        return new Playlist(id, "https://img/" + id + ".jpg", title, List.of("YouTube Music"), 20);
+        return new Playlist(id, "https://img/" + id + ".jpg", title, List.of("YouTube Music"), List.of(), 20);
     }
 
     private static List<String> ids(List<Playlist> playlists) {
@@ -97,6 +97,7 @@ class ArtistControllerTest {
                 .jsonPath("$.topSongs[0].iconURL").isEqualTo("https://i.ytimg.com/vi/49FB9hhoO6c/hqdefault.jpg")
                 .jsonPath("$.topSongs[0].streamURL").isEqualTo("")
                 .jsonPath("$.topSongs[0].artists[0]").isEqualTo("Pixies")
+                .jsonPath("$.topSongs[0].artistIds[0]").isEqualTo(PIXIES)
                 .jsonPath("$.topSongs[0].albumId").isEqualTo("")
                 .jsonPath("$.topSongs[0].year").isEqualTo(0)
                 // albums/singles -> Album: the artist's own name stands in for the missing artists
@@ -104,6 +105,7 @@ class ArtistControllerTest {
                 .jsonPath("$.albums[0].id").isEqualTo("MPREb_sfqbxrgS5Jp")
                 .jsonPath("$.albums[0].name").isEqualTo("Bossanova (2026 Remaster)")
                 .jsonPath("$.albums[0].artists").isEqualTo(List.of("Pixies"))
+                .jsonPath("$.albums[0].artistIds").isEqualTo(List.of(PIXIES))
                 .jsonPath("$.albums[0].year").isEqualTo(2026)
                 .jsonPath("$.albums[0].iconURL").value(url -> ((String) url).startsWith("https://yt3.googleusercontent.com/"))
                 .jsonPath("$.singles.length()").isEqualTo(1)

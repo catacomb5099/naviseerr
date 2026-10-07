@@ -33,11 +33,11 @@ class SearchServiceTest {
     private final SearchService searchService = new SearchService(ytMusicService);
 
     private static Track track() {
-        return new Track("vid1", "https://example.com/t.jpg", "", "Wonderwall", List.of("Oasis"), "MPREb_1", 0, null);
+        return new Track("vid1", "https://example.com/t.jpg", "", "Wonderwall", List.of("Oasis"), List.of("UCoasis"), "MPREb_1", 0, null);
     }
 
     private static Album album() {
-        return new Album("MPREb_1", "https://example.com/a.jpg", "Definitely Maybe", List.of("Oasis"), 1994);
+        return new Album("MPREb_1", "https://example.com/a.jpg", "Definitely Maybe", List.of("Oasis"), List.of("UCoasis"), 1994);
     }
 
     private static Artist artist() {
@@ -45,7 +45,7 @@ class SearchServiceTest {
     }
 
     private static Playlist playlist() {
-        return new Playlist("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", "https://example.com/p.jpg", "Britpop Essentials", List.of("YouTube Music"), 42);
+        return new Playlist("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", "https://example.com/p.jpg", "Britpop Essentials", List.of("YouTube Music"), List.of(), 42);
     }
 
     private static SearchResponse only(List<Track> tracks, List<Album> albums, List<Artist> artists, List<Playlist> playlists) {
@@ -87,8 +87,8 @@ class SearchServiceTest {
     @Test
     void search_putsTheMixedPageOnTopOfEachShelf_thenTheCategorySearches_eachItemOnce() {
         stubEveryCategory("Oasis");
-        Track hit = new Track("hit", "", "", "Champagne Supernova", List.of("Oasis"), "", 0, null);
-        Track sameSongFromMixed = new Track("vid1", "", "", "Wonderwall", List.of("Oasis"), "", 0, null);
+        Track hit = new Track("hit", "", "", "Champagne Supernova", List.of("Oasis"), List.of("UCoasis"), "", 0, null);
+        Track sameSongFromMixed = new Track("vid1", "", "", "Wonderwall", List.of("Oasis"), List.of("UCoasis"), "", 0, null);
         Artist oasisFromMixed = new Artist("UC1", "", "Oasis");
         when(ytMusicService.getResults("Oasis")).thenReturn(Mono.just(only(
                 List.of(hit, sameSongFromMixed), List.of(), List.of(oasisFromMixed), List.of())));
@@ -343,7 +343,7 @@ class SearchServiceTest {
     }
 
     private static Playlist playlist(String id, String name) {
-        return new Playlist(id, "https://example.com/p.jpg", name, List.of("someone"), 0);
+        return new Playlist(id, "https://example.com/p.jpg", name, List.of("someone"), List.of(), 0);
     }
 
     private static SearchResponse playlistsOnly(Playlist... playlists) {
