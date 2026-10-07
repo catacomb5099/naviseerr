@@ -4,8 +4,8 @@
 **Status:** Accepted, implemented (server side; the web client's dialog is a separate change)
 **Builds on:** `retry-and-cancel-28-09-2026.md` (a pick is a retry-shaped reset plus the cancel code),
 `whole-album-downloads-04-10-2026.md` (album folders), `durable-download-state-machine-13-08-2026.md`
-(the lease guards that make the race safe). Research: `.mfbt-wt/sweep-1007-notes/research/manual-import-server.md`;
-the API contract both sides built against: `.mfbt-wt/sweep-1007-notes/CONTRACT-manual-import.md`.
+(the lease guards that make the race safe). The research notes and the API contract both sides built against are
+kept in the owner's private sweep notes, not in this repository.
 
 ## Context
 
