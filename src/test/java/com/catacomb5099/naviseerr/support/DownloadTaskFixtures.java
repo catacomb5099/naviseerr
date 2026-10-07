@@ -19,14 +19,14 @@ public final class DownloadTaskFixtures {
 
     public static DownloadCandidate candidate(String username) {
         return new DownloadCandidate(username, "music/" + username + "/song.flac", "flac",
-                1411, 1000L, 42L, false, true, 0, 1_000_000, "EXACT", null);
+                1411, 1000L, 42L, false, true, 0, 1_000_000, "EXACT", null, 240);
     }
 
     /** The same file, found in a sharer's whole-album folder by the album search (P5). */
     public static List<DownloadCandidate> albumFolderCandidates(String... usernames) {
         return candidates(usernames).stream().map(c -> new DownloadCandidate(c.username(), c.filename(),
                 c.extension(), c.bitRate(), c.size(), c.code(), c.isLocked(), c.hasFreeUploadSlot(),
-                c.queueLength(), c.uploadSpeed(), c.grade(), DownloadCandidate.ALBUM_FOLDER)).toList();
+                c.queueLength(), c.uploadSpeed(), c.grade(), DownloadCandidate.ALBUM_FOLDER, c.length())).toList();
     }
 
     public static List<DownloadCandidate> candidates(String... usernames) {

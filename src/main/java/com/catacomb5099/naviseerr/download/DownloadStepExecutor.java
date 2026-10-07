@@ -30,18 +30,27 @@ import java.util.Map;
 @Component
 public class DownloadStepExecutor {
 
+    /**
+     * How many of a search's files are kept for the manual picker. 100 x about 350 bytes is 35 KB per
+     * song; a 500-song playlist writes 17 MB once. Lower it if a self-hoster's database minds.
+     */
+    static final int REMEMBERED_FILES = 100;
+
     private final SlskdService slskdService;
     private final SlskdSearchResultProcessor searchResultProcessor;
     private final DownloadStateMachine stateMachine;
+    private final DownloadTaskRepository repository;
     private final Clock clock;
 
     public DownloadStepExecutor(SlskdService slskdService,
                                 SlskdSearchResultProcessor searchResultProcessor,
                                 DownloadStateMachine stateMachine,
+                                DownloadTaskRepository repository,
                                 Clock clock) {
         this.slskdService = slskdService;
         this.searchResultProcessor = searchResultProcessor;
         this.stateMachine = stateMachine;
+        this.repository = repository;
         this.clock = clock;
     }
 
@@ -156,11 +165,34 @@ public class DownloadStepExecutor {
                 // files Soulseek offered (post-mortem of 28-09-2026). The wording goes along too: when
                 // it did not name the artist, the picker requires the artist in the file's path. An
                 // album's song also holds the files to the album track's length (P6).
-                .flatMap(full -> searchResultProcessor.selectBestFiles(full,
+                .flatMap(full -> remember(task, full, now)
+                        .then(searchResultProcessor.selectBestFiles(full,
                                 SearchQueryTiers.pickerName(task.songName()), task.searchQuery(),
-                                task.albumTrackSeconds())
+                                task.albumTrackSeconds()))
                         .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
                         .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
+    }
+
+    /**
+     * Keeps every file the search found that is the song (the first {@link #REMEMBERED_FILES}, in the
+     * picker's order) on the row, for a person to choose from later without searching again (manual
+     * pick, 07-10-2026). This is the one moment the full result is in hand; slskd may age it out.
+     * Its own statement, never part of the decision: a database hiccup here is logged and the song
+     * carries on exactly as if nothing had been remembered, since a missing list costs a person a
+     * retry while a failed search costs them the song.
+     */
+    private Mono<Void> remember(DownloadTask task, SearchState full, Instant now) {
+        return Mono.fromCallable(() -> searchResultProcessor.relevantFiles(full,
+                        SearchQueryTiers.pickerName(task.songName()), task.searchQuery()))
+                .flatMap(files -> repository.saveSearchResults(task.taskId(),
+                        files.stream().limit(REMEMBERED_FILES).map(DownloadCandidate::from).toList(), now))
+                .onErrorResume(error -> {
+                    log.warn("Could not remember the files search {} found for song {} of download {}; the "
+                            + "manual picker will have nothing to show for it", task.searchId(), task.taskId(),
+                            task.downloadId(), error);
+                    return Mono.empty();
+                })
+                .then();
     }
 
     /** The batched summary leaves {@code responses} null on some slskd versions and empty on others. */

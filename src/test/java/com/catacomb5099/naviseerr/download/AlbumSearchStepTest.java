@@ -47,6 +47,7 @@ class AlbumSearchStepTest {
         when(repository.waitingAlbumSongs(any(), any())).thenReturn(Flux.just(song));
         when(repository.saveAlbumSearch(any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.releaseAlbumSongs(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.saveAlbumFolders(any(), any(), any())).thenReturn(Mono.just(1L));
     }
 
     private static AlbumSearch album(DownloadPhase phase, int tier) {
@@ -206,6 +207,48 @@ class AlbumSearchStepTest {
                                 DownloadCandidate.fromAlbumFolder(b, bFirst)),
                         third.taskId(), List.of(DownloadCandidate.fromAlbumFolder(a, aThird)))),
                 eq(T0.plusSeconds(4)));
+    }
+
+    @Test
+    void aWholeFolder_isRememberedWithItsSharerStats_beforeTheSongsAreReleased() {
+        SearchFile file = new SearchFile("TALK TALK\\LAUGHING STOCK\\1-01 Myrrhman.mp3", 1L, 1L, false, "",
+                Optional.of(320), Optional.of(333));
+        SearchResponseItem peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 3, 1, 1_500_000, "Baron53");
+        when(slskd.getSearchWithResponses("s1"))
+                .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(peer))));
+        when(picker.folders(any(), any(), any(), any(), any()))
+                .thenReturn(List.of(new AlbumFolderPicker.Folder(peer, "TALK TALK\\LAUGHING STOCK",
+                        Map.of(song.taskId(), file), 2)));
+
+        step.step(album(DownloadPhase.SEARCH_POLL, 1),
+                Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
+
+        var order = inOrder(repository);
+        order.verify(repository).saveAlbumFolders(eq(DOWNLOAD), argThat(folders -> {
+            StoredFolder f = folders.getFirst();
+            return f.username().equals("Baron53") && f.queueLength() == 3 && f.uploadSpeed() == 1_500_000
+                    && f.extras() == 2 && f.files().get(song.taskId()).length() == 333;
+        }), eq(T0.plusSeconds(4)));
+        order.verify(repository).releaseAlbumSongs(eq(DOWNLOAD), eq("me"), eq(AlbumSearch.Outcome.WHOLE_FOLDER), any(), any());
+    }
+
+    @Test
+    void noFolderQualified_remembersNothing_andAFailedWriteStillReleasesTheSongs() {
+        when(slskd.getSearchWithResponses("s1"))
+                .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of())));
+        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of());
+        step.step(album(DownloadPhase.SEARCH_POLL, 1),
+                Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
+        verify(repository, never()).saveAlbumFolders(any(), any(), any());
+
+        SearchFile file = new SearchFile("A\\1.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(333));
+        SearchResponseItem a = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 1, "a");
+        when(picker.folders(any(), any(), any(), any(), any()))
+                .thenReturn(List.of(new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), file), 0)));
+        when(repository.saveAlbumFolders(any(), any(), any())).thenReturn(Mono.error(new RuntimeException("database away")));
+        step.step(album(DownloadPhase.SEARCH_POLL, 1),
+                Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
+        verify(repository).releaseAlbumSongs(eq(DOWNLOAD), eq("me"), eq(AlbumSearch.Outcome.WHOLE_FOLDER), any(), any());
     }
 
     @Test

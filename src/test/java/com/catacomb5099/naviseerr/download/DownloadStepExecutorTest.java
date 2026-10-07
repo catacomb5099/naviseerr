@@ -35,17 +35,20 @@ class DownloadStepExecutorTest {
 
     private SlskdService slskdService;
     private SlskdSearchResultProcessor searchProcessor;
+    private DownloadTaskRepository repository;
     private DownloadStepExecutor executor;
 
     @BeforeEach
     void setUp() {
         slskdService = mock(SlskdService.class);
         searchProcessor = mock(SlskdSearchResultProcessor.class);
+        repository = mock(DownloadTaskRepository.class);
+        when(repository.saveSearchResults(any(), any(), any())).thenReturn(Mono.just(1L));
         DownloadStateMachine machine = new DownloadStateMachine(
                 Duration.ofSeconds(2), Duration.ofSeconds(5),
                 Duration.ofSeconds(120), Duration.ofSeconds(3600), Duration.ofMinutes(10),
                 Duration.ofSeconds(60), 2, 3, 2, new StallingSharers(Duration.ofHours(6)));
-        executor = new DownloadStepExecutor(slskdService, searchProcessor, machine,
+        executor = new DownloadStepExecutor(slskdService, searchProcessor, machine, repository,
                 Clock.fixed(T0, ZoneOffset.UTC));
     }
 
@@ -194,6 +197,73 @@ class DownloadStepExecutorTest {
                 .execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
 
         assertInstanceOf(DownloadDecision.Advance.class, d);
+    }
+
+    // ---- remembering what the search found (manual pick) ----------------------------------------
+
+    private static SlskdSearchResultProcessor.Pick pick(String username, String path, int length,
+                                                        TrackMatchingService.Match grade) {
+        var file = new SearchFile(path, 10L, 7L, false, "", Optional.of(192), Optional.of(length));
+        var peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 900, username);
+        return new SlskdSearchResultProcessor.Pick(peer, file, grade);
+    }
+
+    @Test
+    void searchPoll_complete_remembersEveryRelevantFile_withItsLength_cappedAtAHundred() {
+        var summary = SlskdFixtures.searchState("s1", true, "Completed");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of());
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
+        List<SlskdSearchResultProcessor.Pick> found = new java.util.ArrayList<>();
+        for (int i = 0; i < 101; i++) {
+            found.add(pick("sharer" + i, "music/" + i + "/song.mp3", 240 + i, TrackMatchingService.Match.OTHER_VERSION));
+        }
+        when(searchProcessor.relevantFiles(eq(full), eq("never gonna give you up"), eq("never gonna give you up")))
+                .thenReturn(found);
+
+        executor.execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
+
+        @SuppressWarnings("unchecked")
+        var files = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(repository).saveSearchResults(eq(TASK_ID), files.capture(), eq(T0));
+        assertEquals(100, files.getValue().size(), "the first hundred in the picker's order");
+        DownloadCandidate first = (DownloadCandidate) files.getValue().getFirst();
+        assertEquals("sharer0", first.username());
+        assertEquals(240, first.length());
+        assertEquals("OTHER_VERSION", first.grade());
+        assertEquals(192, first.bitRate(), "a 192 kbps file the automatic picker would drop is kept for a person");
+    }
+
+    @Test
+    void searchPoll_stillRunning_remembersNothing() {
+        var state = SlskdFixtures.searchState("s1", false, "InProgress");
+
+        executor.execute(searchPolling("s1"), Map.of("s1", state), Map.of(), none()).block();
+
+        verify(repository, never()).saveSearchResults(any(), any(), any());
+        verify(searchProcessor, never()).relevantFiles(any(), any(), any());
+    }
+
+    @Test
+    void searchPoll_complete_aFailedCacheWrite_leavesTheDecisionUnchanged() {
+        // THE GUARD: a Postgres hiccup on the side cache must never turn a good search into a retry.
+        var summary = SlskdFixtures.searchState("s1", true, "Completed");
+        var file = new SearchFile("music/alice/song.flac", 10L, 7L, false, "flac", Optional.of(1411), Optional.of(240));
+        var peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 900, "alice");
+        var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(peer));
+        var exact = new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT);
+        when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
+        when(searchProcessor.relevantFiles(eq(full), any(), any())).thenReturn(List.of(exact));
+        when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of(exact)));
+        when(repository.saveSearchResults(any(), any(), any()))
+                .thenReturn(Mono.error(new RuntimeException("database away")));
+
+        DownloadDecision d = executor.execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
+
+        DownloadTask next = assertInstanceOf(DownloadDecision.Advance.class, d).next();
+        assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
+        assertEquals("alice", next.candidates().getFirst().username());
+        assertEquals(240, next.candidates().getFirst().length(), "the length now travels on the candidate too");
     }
 
     @Test
