@@ -124,6 +124,8 @@ class LibraryOrganiserTest {
         assertEquals("AC_DC - Back In Black", LibraryOrganiser.sanitise("AC/DC: Back In Black"));
         assertEquals("E2E Road Trip - Été", LibraryOrganiser.sanitise("E2E Road Trip: Été"));
         assertEquals("Late -", LibraryOrganiser.sanitise("Late:"));
+        assertEquals("4_44", LibraryOrganiser.sanitise("4:44"));
+        assertEquals("12_30 AM", LibraryOrganiser.sanitise("12:30 AM"));
         assertEquals("What_", LibraryOrganiser.sanitise(" What?  "));
         assertEquals("Trailing", LibraryOrganiser.sanitise("Trailing... "));
         assertEquals("hidden", LibraryOrganiser.sanitise(".hidden"));

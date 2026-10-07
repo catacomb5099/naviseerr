@@ -489,17 +489,18 @@ public class LibraryOrganiser {
 
     /**
      * One folder or file-name component that is legal on Linux, Windows and macOS, and that Jellyfin
-     * will not skip: {@code :} to {@code  -} (so "Road Trip: Summer" reads "Road Trip - Summer" where
-     * the file name is the title, as in Jellyfin's playlist list), the other illegal characters to
-     * {@code _}, whitespace collapsed, no leading or trailing dots, no Windows device names, at most
-     * 200 bytes of UTF-8, NFC.
+     * will not skip: a colon before a space or at the end to {@code  -} (so "Road Trip: Summer" reads
+     * "Road Trip - Summer" where the file name is the title, as in Jellyfin's playlist list; "4:44" is a
+     * time, not a subtitle, and keeps the {@code _} rule), the other illegal characters to {@code _},
+     * whitespace collapsed, no leading or trailing dots, no Windows device names, at most 200 bytes of
+     * UTF-8, NFC.
      */
     static String sanitise(String name) {
         if (name == null) {
             return "Unknown";
         }
         String s = Normalizer.normalize(name, Normalizer.Form.NFC);
-        s = s.replace(":", " -");
+        s = s.replaceAll(":(?=\\s|$)", " -");
         s = ILLEGAL.matcher(s).replaceAll("_");
         s = s.replaceAll("\\s+", " ").strip();
         s = s.replaceAll("[. ]+$", "").replaceAll("^\\.+", "");

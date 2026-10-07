@@ -35,6 +35,8 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    ```sh
    echo SOULSEEK_USERNAME=choose-your-own-name > .env
    ```
+   (Windows PowerShell: `>` writes a file Docker cannot read; run `cp .env.example .env` instead and
+   fill in `SOULSEEK_USERNAME=` in a text editor.)
    The Soulseek account is created the first time naviseerr logs in, so pick a name nobody else is
    likely to have (1 to 30 characters, no accents or emoji). It cannot be made up for you: Soulseek's
    rules forbid automatically generated usernames. The password is generated for you.
