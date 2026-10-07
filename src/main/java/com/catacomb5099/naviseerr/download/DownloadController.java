@@ -169,13 +169,16 @@ public class DownloadController {
     }
 
     /**
-     * Retries a finished download: every song without a file starts again. 202 with the fresh card
-     * (like a new request: the work follows), 409 with the current card when there is nothing to retry
-     * -- still running, fully downloaded, or a second click -- and 404 for an unknown id.
+     * Retries a finished download (every song without a file starts again), or one failed song of any
+     * download when {@code taskId} is given -- the collection may still be running. 202 with the fresh
+     * card (like a new request: the work follows), 409 with the current card when there is nothing to
+     * retry -- still running, fully downloaded, the song is not failed, or a second click -- and 404 for
+     * an unknown id.
      */
     @PostMapping("/downloads/{id}/retry")
-    Mono<ResponseEntity<ActiveDownloadView>> retry(@PathVariable UUID id) {
-        return outcome(id, downloadService.retry(id, clock.instant()), HttpStatus.ACCEPTED);
+    Mono<ResponseEntity<ActiveDownloadView>> retry(@PathVariable UUID id,
+                                                   @RequestParam(required = false) UUID taskId) {
+        return outcome(id, downloadService.retry(id, taskId, clock.instant()), HttpStatus.ACCEPTED);
     }
 
     /** Runs a write, then reads the card back: rows > 0 is the happy status, 0 is 409, no card is 404. */

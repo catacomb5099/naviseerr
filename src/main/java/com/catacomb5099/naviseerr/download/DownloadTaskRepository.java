@@ -370,10 +370,15 @@ public class DownloadTaskRepository {
             """;
 
     /**
-     * Retries a finished download: every FAILED song (cancelled ones included -- "retry" means "the
-     * ones I did not get") goes back to the start of its pipeline, in place, and the download reopens.
-     * One statement, so a double-click's second request finds no FAILED rows left, the reset CTE is
-     * empty, and the outer UPDATE matches nothing: rows updated is 0 or 1 and IS the idempotence.
+     * Retries a finished download, or one song of it when {@code :taskId} is given. Every FAILED song
+     * (cancelled ones included -- "retry" means "the ones I did not get"), or just that one, goes back
+     * to the start of its pipeline, in place; the download reopens if it had concluded. The whole
+     * download may only be retried once it has finished (the 28-09 rule); one song may be retried
+     * whenever it is FAILED, its siblings carrying on -- a FAILED song's parent can only be IN_PROGRESS,
+     * FAILED or PARTIAL_SUCCESS, so the one-song case needs no parent test. One statement, so a
+     * double-click's second request finds no FAILED row left and resets nothing: the count of rows
+     * reset IS the idempotence (the reopen is a side CTE, since a live parent has nothing to reopen).
+     * Bind the whole-download case with {@code bindNull("taskId", UUID.class)}.
      *
      * <p>The previous attempt's peers and error are not kept on the row; apply() logged them when the
      * song failed. A second row per song would break every COUNT the cards read.
@@ -381,6 +386,14 @@ public class DownloadTaskRepository {
      * <p>{@code failure_reason = NULL} on downloads: the feed prefers the download's own reason over
      * its songs', so a stale one would outrank the fresh rows. {@code organised_at = NULL}: the playlist
      * file is rewritten whole once the retried songs are filed; songs already filed keep library_path.
+     *
+     * <p>ponytail: a one-song retry on a LIVE parent can land between CONCLUDE_SQL's snapshot (every
+     * song terminal) and its write, leaving a concluded parent with one live song: the song still runs
+     * and finishes, but the card keeps its terminal word. Window: one conclude statement every pass.
+     * Upgrade if ever seen: a level-triggered reopen after conclusion, {@code UPDATE downloads SET status =
+     * 'IN_PROGRESS', finished_at = NULL WHERE status IN ('FAILED','PARTIAL_SUCCESS','SUCCEEDED') AND EXISTS
+     * (SELECT 1 FROM download_tasks t WHERE t.download_id = downloads.download_id AND t.phase NOT IN
+     * ('SUCCEEDED','FAILED'))}.
      */
     private static final String RETRY_SQL = """
             WITH reset AS (
@@ -405,19 +418,23 @@ public class DownloadTaskRepository {
                        lease_expires_at = NULL
                  WHERE download_id = :id
                    AND phase = 'FAILED'
-                   AND EXISTS (SELECT 1 FROM downloads
-                                WHERE download_id = :id
-                                  AND status IN ('FAILED', 'PARTIAL_SUCCESS'))
+                   AND (:taskId::uuid IS NULL OR task_id = :taskId)
+                   AND (:taskId::uuid IS NOT NULL
+                        OR EXISTS (SELECT 1 FROM downloads
+                                    WHERE download_id = :id
+                                      AND status IN ('FAILED', 'PARTIAL_SUCCESS')))
                 RETURNING task_id
+            ), reopened AS (
+                UPDATE downloads
+                   SET status = 'IN_PROGRESS',
+                       failure_reason = NULL,
+                       finished_at = NULL,
+                       organised_at = NULL
+                 WHERE download_id = :id
+                   AND status IN ('FAILED', 'PARTIAL_SUCCESS')
+                   AND EXISTS (SELECT 1 FROM reset)
             )
-            UPDATE downloads
-               SET status = 'IN_PROGRESS',
-                   failure_reason = NULL,
-                   finished_at = NULL,
-                   organised_at = NULL
-             WHERE download_id = :id
-               AND status IN ('FAILED', 'PARTIAL_SUCCESS')
-               AND EXISTS (SELECT 1 FROM reset)
+            SELECT count(*) AS reset FROM reset
             """;
 
     /** A download that failed before it had any songs (bad id, or cancelled while queued) goes back to PENDING; admission fetches the track list again. */
@@ -882,9 +899,11 @@ public class DownloadTaskRepository {
                 .all();
     }
 
-    /** 1 when the download's FAILED songs were reset and it reopened; 0 when there was nothing to retry. See RETRY_SQL. */
-    public Mono<Long> retry(UUID downloadId, Instant now) {
-        return client.sql(RETRY_SQL).bind("id", downloadId).bind("now", now).fetch().rowsUpdated();
+    /** The number of songs reset: every FAILED one, or the one {@code taskId} names; 0 when there was nothing to retry. See RETRY_SQL. */
+    public Mono<Long> retry(UUID downloadId, UUID taskId, Instant now) {
+        DatabaseClient.GenericExecuteSpec spec = client.sql(RETRY_SQL).bind("id", downloadId).bind("now", now);
+        spec = taskId == null ? spec.bindNull("taskId", UUID.class) : spec.bind("taskId", taskId);
+        return spec.map((row, meta) -> row.get("reset", Long.class)).one();
     }
 
     /** 1 when a download that failed before it had songs went back to PENDING; 0 otherwise. */

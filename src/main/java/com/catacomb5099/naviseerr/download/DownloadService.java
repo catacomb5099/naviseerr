@@ -132,15 +132,17 @@ public class DownloadService {
     }
 
     /**
-     * Retries a finished download. Songs that failed or were cancelled start again; songs with a file
-     * are left alone. A download that never got songs is re-queued for admission instead. 0 means
-     * nothing to retry: still running, fully downloaded, or a concurrent retry got there first.
+     * Retries a finished download, or one song of it when {@code taskId} is given. Songs that failed
+     * or were cancelled start again; songs with a file are left alone. A download that never got songs
+     * is re-queued for admission instead -- only for a whole retry: a download with no songs has no
+     * song to retry, and a bogus taskId must not re-queue it. 0 means nothing to retry: still running
+     * (whole retry), fully downloaded, the song is not FAILED, or a concurrent retry got there first.
      */
-    public Mono<Long> retry(UUID downloadId, Instant now) {
-        return repository.retry(downloadId, now)
-                .flatMap(rows -> rows > 0 ? Mono.just(rows) : repository.readmit(downloadId))
+    public Mono<Long> retry(UUID downloadId, UUID taskId, Instant now) {
+        return repository.retry(downloadId, taskId, now)
+                .flatMap(rows -> rows > 0 || taskId != null ? Mono.just(rows) : repository.readmit(downloadId))
                 .doOnNext(rows -> {
-                    if (rows > 0) log.info("Retrying download {}", downloadId);
+                    if (rows > 0) log.info("Retrying {} song(s) of download {}", rows, downloadId);
                 });
     }
 
