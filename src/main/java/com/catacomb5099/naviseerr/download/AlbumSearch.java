@@ -47,26 +47,24 @@ public record AlbumSearch(UUID downloadId, DownloadPhase phase, int searchTier, 
             Pattern.CASE_INSENSITIVE);
 
     /**
-     * "Title - Artist" first, then the title alone whenever that found no sharer with the whole album
-     * (the owner's call of 04-10-2026): Soulseek drops every search naming certain artists, and a
-     * folder can spell the artist differently. The title loses its brackets, quotes and version words
-     * as a song's does ({@link SearchQueryTiers}) and a trailing edition; both names are then
-     * {@link #plain}. A compilation searches its title only: nobody's folder says "Various Artists".
+     * The album's name alone, never the artist (the owner's call of 07-10-2026): Soulseek drops every
+     * search naming certain artists, a folder can spell the artist differently, and
+     * {@link AlbumFolderPicker} checks the artist on every folder that answers anyway. The title loses
+     * its brackets, quotes and version words as a song's does ({@link SearchQueryTiers}) and a trailing
+     * edition, and is then {@link #plain}. One wording, still a list so {@link #searchQuery} and the
+     * stored {@code search_tier} keep their shape.
      */
     public List<String> wordings() {
         String cleanTitle = EDITION.matcher(SearchQueryTiers.of(title).getFirst()).replaceFirst("");
         String plainTitle = plain(cleanTitle).isEmpty() ? cleanTitle : plain(cleanTitle);
-        String artist = artists == null || artists.isEmpty() ? "" : artists.getFirst();
-        String plainArtist = artist.equalsIgnoreCase("Various Artists") ? "" : plain(artist);
-        return plainArtist.isEmpty() ? List.of(plainTitle) : List.of(plainTitle + " - " + plainArtist, plainTitle);
+        return List.of(plainTitle);
     }
 
     /**
      * A name as a shared folder is likely to spell it: every word split at punctuation, one-letter
      * pieces left out ("Morning Glory?" is "Morning Glory", "Sgt. Pepper's" is "Sgt Pepper", "AC/DC"
      * is "AC DC"). Soulseek must match every word, and a Windows folder cannot even hold a "?". Empty
-     * when no word is left ("R.E.M.": that artist is then left out of the search, and a title such as
-     * "4" is searched as it is).
+     * when no word is left (a title such as "4" is then searched as it is).
      */
     static String plain(String name) {
         return Arrays.stream(name.split("[^\\p{L}\\p{N}]+"))
@@ -77,10 +75,6 @@ public record AlbumSearch(UUID downloadId, DownloadPhase phase, int searchTier, 
     public String searchQuery() {
         List<String> wordings = wordings();
         return wordings.get(Math.clamp(searchTier, 0, wordings.size() - 1));
-    }
-
-    public boolean hasAnotherWording() {
-        return searchTier + 1 < wordings().size();
     }
 
     public boolean isPastBudget(Instant now, Duration budget) {
