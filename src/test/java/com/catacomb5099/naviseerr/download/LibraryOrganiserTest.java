@@ -121,7 +121,9 @@ class LibraryOrganiserTest {
 
     @Test
     void sanitise_makesANameLegalOnEveryFilesystem() {
-        assertEquals("AC_DC_ Back In Black", LibraryOrganiser.sanitise("AC/DC: Back In Black"));
+        assertEquals("AC_DC - Back In Black", LibraryOrganiser.sanitise("AC/DC: Back In Black"));
+        assertEquals("E2E Road Trip - Été", LibraryOrganiser.sanitise("E2E Road Trip: Été"));
+        assertEquals("Late -", LibraryOrganiser.sanitise("Late:"));
         assertEquals("What_", LibraryOrganiser.sanitise(" What?  "));
         assertEquals("Trailing", LibraryOrganiser.sanitise("Trailing... "));
         assertEquals("hidden", LibraryOrganiser.sanitise(".hidden"));
@@ -336,7 +338,7 @@ class LibraryOrganiserTest {
         put(downloads.resolve("d"), "track.flac");
 
         Path filed = organiser.file(song("d\\track.flac", "Who? Me: Yes", "AC/DC"), NOW).block();
-        assertEquals(root.resolve("AC_DC/Who_ Me_ Yes/track.flac"), filed);
+        assertEquals(root.resolve("AC_DC/Who_ Me - Yes/track.flac"), filed);
 
         put(downloads.resolve("d"), "other.flac");
         Path unnamed = organiser.file(song("d\\other.flac", null), NOW).block();
@@ -442,7 +444,7 @@ class LibraryOrganiserTest {
 
         Path written = organiser.writePlaylist("Mix: 1989?", entries).block();
 
-        assertEquals(root.resolve("Playlists/Mix_ 1989_.m3u8"), written);
+        assertEquals(root.resolve("Playlists/Mix - 1989_.m3u8"), written);
         byte[] bytes = Files.readAllBytes(written);
         assertNotEquals(0xEF, bytes[0] & 0xFF, "no BOM");
         String text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
