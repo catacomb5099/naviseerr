@@ -108,7 +108,8 @@ git pull && docker compose up -d --build
 - **"Username taken".** The web app keeps its "Not connected to Soulseek" strip, and
   `docker compose logs slskd` says "invalid username or password": someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,
-  then `docker compose restart slskd` (slskd tries to log in once and then waits).
+  then `docker compose restart slskd` (slskd tries to log in once and then waits). The strip goes
+  within about 30 seconds of the login working, or reload the page.
 - **Linux: permission errors** ("permission denied", "Could not file song"). Every container runs as
   one user, `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into
   `LIBRARY_DIR`: set them to the folder's owner (`ls -ln` shows its numbers; `id -u` and `id -g` show

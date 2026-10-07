@@ -11,7 +11,7 @@ import java.time.Duration;
  * {@code GET /status}: is this install's Soulseek client logged in? The one newcomer question the app
  * could not answer before -- a wrong or taken username left the web app silent until a download
  * failed two minutes later. The web app polls it with the downloads feed and shows a strip while
- * {@code connected} is false.
+ * {@code loggedIn} is false.
  */
 @RestController
 public class StatusController {
@@ -39,6 +39,9 @@ public class StatusController {
 
     public record StatusView(SoulseekStatus soulseek) {}
 
-    /** {@code state} is slskd's own word ("Connected, LoggedIn", "Disconnected"); {@code detail} only with UNREACHABLE. */
+    /**
+     * {@code state} is slskd's own word: "None" before it has ever tried to connect, "Disconnected",
+     * "Connected, LoggedIn"; {@code detail} only with UNREACHABLE.
+     */
     public record SoulseekStatus(boolean connected, boolean loggedIn, String state, String detail) {}
 }
