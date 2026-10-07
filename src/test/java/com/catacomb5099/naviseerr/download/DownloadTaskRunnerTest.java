@@ -484,12 +484,30 @@ class DownloadTaskRunnerTest {
     @Test
     void pass_whenNothingIsClaimed_andTheKeepAliveCallFails_isSwallowedNotPropagated() {
         captureRunnerLogs();
-        when(slskdService.getServerState()).thenReturn(Mono.error(new RuntimeException("slskd is down")));
+        when(slskdService.getServerState()).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
 
         assertDoesNotThrow(() -> runner.pass().block());
 
         verify(repository).concludeDownloads();
-        assertOneWarningLineAndNoStackTrace("slskd is down");
+        assertOneWarningLineAndNoStackTrace("Operation timed out");
+    }
+
+    @Test
+    void anErrorThatIsNotSlskd_stillLetsThePassConclude_butKeepsItsStackTrace() {
+        captureRunnerLogs();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
+                .thenReturn(Flux.error(new IllegalStateException("database gone")));
+
+        assertDoesNotThrow(() -> runner.pass().block());
+
+        verify(repository).concludeDownloads();
+        // Not slskd's fault, so not slskd's one-liner: a database failure or a bug is logged as an ERROR
+        // with its trace, as before -- the one-line treatment is for WebClientException only.
+        List<ILoggingEvent> loud = warningsAndWorse();
+        assertEquals(1, loud.size(), () -> "one ERROR, got " + loud);
+        assertEquals(Level.ERROR, loud.getFirst().getLevel());
+        assertTrue(loud.getFirst().getThrowableProxy() != null, "the stack trace is kept");
+        assertTrue(loud.getFirst().getThrowableProxy().getMessage().contains("database gone"));
     }
 
     @Test

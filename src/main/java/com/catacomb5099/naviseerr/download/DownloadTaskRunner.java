@@ -16,6 +16,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientException;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -118,9 +119,15 @@ public class DownloadTaskRunner {
                         // slskd being unreachable is one fact, worth one line: the rest of the pass
                         // (concluding finished downloads, filing their files) needs no slskd at all,
                         // so it must not be skipped because the batched calls failed (07-10-2026).
+                        // Only slskd's failures are that fact; anything else (the database, a bug)
+                        // keeps its stack trace, as DownloadStepExecutor and AlbumSearchStep draw it.
                         .onErrorResume(error -> {
-                            log.warn("Could not step downloads this pass; slskd may be unreachable: {}",
-                                    error.toString());
+                            if (error instanceof WebClientException) {
+                                log.warn("Could not step downloads this pass; slskd is unreachable: {}",
+                                        DownloadStateMachine.describe(error));
+                            } else {
+                                log.error("Could not step downloads this pass", error);
+                            }
                             return Mono.empty();
                         }))
                 .then(repository.concludeDownloads()
