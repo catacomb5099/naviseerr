@@ -118,7 +118,8 @@ are load-bearing on the UI, not stylistic):
 | `Track.id` | `videoId` | a real, stable YouTube id — replaces LastFM's frequently-empty `mbid` |
 | `Track.iconURL` / `Album.iconURL` | `thumbnailUrl` | capital `URL` — the client mirrors this casing |
 | `Artist.iconUrl` | `thumbnailUrl` | lowercase `Url` — a **different** casing, for `Artist` only |
-| `Track.artists` / `Album.artists` | `artists[].name` | display **names**, never `channelId` — the client `join(', ')`s this directly |
+| `Track.artists` / `Album.artists` | `artists[].name` | display **names**; the client renders them through its `ArtistNames` piece |
+| `Track.artistIds` / `Album.artistIds` | `artists[].channelId` | index-aligned with `artists`, `null` where YouTube has no channel; the client links a name to `/artist/{id}` when one is present (plain text otherwise) |
 | `Track.streamURL` | `""` | the adapter exposes no streaming path by design; unread by the client either way |
 | `Track.albumId` | `album.browseId` | a real `MPREb_…` id — replaces the old hardcoded `"lol"` (see [gotchas.md](gotchas.md) #5) |
 | `Track.plays` | `views` + `" plays"`, else null | "7.2M" becomes "7.2M plays", the wording album tracks carry; never parsed (YouTube abbreviates it). Null on the Top result card |
