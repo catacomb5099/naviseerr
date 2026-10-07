@@ -66,10 +66,25 @@ public class ArtistController {
         return ytMusicService.getArtistInfo(channelId)
                 .flatMap(artist -> featuredOn(artist)
                         .map(playlists -> ArtistView.from(artist, playlists, channelId)))
-                .doOnNext(view -> log.info("Resolved artist '{}' ({}): {} songs, {} albums, {} singles, {} playlists, {} similar",
-                        view.name(), channelId, view.topSongs().size(), view.albums().size(), view.singles().size(),
-                        view.playlists().size(), view.similarArtists().size()));
+                .doOnNext(view -> {
+                    log.info("Resolved artist '{}' ({}): {} songs, {} albums, {} singles, {} playlists, {} similar",
+                            view.name(), channelId, view.topSongs().size(), view.albums().size(), view.singles().size(),
+                            view.playlists().size(), view.similarArtists().size());
+                    if (!view.similarArtists().isEmpty() && view.similarArtists().stream().allMatch(similar -> similar.getIconUrl().isEmpty())) {
+                        log.warn(STALE_ADAPTER_WARNING, view.name(), channelId, view.similarArtists().size());
+                    }
+                });
     }
+
+    /**
+     * YouTube supplies a picture for every related artist, so a shelf with none is not YouTube's
+     * doing: the ytmusic-adapter answering predates 28-09-2026 (adapter PR #4, which started sending
+     * {@code related[].thumbnailUrl}). That happened twice with a stale Docker image while the code in
+     * every repo was already right, so it gets a WARN instead of staying silent.
+     */
+    static final String STALE_ADAPTER_WARNING = "Artist '{}' ({}): all {} similar artists arrived without a picture. "
+            + "The ytmusic-adapter is probably out of date (older than 28-09-2026); rebuild it with "
+            + "`docker compose up -d --build ytmusic-adapter` (all-in-one) or restart the dev compose stack";
 
     private Mono<List<Playlist>> featuredOn(YtMusicDetailResponse.Artist artist) {
         String name = artist.getName();

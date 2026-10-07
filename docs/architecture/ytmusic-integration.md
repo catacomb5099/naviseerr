@@ -362,7 +362,9 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   of *available* tracks after the `isAvailable: false` filter. The two can legitimately differ.
 - No caching — every search hits the adapter (and, behind it, YouTube) fresh.
 - Similar artists' pictures (`Artist.iconUrl`) come from the adapter's `related[].thumbnailUrl`;
-  an adapter image older than that field leaves them `""`, no error. Rebuild the adapter image.
+  an adapter image older than that field (28-09-2026) leaves them `""`, no error. Because YouTube
+  supplies one for every related artist, `ArtistController` logs a WARN when all of them are blank,
+  naming the stale adapter as the cause. Rebuild the adapter image (`docker compose up -d --build`).
 - Top songs on the artist page use YouTube's predictable per-video thumbnail because the adapter's
   `TrackDto` carries no artwork; same picture the collection view uses for playlist tracks.
 - On All, songs that only the mixed page returned carry `Track.albumId` `""` (the mixed page gives
