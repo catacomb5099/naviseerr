@@ -69,6 +69,8 @@ public class DownloadTaskRunner {
     /** When slskd first said it is not logged in to Soulseek; null while it is. One per process. */
     private volatile Instant soulseekOfflineSince;
     private volatile boolean pastCeilingLogged;
+    /** When the previous pass held the clocks; null while Soulseek is up. Sets how far the next hold moves them. */
+    private volatile Instant lastPausedAt;
 
     public DownloadTaskRunner(
             DownloadTaskRepository repository,
@@ -114,8 +116,9 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * Four steps, in order, every tick: admit new requests, step whatever is due, conclude any
-     * download whose songs have all finished, then file finished songs into the library. Conclusion
+     * Every tick, in order: admit new requests; ask slskd whether it is logged in to Soulseek and either
+     * step whatever is due or hold every unfinished row's clocks ({@link #stepOrPause}); conclude any
+     * download whose songs have all finished; then file finished songs into the library. Conclusion
      * runs after stepping so a download that finished during this very pass reports its outcome on
      * the same tick rather than lingering a full interval in IN_PROGRESS -- and runs unconditionally,
      * so one that was missed (a crash between the last task's terminal write and here) is picked up
@@ -421,8 +424,8 @@ public class DownloadTaskRunner {
      * One {@code GET /server} first -- the call the idle keep-alive used to make, now every pass. While
      * slskd is not logged in to Soulseek (the internet is down, or slskd is reconnecting) nothing can be
      * searched or fetched, so nothing is claimed or stepped; instead every unfinished row's clocks move
-     * forward by one loop interval, and no search or download budget runs down while nothing could be
-     * done (07-10-2026). Conclusion and filing still run after this. The transitions are logged, not
+     * forward by the time since the previous held pass, and no search or download budget runs down while
+     * nothing could be done (07-10-2026). Conclusion and filing still run after this. The transitions are logged, not
      * the passes. Past {@link #OFFLINE_PAUSE_CEILING} the pass steps as before.
      */
     private Mono<Void> stepOrPause(Instant now) {
@@ -431,6 +434,7 @@ public class DownloadTaskRunner {
             if (state.isLoggedIn()) {
                 if (since != null) {
                     soulseekOfflineSince = null;
+                    lastPausedAt = null;
                     pastCeilingLogged = false;
                     log.info("Soulseek is back after {} s offline; downloads resume", Duration.between(since, now).toSeconds());
                 }
@@ -451,7 +455,14 @@ public class DownloadTaskRunner {
                 }
                 return stepDueTasks(now);
             }
-            return repository.pauseDueWork(now, loopInterval)
+            // By the time since the previous held pass, not by the interval: admission runs before this
+            // gate and, with the internet down, waits on ytmusic-adapter for every PENDING download, so
+            // a pass can take 45 s -- shifting by 2 s then would let the budgets run down at nearly real
+            // speed. Never less than the interval (the first held pass has no previous one).
+            Duration by = lastPausedAt == null ? loopInterval : Duration.between(lastPausedAt, now);
+            if (by.compareTo(loopInterval) < 0) by = loopInterval;
+            lastPausedAt = now;
+            return repository.pauseDueWork(now, by)
                     .doOnNext(rows -> log.debug("Soulseek offline: held the clocks of {} unfinished row(s)", rows))
                     .then();
         });

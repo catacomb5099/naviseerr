@@ -473,7 +473,7 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
-    void pass_whenNothingIsClaimed_stillMakesAKeepAliveCall_toExerciseTheConnectionPool() {
+    void pass_whenNothingIsClaimed_stillAsksSlskdForItsServerState_andNothingElse() {
         runner.pass().block();
 
         verify(slskdService).getServerState();
@@ -482,7 +482,7 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
-    void pass_whenNothingIsClaimed_andTheKeepAliveCallFails_isSwallowedNotPropagated() {
+    void pass_whenTheServerStateCallFails_isSwallowedNotPropagated_atTheCostOfOneLine() {
         captureRunnerLogs();
         when(slskdService.getServerState()).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
 
@@ -554,6 +554,25 @@ class DownloadTaskRunnerTest {
         // The outage is logged once, when it starts -- not on every pass, and not as a warning.
         assertEquals(1, linesSaying("Soulseek is offline"));
         assertTrue(warningsAndWorse().isEmpty(), () -> "nothing to warn about: " + warningsAndWorse());
+    }
+
+    @Test
+    void theClocksMoveByTheTimeSinceThePreviousHeldPass_notByTheInterval() {
+        // Admission runs before the gate and can wait on ytmusic-adapter for 45 s with the internet down,
+        // so the second held pass comes 45 s after the first, not 2 s: the clocks must move by 45 s.
+        Clock clock = mock(Clock.class);
+        when(clock.instant()).thenReturn(T0, T0.plusSeconds(45));
+        runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
+                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, clock,
+                Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
+        when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));
+        when(repository.pauseDueWork(any(), any())).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+        runner.pass().block();
+
+        verify(repository).pauseDueWork(T0, Duration.ofSeconds(2));   // the first hold has no previous one
+        verify(repository).pauseDueWork(T0.plusSeconds(45), Duration.ofSeconds(45));
     }
 
     @Test
