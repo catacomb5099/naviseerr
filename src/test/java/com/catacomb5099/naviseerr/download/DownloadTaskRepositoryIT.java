@@ -85,6 +85,41 @@ class DownloadTaskRepositoryIT {
         return id;
     }
 
+    // ---- Soulseek offline: pauseDueWork (07-10-2026) ---------------------------------------------
+
+    /** Each row's [phase_entered_at, next_attempt_at] for one download, in one table. */
+    private List<Instant[]> clocksOf(String table, UUID downloadId) {
+        return template.getDatabaseClient()
+                .sql("SELECT phase_entered_at, next_attempt_at FROM " + table + " WHERE download_id = :id ORDER BY next_attempt_at")
+                .bind("id", downloadId)
+                .map(row -> new Instant[] { row.get("phase_entered_at", Instant.class), row.get("next_attempt_at", Instant.class) })
+                .all().collectList().block();
+    }
+
+    @Test
+    void pauseDueWork_movesEveryUnfinishedSongsAndAlbumSearchsClocksForward_andLeavesFinishedRowsAlone() {
+        UUID due = admitOneSong("PENDING");                     // SEARCH_INIT, due at NOW
+        UUID finished = admitOneSong("PENDING");
+        template.getDatabaseClient().sql("UPDATE download_tasks SET phase = 'SUCCEEDED', finished_at = :now WHERE download_id = :id")
+                .bind("now", NOW).bind("id", finished).fetch().rowsUpdated().block();
+        UUID album = insertDownload("PENDING", "ALBUM", "MPREb_pause");
+        repository.createTasks(album, List.of(DownloadTask.initial(album, "yt-a1", "a1", NOW),
+                DownloadTask.initial(album, "yt-a2", "a2", NOW)), NOW, NOW.plusSeconds(240)).block();   // songs held, album search due
+
+        Long paused = repository.pauseDueWork(NOW.plusSeconds(10), Duration.ofSeconds(2)).block();
+
+        assertEquals(4L, paused, "the due song, the two held album songs and the album search");
+        // Overdue (due at NOW, it is NOW+10): due again one pause from now; the budget clock moved by the pause.
+        assertArrayEquals(new Instant[] { NOW.plusSeconds(2), NOW.plusSeconds(12) }, clocksOf("download_tasks", due).getFirst());
+        assertArrayEquals(new Instant[] { NOW.plusSeconds(2), NOW.plusSeconds(12) }, clocksOf("album_searches", album).getFirst());
+        // Held until NOW+240: the hold keeps its distance.
+        for (Instant[] clocks : clocksOf("download_tasks", album)) {
+            assertArrayEquals(new Instant[] { NOW.plusSeconds(2), NOW.plusSeconds(242) }, clocks);
+        }
+        // History is left alone.
+        assertArrayEquals(new Instant[] { NOW, NOW }, clocksOf("download_tasks", finished).getFirst());
+    }
+
     @Test
     void admitDownloads_returnsPendingRequestsWithTheirTypeAndId() {
         UUID id = insertDownload("PENDING", "ALBUM");

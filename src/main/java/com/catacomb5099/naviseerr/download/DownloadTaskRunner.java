@@ -59,6 +59,16 @@ public class DownloadTaskRunner {
     /** Identifies this process in lease_owner. Nothing depends on it surviving a restart. */
     private final String instanceId = UUID.randomUUID().toString();
     private Disposable subscription;
+    /**
+     * ponytail: a constant, not a config key. While Soulseek is offline the pass holds every unfinished
+     * row's clocks ({@link #stepOrPause}); past this long it stops and steps as before, so the songs
+     * fail as SOULSEEK_OFFLINE from slskd's 409 and a wrong Soulseek password still ends in a red card
+     * that says why, not in cards that say Searching for ever. Make it a property if it ever needs tuning.
+     */
+    static final Duration OFFLINE_PAUSE_CEILING = Duration.ofMinutes(30);
+    /** When slskd first said it is not logged in to Soulseek; null while it is. One per process. */
+    private volatile Instant soulseekOfflineSince;
+    private volatile boolean pastCeilingLogged;
 
     public DownloadTaskRunner(
             DownloadTaskRepository repository,
@@ -115,7 +125,7 @@ public class DownloadTaskRunner {
     Mono<Void> pass() {
         Instant now = clock.instant();
         return admit(now)
-                .then(stepDueTasks(now)
+                .then(stepOrPause(now)
                         // slskd being unreachable is one fact, worth one line: the rest of the pass
                         // (concluding finished downloads, filing their files) needs no slskd at all,
                         // so it must not be skipped because the batched calls failed (07-10-2026).
@@ -408,6 +418,46 @@ public class DownloadTaskRunner {
     }
 
     /**
+     * One {@code GET /server} first -- the call the idle keep-alive used to make, now every pass. While
+     * slskd is not logged in to Soulseek (the internet is down, or slskd is reconnecting) nothing can be
+     * searched or fetched, so nothing is claimed or stepped; instead every unfinished row's clocks move
+     * forward by one loop interval, and no search or download budget runs down while nothing could be
+     * done (07-10-2026). Conclusion and filing still run after this. The transitions are logged, not
+     * the passes. Past {@link #OFFLINE_PAUSE_CEILING} the pass steps as before.
+     */
+    private Mono<Void> stepOrPause(Instant now) {
+        return slskdService.getServerState().flatMap(state -> {
+            Instant since = soulseekOfflineSince;
+            if (state.isLoggedIn()) {
+                if (since != null) {
+                    soulseekOfflineSince = null;
+                    pastCeilingLogged = false;
+                    log.info("Soulseek is back after {} s offline; downloads resume", Duration.between(since, now).toSeconds());
+                }
+                return stepDueTasks(now);
+            }
+            if (since == null) {
+                since = now;
+                soulseekOfflineSince = now;
+                log.info("Soulseek is offline (slskd is not logged in); downloads wait with their clocks held, "
+                        + "for up to {} minutes", OFFLINE_PAUSE_CEILING.toMinutes());
+            }
+            if (Duration.between(since, now).compareTo(OFFLINE_PAUSE_CEILING) >= 0) {
+                if (!pastCeilingLogged) {
+                    pastCeilingLogged = true;
+                    log.warn("Soulseek has been offline for {} minutes; downloads resume and will fail as "
+                            + "SOULSEEK_OFFLINE until slskd logs in (check its Soulseek username and password)",
+                            OFFLINE_PAUSE_CEILING.toMinutes());
+                }
+                return stepDueTasks(now);
+            }
+            return repository.pauseDueWork(now, loopInterval)
+                    .doOnNext(rows -> log.debug("Soulseek offline: held the clocks of {} unfinished row(s)", rows))
+                    .then();
+        });
+    }
+
+    /**
      * Gates only the two steps that START something in slskd: a transfer (DOWNLOAD_INIT) and a search
      * (SEARCH_INIT). Polls of already-running searches and transfers are never gated — polling is one
      * cheap GET, and starving it stalls work slskd is happily finishing. The search gate is a count,
@@ -450,20 +500,11 @@ public class DownloadTaskRunner {
     private Mono<Void> stepAll(List<AlbumSearch> albums, List<DownloadTask> claimed,
                                List<DownloadTaskRepository.TransferInFlight> ours) {
         if (claimed.isEmpty() && albums.isEmpty()) {
-            // Nothing due this pass means the batched calls below never run, so a fully idle system
-            // would otherwise make zero slskd calls between real downloads -- leaving the connection
-            // pool free to go stale for however long that gap is (see SlskdConfig's timeout/pool
-            // comment for what that costs once a real download finally does reuse one). GET /server
-            // is the cheapest call slskd exposes (a single small object, no list to page through),
-            // so it's used purely to exercise the pool on the same loop-interval-ms cadence as normal
-            // operation -- no new schedule, and a lighter endpoint than reusing GET /searches.
-            return slskdService.getServerState()
-                    .then()
-                    .onErrorResume(error -> {
-                        // One line every pass while slskd is down is plenty; its stack trace is not.
-                        log.warn("slskd keep-alive check failed: {}", error.toString());
-                        return Mono.empty();
-                    });
+            // Nothing due this pass means the batched calls below never run. The GET /server that
+            // stepOrPause made at the top of the pass has already exercised the connection pool (see
+            // SlskdConfig's timeout/pool comment for what a stale pool costs once a real download
+            // finally reuses one), so an idle pass needs nothing more here.
+            return Mono.empty();
         }
         // slskd returns its whole search history, so narrow to our own rows -- and drop null ids,
         // which collectMap would otherwise key on (the nested-response bug, search-side).

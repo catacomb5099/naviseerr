@@ -872,6 +872,42 @@ public class DownloadTaskRepository {
                 .doOnError(error -> log.error("Could not conclude finished downloads", error));
     }
 
+    /**
+     * Soulseek is offline (07-10-2026): nothing can be searched or fetched, so every unfinished song's
+     * and album search's clocks move forward by the pause -- the budgets measured from
+     * {@code phase_entered_at} and the due times -- and nothing times out or fails while nothing could
+     * be done. An overdue row becomes due one pause from now, so it is stepped first once Soulseek is
+     * back; a row due later keeps its distance. Both tables in one statement; the partial due indexes
+     * cover both WHEREs. No lease test: a row claimed by the pass before the outage is shifted too, and
+     * its lease simply expires.
+     */
+    private static final String PAUSE_DUE_WORK_SQL = """
+            WITH songs AS (
+                UPDATE download_tasks
+                   SET phase_entered_at = phase_entered_at + :seconds * interval '1 second',
+                       next_attempt_at = GREATEST(next_attempt_at, :now) + :seconds * interval '1 second'
+                 WHERE phase NOT IN ('SUCCEEDED', 'FAILED')
+                RETURNING 1
+            ), albums AS (
+                UPDATE album_searches
+                   SET phase_entered_at = phase_entered_at + :seconds * interval '1 second',
+                       next_attempt_at = GREATEST(next_attempt_at, :now) + :seconds * interval '1 second'
+                 WHERE phase <> 'DONE'
+                RETURNING 1
+            )
+            SELECT (SELECT count(*) FROM songs) + (SELECT count(*) FROM albums) AS paused
+            """;
+
+    /** Holds every unfinished row's clocks for {@code by}; returns how many rows were moved. */
+    public Mono<Long> pauseDueWork(Instant now, Duration by) {
+        return client.sql(PAUSE_DUE_WORK_SQL)
+                .bind("now", now)
+                .bind("seconds", by.toMillis() / 1000.0)
+                .fetch()
+                .one()
+                .map(row -> ((Number) row.get("paused")).longValue());
+    }
+
     public Mono<Long> failUnadmitted(UUID downloadId, DownloadFailureCode code, Instant now) {
         return client.sql(FAIL_UNADMITTED_SQL)
                 .bind("id", downloadId)
