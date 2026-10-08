@@ -83,9 +83,48 @@ Both are bug fixes in their own right and landed first:
 ## Not built
 
 - A `CANCELLED` status or stage (decision 1).
-- Per-song retry, an attempt counter, an attempt history table (decisions 2 and 4).
+- An attempt counter, an attempt history table (decision 4). Per-song retry: built 07-10-2026, see the addendum.
 - **A sweep for transfers whose slskd cancel was lost.** The escape hatch if best-effort cancels ever prove
   insufficient: a level-triggered step in the loop's pass that finds cancelled songs still holding an slskd
   transfer id, cancels the transfer, and clears the id.
 - Pause-on-hover for the panel's auto-dismiss (decision 6).
 - Authentication on the new endpoints, as on every endpoint today.
+
+## Addendum 07-10-2026: retry one song, even while the collection runs
+
+The owner asked for a Retry on a failed song inside a collection that is still downloading. Decision 2
+predicted it: it is `RETRY_SQL` with a `task_id` filter.
+
+- **`POST /downloads/{id}/retry?taskId=`**, `taskId` optional, mirroring cancel. Without it, today's
+  behaviour; with it, that one `FAILED` song (a cancelled one included, decision 3) is reset in place
+  whatever the download's status. A failed song's download can only be running, failed or partly
+  downloaded, so no status test is needed for the one-song case.
+- **The whole-download Retry is still refused while the download runs** (decision 2). Only one song at a
+  time may be retried on a live collection.
+- **A live download is left alone.** The reset song is `SEARCH_INIT` and due now, so the next pass claims
+  it like a new one; the conclusion rule cannot close the download while it has a live song. A download that
+  had concluded reopens exactly as a whole retry reopens it (`organised_at` cleared too, so the playlist
+  file is rewritten once the song lands).
+- **The statement now reports how many songs it reset** (N for a whole retry, 1 or 0 for one song) instead
+  of whether the download reopened; the endpoint only tests "more than zero". The reopen is a side CTE.
+- **The fallback to re-queueing an unadmitted failure runs only for a whole retry**: a download with no
+  songs has no song to retry, and a wrong `taskId` must not re-queue it.
+- **A retried album track searches on its own**; the album's folder search is not re-run (as for a whole
+  retry). `track_number` and `duration_seconds` stay on the row, so the length filter still applies.
+- **The collection's stage word steps back** to "Starting"/"Searching" while the retried song searches:
+  the card reports its least advanced song. Existing rule, not a regression.
+- **No library re-check on retry**, as before: a song someone filed in the meantime is searched again.
+
+### Known race, recorded, not closed
+
+A one-song retry on a live download can commit between the conclusion statement's snapshot (every song
+terminal) and its write. The download then reads failed or partly downloaded while one song is live; the
+song still runs and finishes, but the download is never re-concluded, so the card keeps a terminal word
+while its counts move and the whole Retry answers 409. Window: the milliseconds one conclude statement
+takes, once per pass; a whole retry cannot hit it because conclusion skips finished downloads at scan
+time. The recorded fix, the loop's own level-triggered style: one idempotent statement in the pass after
+conclusion, `UPDATE downloads SET status = 'IN_PROGRESS', finished_at = NULL WHERE status IN ('FAILED',
+'PARTIAL_SUCCESS', 'SUCCEEDED') AND EXISTS (SELECT 1 FROM download_tasks t WHERE t.download_id =
+downloads.download_id AND t.phase NOT IN ('SUCCEEDED', 'FAILED'))`, driven by `idx_download_tasks_due`.
+Shipped without it (a `ponytail:` note on `RETRY_SQL` names the window and this statement); add it the
+first time a stuck card is seen.

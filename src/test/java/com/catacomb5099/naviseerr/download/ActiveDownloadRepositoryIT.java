@@ -597,7 +597,7 @@ class ActiveDownloadRepositoryIT {
 
         // The retry is the newest write of the three, so a list sorted by "last changed" would put
         // the oldest request on top.
-        assertEquals(1L, downloadService.retry(oldest, NOW).block());
+        assertEquals(1L, downloadService.retry(oldest, null, NOW).block());
 
         assertEquals(List.of(newest, middle, oldest), allIds());
     }

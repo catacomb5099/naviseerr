@@ -86,23 +86,32 @@ class DownloadServiceTest {
 
     @Test
     void retry_thatResetSongs_doesNotReadmit() {
-        when(repository.retry(id, NOW)).thenReturn(Mono.just(1L));
-        assertEquals(1L, service.retry(id, NOW).block());
+        when(repository.retry(id, null, NOW)).thenReturn(Mono.just(1L));
+        assertEquals(1L, service.retry(id, null, NOW).block());
         verify(repository, never()).readmit(any());
     }
 
     @Test
     void retry_withNothingToReset_fallsBackToReadmitting() {
-        when(repository.retry(id, NOW)).thenReturn(Mono.just(0L));
+        when(repository.retry(id, null, NOW)).thenReturn(Mono.just(0L));
         when(repository.readmit(id)).thenReturn(Mono.just(1L));
-        assertEquals(1L, service.retry(id, NOW).block());
+        assertEquals(1L, service.retry(id, null, NOW).block());
     }
 
     @Test
     void retry_withNothingToRetryOrReadmit_isZero() {
-        when(repository.retry(id, NOW)).thenReturn(Mono.just(0L));
+        when(repository.retry(id, null, NOW)).thenReturn(Mono.just(0L));
         when(repository.readmit(id)).thenReturn(Mono.just(0L));
 
-        assertEquals(0L, service.retry(id, NOW).block());   // the endpoint turns this 0 into its 409
+        assertEquals(0L, service.retry(id, null, NOW).block());   // the endpoint turns this 0 into its 409
+    }
+
+    @Test
+    void retry_ofOneSong_neverReadmits() {
+        UUID taskId = UUID.randomUUID();
+        when(repository.retry(id, taskId, NOW)).thenReturn(Mono.just(0L));
+
+        assertEquals(0L, service.retry(id, taskId, NOW).block());
+        verify(repository, never()).readmit(any());   // a bogus taskId must not re-queue an unadmitted failure
     }
 }
