@@ -82,6 +82,10 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
 git pull && docker compose up -d --build
 ```
 
+Keep the `--build`: `docker compose up -d` on its own only restarts what you already have and never
+rebuilds the YouTube Music helper (`ytmusic-adapter`), so an update that needs a newer helper, such as
+the pictures of similar artists, quietly stays off. The server then prints a warning, see Troubleshooting.
+
 ### Stopping, removing and backing up
 
 - **Stop:** `docker compose stop`, or `docker compose down`, which also removes the containers. Both
@@ -114,6 +118,9 @@ git pull && docker compose up -d --build
   one user, `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into
   `LIBRARY_DIR`: set them to the folder's owner (`ls -ln` shows its numbers; `id -u` and `id -g` show
   yours), then run `docker compose up -d`.
+- **Similar artists have no pictures** (grey circles with names on an artist page), and
+  `docker compose logs naviseerr` says "similar artists arrived without a picture ... ytmusic-adapter
+  is probably out of date". The YouTube Music helper is an old build: run `docker compose up -d --build`.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.

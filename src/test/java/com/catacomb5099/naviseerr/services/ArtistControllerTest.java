@@ -10,6 +10,9 @@ import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicDetailResponse;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import tools.jackson.databind.json.JsonMapper;
@@ -22,6 +25,8 @@ import java.util.List;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -32,6 +37,7 @@ import static org.mockito.Mockito.*;
  * names ({@code iconURL} vs {@code iconUrl}), the empty-not-null lists and the 404/502 handlers are
  * the contract, not the Java record.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class ArtistControllerTest {
 
     private static final String PIXIES = "UCRt5ckI8kNVMFr-jyj1IIVg";
@@ -284,6 +290,33 @@ class ArtistControllerTest {
                 .jsonPath("$.name").isEqualTo("Pixies")
                 .jsonPath("$.playlists").isArray()
                 .jsonPath("$.playlists.length()").isEqualTo(0);
+    }
+
+    /**
+     * The one way every picture goes missing at once is an adapter older than 28-09-2026 (it sends
+     * no {@code related[].thumbnailUrl}); that must show up in the log, not silently as grey discs.
+     * One missing picture among several is YouTube's business and stays quiet.
+     */
+    @Test
+    void similarArtistsAllWithoutPictures_logOneWarnNamingAStaleAdapter(CapturedOutput output) {
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(playlists(0)));
+        YtMusicDetailResponse.Artist mixed = pixies(); // The Breeders with a picture, Frank Black without
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(mixed));
+        client.get().uri("/artists/" + PIXIES).exchange().expectStatus().isOk();
+        assertFalse(output.getOut().contains("arrived without a picture"), "one missing picture is not a stale adapter");
+
+        YtMusicDetailResponse.Artist stale = pixies();
+        stale.getRelated().forEach(related -> related.setThumbnailUrl(null));
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(stale));
+        client.get().uri("/artists/" + PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.similarArtists.length()").isEqualTo(2)
+                .jsonPath("$.similarArtists[0].iconUrl").isEqualTo("")
+                .jsonPath("$.similarArtists[1].iconUrl").isEqualTo("");
+        assertTrue(output.getOut().contains("WARN"), output.getOut());
+        assertTrue(output.getOut().contains("Artist 'Pixies' (" + PIXIES + "): all 2 similar artists arrived without a picture"), output.getOut());
+        assertTrue(output.getOut().contains("ytmusic-adapter is probably out of date (older than 28-09-2026); rebuild it"), output.getOut());
     }
 
     @Test
