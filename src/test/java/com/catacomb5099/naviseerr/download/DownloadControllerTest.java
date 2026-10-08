@@ -208,6 +208,74 @@ class DownloadControllerTest {
         assertTrue(response.getBody().songs().isEmpty(), "not admitted yet: no task rows, not an error");
     }
 
+    // ---- the lists a person picks a file from ----------------------------------------------------
+
+    @Test
+    void candidates_isTheListAsJson_withIsCurrentOnTheWire() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        TaskCandidatesView list = new TaskCandidatesView(taskId, PickListStatus.READY, null, "Live Forever", NOW,
+                DownloadStage.DOWNLOADING, new TaskCandidatesView.Current("alice", "music/alice/song.flac"),
+                List.of(new TaskCandidatesView.Candidate("alice", "music/alice/song.flac", 1000L, null, 240, "flac",
+                        1_000_000, true, 0, "EXACT", true)));
+        when(downloadService.candidates(id, taskId)).thenReturn(Mono.just(list));
+
+        WebTestClient.bindToController(controller).build()
+                .get().uri("/downloads/" + id + "/tasks/" + taskId + "/candidates")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("READY")
+                .jsonPath("$.reason").isEmpty()
+                .jsonPath("$.query").isEqualTo("Live Forever")
+                .jsonPath("$.songStage").isEqualTo("DOWNLOADING")
+                .jsonPath("$.current.username").isEqualTo("alice")
+                .jsonPath("$.candidates[0].isCurrent").isEqualTo(true)
+                .jsonPath("$.candidates[0].bitrateKbps").isEmpty()
+                .jsonPath("$.candidates[0].lengthSeconds").isEqualTo(240);
+    }
+
+    @Test
+    void candidates_ofAnUnknownSong_is404WithAMessage() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        when(downloadService.candidates(id, taskId)).thenReturn(Mono.empty());
+
+        WebTestClient.bindToController(controller).build()
+                .get().uri("/downloads/" + id + "/tasks/" + taskId + "/candidates")
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody().jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    void albumCandidates_isTheFolderList_or404_or409ForAnythingButAnAlbum() {
+        UUID id = UUID.randomUUID();
+        AlbumCandidatesView list = new AlbumCandidatesView(id, PickListStatus.NONE, "NO_WHOLE_FOLDER", "Definitely Maybe",
+                null, 11, List.of());
+        when(downloadService.albumCandidates(id)).thenReturn(Mono.just(list));
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+
+        http.get().uri("/downloads/" + id + "/album-candidates").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("NONE")
+                .jsonPath("$.reason").isEqualTo("NO_WHOLE_FOLDER")
+                .jsonPath("$.songCount").isEqualTo(11);
+
+        when(downloadService.albumCandidates(id)).thenReturn(Mono.empty());
+        http.get().uri("/downloads/" + id + "/album-candidates").exchange()
+                .expectStatus().isNotFound()
+                .expectBody().jsonPath("$.message").isNotEmpty();
+
+        when(downloadService.albumCandidates(id)).thenReturn(Mono.error(new DownloadService.NotAnAlbumException(id)));
+        http.get().uri("/downloads/" + id + "/album-candidates").exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody()
+                .jsonPath("$.reason").isEqualTo("NOT_AN_ALBUM")
+                .jsonPath("$.message").isNotEmpty();
+    }
+
     // ---- requesting a download -----------------------------------------------------------------
 
     @Test

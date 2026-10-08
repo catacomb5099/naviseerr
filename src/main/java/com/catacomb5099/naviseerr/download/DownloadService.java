@@ -8,7 +8,11 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -144,6 +148,120 @@ public class DownloadService {
                 .doOnNext(rows -> {
                     if (rows > 0) log.info("Retrying {} song(s) of download {}", rows, downloadId);
                 });
+    }
+
+    // ---- manual pick: the lists a person chooses from -----------------------------------------------
+
+    /** The album picker was asked about a download that is not an album; the controller answers 409. */
+    public static final class NotAnAlbumException extends RuntimeException {
+        NotAnAlbumException(UUID downloadId) {
+            super("Download " + downloadId + " is not an album");
+        }
+    }
+
+    /**
+     * Every file one song's search found, best first, for a person to choose from. The song's own
+     * remembered list when it has one; else, for an album's song that got its file from the album
+     * search and never searched on its own, one entry per remembered folder that holds it. Empty for an
+     * unknown download or song.
+     */
+    public Mono<TaskCandidatesView> candidates(UUID downloadId, UUID taskId) {
+        return repository.cachedSearch(downloadId, taskId).flatMap(song -> {
+            if (!song.files().isEmpty()) {
+                return Mono.just(view(song, song.files(), PickListStatus.READY, null));
+            }
+            return repository.cachedAlbumSearch(downloadId)
+                    .map(album -> album.holding(taskId).stream().map(folder -> folder.files().get(taskId)).toList())
+                    .defaultIfEmpty(List.of())
+                    .map(fromFolders -> fromFolders.isEmpty()
+                            ? view(song, fromFolders, statusOf(song), reasonOf(song))
+                            : view(song, fromFolders, PickListStatus.READY, null));
+        });
+    }
+
+    private static TaskCandidatesView view(DownloadTaskRepository.CachedSearch song, List<DownloadCandidate> files,
+                                           PickListStatus status, String reason) {
+        List<String> wordings = SearchQueryTiers.of(song.songName());
+        DownloadCandidate current = song.current();
+        return new TaskCandidatesView(song.taskId(), status, reason,
+                wordings.get(Math.clamp(song.searchTier(), 0, wordings.size() - 1)), song.searchedAt(),
+                ActiveDownloadRepository.toSongStage(song.phase()), TaskCandidatesView.Current.of(current),
+                files.stream().map(file -> TaskCandidatesView.Candidate.of(file, current)).toList());
+    }
+
+    private static PickListStatus statusOf(DownloadTaskRepository.CachedSearch song) {
+        return "SEARCH_INIT".equals(song.phase()) || "SEARCH_POLL".equals(song.phase())
+                ? PickListStatus.SEARCHING : PickListStatus.NONE;
+    }
+
+    /** Why a song past searching has no list; see {@link TaskCandidatesView#reason()}. */
+    private static String reasonOf(DownloadTaskRepository.CachedSearch song) {
+        if (statusOf(song) != PickListStatus.NONE) {
+            return null;
+        }
+        if (song.libraryPath() != null && song.slskdFilename() == null) {
+            return "ALREADY_IN_LIBRARY";
+        }
+        return song.searchedAt() != null ? "NO_RESULTS" : "BEFORE_CACHE";
+    }
+
+    /**
+     * The folders an album's search judged, best first, each with the file it holds for every song, and
+     * which folder the songs currently download from. Empty for an unknown download; an error for one
+     * that is not an album (playlists get no album picker).
+     */
+    public Mono<AlbumCandidatesView> albumCandidates(UUID downloadId) {
+        return repository.cachedAlbumSearch(downloadId).flatMap(album -> {
+            if (album.type() != DownloadType.ALBUM) {
+                return Mono.error(new NotAnAlbumException(downloadId));
+            }
+            return repository.songPicks(downloadId).collectList().map(songs -> albumView(downloadId, album, songs));
+        });
+    }
+
+    private static AlbumCandidatesView albumView(UUID downloadId, DownloadTaskRepository.CachedAlbumSearch album,
+                                                 List<DownloadTaskRepository.SongPick> songs) {
+        Map<UUID, DownloadTaskRepository.SongPick> byTask = songs.stream()
+                .collect(Collectors.toMap(DownloadTaskRepository.SongPick::taskId, song -> song));
+        List<AlbumCandidatesView.Folder> folders = album.folders().stream().map(folder -> {
+            List<AlbumCandidatesView.File> files = folder.files().entrySet().stream()
+                    .map(entry -> {
+                        DownloadTaskRepository.SongPick song = byTask.get(entry.getKey());
+                        DownloadCandidate file = entry.getValue();
+                        return new AlbumCandidatesView.File(song == null ? null : song.position(), entry.getKey(),
+                                LibraryOrganiser.baseName(file.filename()), song == null ? null : song.title(),
+                                file.size(), file.bitRate(), file.length(),
+                                com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor
+                                        .format(file.filename(), file.extension()));
+                    })
+                    .sorted(Comparator.comparing(AlbumCandidatesView.File::index,
+                            Comparator.nullsLast(Comparator.naturalOrder())))
+                    .toList();
+            int songsCurrent = (int) songs.stream()
+                    .filter(song -> folder.files().values().stream()
+                            .anyMatch(file -> TaskCandidatesView.sameFile(file, song.current())))
+                    .count();
+            return new AlbumCandidatesView.Folder(folder.username(), folder.path(), files.size(),
+                    folder.files().values().stream().mapToLong(DownloadCandidate::size).sum(), folder.uploadSpeed(),
+                    folder.hasFreeUploadSlot(), folder.queueLength(), folder.extras(), songsCurrent, songsCurrent > 0, files);
+        }).toList();
+        String query = album.title() == null ? null : AlbumSearch.builder().title(album.title()).artists(album.artists())
+                .searchTier(album.searchTier() == null ? 0 : album.searchTier()).build().searchQuery();
+        PickListStatus status;
+        String reason = null;
+        if (album.phase() == null) {
+            status = PickListStatus.NONE;
+            reason = "NO_ALBUM_SEARCH";
+        } else if (!folders.isEmpty()) {
+            status = PickListStatus.READY;
+        } else if (!"DONE".equals(album.phase())) {
+            status = PickListStatus.SEARCHING;
+        } else {
+            status = PickListStatus.NONE;
+            reason = List.of("NO_WHOLE_FOLDER", "NOTHING_TO_SEARCH", "SEARCH_FAILED").contains(album.outcome())
+                    ? "NO_WHOLE_FOLDER" : "BEFORE_CACHE";
+        }
+        return new AlbumCandidatesView(downloadId, status, reason, query, album.foldersAt(), songs.size(), folders);
     }
 
     /** Same shape as DownloadStepExecutor.cancelIfAbandoned: the decision is written; slskd is told after, best effort. */

@@ -815,6 +815,19 @@ public class DownloadTaskRepository {
              WHERE d.download_id = :id
             """;
 
+    /**
+     * Every song of one download with the file it currently points at, in track order: what the album
+     * picker joins its folders against (index, title, and which folder is current).
+     */
+    private static final String SONG_PICKS_SQL = """
+            SELECT t.task_id, t.position, COALESCE(t.track_title, m.title) AS title, t.phase,
+                   t.candidates, t.candidate_index
+              FROM download_tasks t
+              LEFT JOIN media_items m ON m.youtube_id = t.youtube_id
+             WHERE t.download_id = :id
+             ORDER BY t.position NULLS LAST, t.phase_entered_at, t.task_id
+            """;
+
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
             new TypeReference<>() {};
     private static final TypeReference<List<StoredFolder>> FOLDER_LIST =
@@ -1242,6 +1255,23 @@ public class DownloadTaskRepository {
         public List<StoredFolder> holding(UUID taskId) {
             return folders.stream().filter(folder -> folder.files().containsKey(taskId)).toList();
         }
+    }
+
+    /** One song of a download as the album picker sees it; {@code current} is null before a file was chosen. */
+    public record SongPick(UUID taskId, Integer position, String title, String phase, DownloadCandidate current) {}
+
+    /** Every song of one download with its current file, in track order. */
+    public Flux<SongPick> songPicks(UUID downloadId) {
+        return client.sql(SONG_PICKS_SQL)
+                .bind("id", downloadId)
+                .map((row, meta) -> {
+                    List<DownloadCandidate> candidates = readCandidates(row.get("candidates", String.class));
+                    int index = row.get("candidate_index", Integer.class);
+                    return new SongPick(row.get("task_id", UUID.class), row.get("position", Integer.class),
+                            row.get("title", String.class), row.get("phase", String.class),
+                            index >= 0 && index < candidates.size() ? candidates.get(index) : null);
+                })
+                .all();
     }
 
     /** Remembers what a completed search found for the manual picker; see SAVE_SEARCH_RESULTS_SQL. */

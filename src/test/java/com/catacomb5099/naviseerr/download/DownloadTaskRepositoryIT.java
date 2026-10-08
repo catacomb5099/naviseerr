@@ -1962,6 +1962,25 @@ class DownloadTaskRepositoryIT {
         assertNull(repository.cachedAlbumSearch(UUID.randomUUID()).blockOptional().orElse(null));
     }
 
+    @Test
+    void songPicks_listsEverySongInTrackOrder_withItsTitleAndCurrentFile() {
+        UUID id = admitAlbum("1 a", "2 b");
+        List<UUID> songs = taskIdsOf(id);
+        media("yt-1 a", "Rock 'n' Roll Star", "Oasis");
+        setTask(songs.get(1), "candidates = '" + "[{\"username\":\"bob\",\"filename\":\"music/bob/b.flac\",\"size\":1,\"code\":1}]"
+                + "', candidate_index = 0, phase = 'DOWNLOAD_INIT'");
+
+        List<DownloadTaskRepository.SongPick> picks = repository.songPicks(id).collectList().block();
+
+        assertEquals(List.of(songs.get(0), songs.get(1)), picks.stream().map(DownloadTaskRepository.SongPick::taskId).toList());
+        assertEquals(List.of(1, 2), picks.stream().map(DownloadTaskRepository.SongPick::position).toList());
+        assertNull(picks.get(0).current(), "no file chosen yet");
+        assertEquals("Rock 'n' Roll Star", picks.get(0).title(), "the song's media title when the row has no track title");
+        assertEquals("SEARCH_INIT", picks.get(0).phase());
+        assertEquals("bob", picks.get(1).current().username());
+        assertEquals("DOWNLOAD_INIT", picks.get(1).phase());
+    }
+
     private String phaseOf(UUID id) {
         return template.getDatabaseClient()
                 .sql("SELECT phase FROM download_tasks WHERE download_id = :id").bind("id", id)
