@@ -1,0 +1,19 @@
+# Sealed override for scripts/e2e/playlist-file.sh: slskd has no route to the internet and no published
+# port, so it can never reach the Soulseek network or register the e2e account. naviseerr sits on both
+# networks (it talks to slskd and to the web app).
+networks:
+  sealed:
+    internal: true
+services:
+  slskd:
+    ports: !override []
+    networks: [sealed]
+  naviseerr:
+    networks: [sealed, default]
+  # Behind a TLS-intercepting proxy the GitHub builds fail: point these at sibling checkouts instead
+  # (their gitignored certs/*.pem are picked up), e.g. E2E_CLIENT_CONTEXT=../naviseerr-client
+  # E2E_ADAPTER_CONTEXT=../ytmusic-adapter. Unset = exactly what the install builds.
+  client:
+    build: ${E2E_CLIENT_CONTEXT:-https://github.com/catacomb5099/naviseerr-client.git#move-fast-break-things}
+  ytmusic-adapter:
+    build: ${E2E_ADAPTER_CONTEXT:-https://github.com/catacomb5099/ytmusicapi.git#move-fast-break-things}

@@ -6,6 +6,10 @@ at `6b2650c`, the YouTube Music helper at `c114c72`.
 **How:** README "Install", step by step, as someone new to it would. Only changes that the laptop needed
 (listed under "Laptop-only" below). No code was changed.
 
+**Repeatable since 07-10-2026:** the playlist half of this check (stack up with slskd sealed, finished
+playlist staged, `.m3u8` written, Navidrome imports it) is one command, `scripts/e2e/playlist-file.sh`;
+see [scripts/e2e/README.md](../../scripts/e2e/README.md).
+
 ## Verdict
 
 **The one-command install works.** After filling in one setting, the build took 49 seconds. 23 seconds
