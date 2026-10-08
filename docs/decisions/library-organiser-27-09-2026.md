@@ -82,7 +82,11 @@ its folder), sanitised. Every component naviseerr creates goes through `sanitise
 characters and control characters become `_`, whitespace collapses, leading and trailing dots go,
 Windows device names get a `_` prefix, at most 200 bytes of UTF-8 cut on a character boundary, NFC.
 The strictest rule set, so the library is safe to export over SMB. Empty or unknown names fall back
-to `Unknown Artist` / `Unknown Album` / the file's own stem.
+to `Unknown Artist` / `Unknown Album` / the file's own stem. Since 07-10-2026 a colon followed by a
+space or at the end becomes " -" instead ("Road Trip: Summer" reads "Road Trip - Summer", the way
+Jellyfin shows a playlist named after its file); a colon inside a time such as "4:44" still becomes
+`_`. Names already filed under the old rule are not renamed, so an album filed as `AC_DC_ Back In
+Black` gets a second folder `AC_DC - Back In Black` for songs downloaded from now on.
 
 **Why one folder per song, not a `Singles` dump.** Jellyfin turns any folder that directly contains
 audio into an album named after the first track's Album tag. A shared `Singles` folder would be one

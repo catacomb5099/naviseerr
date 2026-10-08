@@ -30,19 +30,22 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    git clone -b move-fast-break-things https://github.com/catacomb5099/naviseerr.git
    cd naviseerr
    ```
-2. Make your settings file and choose a Soulseek username:
+2. Choose a Soulseek username. It is the only setting you must choose; one line makes the settings
+   file:
    ```sh
-   cp .env.example .env
+   echo SOULSEEK_USERNAME=choose-your-own-name > .env
    ```
-   Open `.env` in a text editor and fill in `SOULSEEK_USERNAME=`. This is the only setting you must
-   choose. The Soulseek account is created the first time naviseerr logs in, so pick a name nobody
-   else is likely to have (1 to 30 characters, no accents or emoji). It cannot be made up for you:
-   Soulseek's rules forbid automatically generated usernames. The password is generated for you.
-   The other settings in `.env` are optional and explained there, for example `LIBRARY_DIR`, the
-   folder your music goes in (by default `library/`, inside this folder), and `SHARE_LIBRARY`: your
-   music folder is shared on Soulseek unless you set it to `false`. If you change `SHARE_LIBRARY`
-   after the first start, run `docker compose up -d` and then `docker compose restart slskd`: until
-   that restart, slskd keeps sharing what it shared before.
+   (Windows PowerShell: `>` writes a file Docker cannot read; run `cp .env.example .env` instead and
+   fill in `SOULSEEK_USERNAME=` in a text editor.)
+   The Soulseek account is created the first time naviseerr logs in, so pick a name nobody else is
+   likely to have (1 to 30 characters, no accents or emoji). It cannot be made up for you: Soulseek's
+   rules forbid automatically generated usernames. The password is generated for you.
+   Want the other settings? `cp .env.example .env` instead and fill in `SOULSEEK_USERNAME=` there: every
+   setting is optional and explained in that file, for example `LIBRARY_DIR`, the folder your music goes
+   in (by default `library/`, inside this folder), and `SHARE_LIBRARY`: your music folder is shared on
+   Soulseek unless you set it to `false`. If you change `SHARE_LIBRARY` after the first start, run
+   `docker compose up -d` and then `docker compose restart slskd`: until that restart, slskd keeps
+   sharing what it shared before.
 3. Start it:
    ```sh
    docker compose up -d
@@ -104,7 +107,7 @@ git pull && docker compose up -d --build
 - **"Username taken".** If `docker compose logs slskd` says "invalid username or password", someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,
   then `docker compose restart slskd` (slskd tries to log in once and then waits).
-- **Permission errors on Linux** ("permission denied", "Could not file song"). Every container runs as
+- **Linux: permission errors** ("permission denied", "Could not file song"). Every container runs as
   one user, `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into
   `LIBRARY_DIR`: set them to the folder's owner (`ls -ln` shows its numbers; `id -u` and `id -g` show
   yours), then run `docker compose up -d`.
