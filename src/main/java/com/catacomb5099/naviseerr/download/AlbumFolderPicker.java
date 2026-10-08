@@ -74,7 +74,12 @@ public class AlbumFolderPicker {
      * and how many usable audio files it has besides (bonus tracks, other takes; never downloaded, but a
      * sign of a deluxe edition).
      */
-    public record Folder(SearchResponseItem peer, String path, Map<UUID, SearchFile> files, int extras) {}
+    public record Folder(SearchResponseItem peer, String path, Map<UUID, SearchFile> files, int extras) {
+        /** One sharer's one folder. */
+        public String key() {
+            return peer.getUsername() + "\u0000" + path;
+        }
+    }
 
     /**
      * Every folder that holds all of {@code tracks}, or at least half of them and at least two (P6: a part
@@ -105,14 +110,41 @@ public class AlbumFolderPicker {
                 found.add(new Folder(folder.peer, folder.path, assigned, folder.usable.size() - assigned.size()));
             }
         }
-        found.sort(Comparator
+        found.sort(bestFirst());
+        return found;
+    }
+
+    /**
+     * Every folder holding at least one of {@code tracks} by the song rules -- whatever its bit rate,
+     * whether or not it names the artist, however few songs it has, stalling sharer or not -- in the
+     * order of {@link #folders}. The manual picker's list (every option, 08-10-2026): the search itself
+     * keeps using {@link #folders}, and the person is shown which of these it would have taken.
+     */
+    public List<Folder> allFolders(List<SearchResponseItem> responses, List<DownloadTask> tracks,
+                                   String albumTitle, List<String> albumArtists) {
+        if (tracks.isEmpty()) {
+            return List.of();
+        }
+        List<Folder> found = new ArrayList<>();
+        for (Grouped folder : group(responses).values()) {
+            Map<UUID, SearchFile> assigned = assign(folder.audio, tracks, albumTitle, albumArtists, 1);
+            if (!assigned.isEmpty()) {
+                found.add(new Folder(folder.peer, folder.path, assigned, folder.audio.size() - assigned.size()));
+            }
+        }
+        found.sort(bestFirst());
+        return found;
+    }
+
+    /** The most tracks, then the song picker's order (overloaded last, a free slot, the shortest queue), the fewest extras, speed. */
+    private Comparator<Folder> bestFirst() {
+        return Comparator
                 .comparingInt((Folder f) -> -f.files().size())
                 .thenComparing(f -> files.isOverloaded(f.peer()))
                 .thenComparing(f -> !Boolean.TRUE.equals(f.peer().getHasFreeUploadSlot()))
                 .thenComparingInt(f -> f.peer().getQueueLength())
                 .thenComparingInt(Folder::extras)
-                .thenComparingInt(f -> -f.peer().getUploadSpeed()));
-        return found;
+                .thenComparingInt(f -> -f.peer().getUploadSpeed());
     }
 
     /**
@@ -140,6 +172,9 @@ public class AlbumFolderPicker {
         final SearchResponseItem peer;
         final String path;
         final List<String> allNames = new ArrayList<>();
+        /** Every audio file, for the manual picker's list. */
+        final List<SearchFile> audio = new ArrayList<>();
+        /** The audio files passing the format rule, for the search's own judgement. */
         final List<SearchFile> usable = new ArrayList<>();
 
         Grouped(SearchResponseItem peer, String path) {
@@ -170,6 +205,9 @@ public class AlbumFolderPicker {
                 Grouped folder = folders.computeIfAbsent(peer.getUsername() + "\u0000" + path,
                         key -> new Grouped(peer, path));
                 folder.allNames.add(segments.getLast());
+                if (SlskdSearchResultProcessor.isAudio(file)) {
+                    folder.audio.add(file);
+                }
                 if (files.isLosslessOrHighBitRate(file)) {
                     folder.usable.add(file);
                 }

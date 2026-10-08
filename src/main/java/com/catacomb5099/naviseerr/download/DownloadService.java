@@ -246,7 +246,8 @@ public class DownloadService {
                     .count();
             return new AlbumCandidatesView.Folder(folder.username(), folder.path(), files.size(),
                     folder.files().values().stream().mapToLong(DownloadCandidate::size).sum(), folder.uploadSpeed(),
-                    folder.hasFreeUploadSlot(), folder.queueLength(), folder.extras(), songsCurrent, songsCurrent > 0, files);
+                    folder.hasFreeUploadSlot(), folder.queueLength(), folder.extras(), songsCurrent, songsCurrent > 0,
+                    folder.judged() == null || folder.judged(), files);
         }).toList();
         String query = album.title() == null ? null : AlbumSearch.builder().title(album.title()).artists(album.artists())
                 .searchTier(album.searchTier() == null ? 0 : album.searchTier()).build().searchQuery();

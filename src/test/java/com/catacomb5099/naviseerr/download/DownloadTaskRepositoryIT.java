@@ -1933,7 +1933,7 @@ class DownloadTaskRepositoryIT {
         assertNull(before.foldersAt());
 
         StoredFolder folder = new StoredFolder("Baron53", "TALK TALK\\LAUGHING STOCK", true, 3, 1_500_000, 2,
-                java.util.Map.of(songs.get(0), DownloadTaskFixtures.albumFolderCandidates("Baron53").getFirst()));
+                java.util.Map.of(songs.get(0), DownloadTaskFixtures.albumFolderCandidates("Baron53").getFirst()), true);
         assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW).block());
 
         DownloadTaskRepository.CachedAlbumSearch after = repository.cachedAlbumSearch(id).block();

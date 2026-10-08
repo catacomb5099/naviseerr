@@ -88,3 +88,14 @@ x 15 files is about 75 KB per album. Both caps are constants (`DownloadStepExecu
 `POST /downloads/{id}/tasks/{taskId}/pick` `{username, filename}`, `POST /downloads/{id}/album-pick`
 `{username, folder}`. Shapes in `AGENTS.md`; the contract file above has the client wording for every
 status and reason.
+
+## Change of 08-10-2026: every option, not only the judged ones
+
+The owner saw the first lists and asked for everything Soulseek returned, not what Naviseerr judged relevant. So the
+song list now keeps every audio file of the search (cover art, cue sheets and logs left out), the files the matcher
+calls another song included and graded `NONE`, in the picker's order with those last, the first 500 instead of 100.
+The album list keeps every folder holding at least one of the album's songs by the song rules, whatever its bit rate,
+whether or not its path names the artist, stalling sharer or not: the folders the search itself would take come first
+and carry `judged: true`, the rest `judged: false`; the first 50 instead of 20. The automatic search is unchanged:
+`selectBestFiles` and `AlbumFolderPicker.folders` still apply every rule. Rows written before this change keep their
+shorter lists until the song or album is searched again.

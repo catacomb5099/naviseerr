@@ -135,7 +135,7 @@ class DownloadServiceTest {
     }
 
     private static StoredFolder folder(String username, String path, Map<UUID, DownloadCandidate> files) {
-        return new StoredFolder(username, path, true, 2, 1_500_000, 3, files);
+        return new StoredFolder(username, path, true, 2, 1_500_000, 3, files, true);
     }
 
     @Test

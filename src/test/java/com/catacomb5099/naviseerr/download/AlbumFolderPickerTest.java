@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 
@@ -315,6 +316,27 @@ class AlbumFolderPickerTest {
     // ---- helpers -------------------------------------------------------------------------------------
 
     /** The album's songs as admission writes them: "Title - Artist", the row's title, number and length. */
+    @Test
+    void allFolders_keepsTheFolderTheSearchRejects_behindTheJudgedOne_andSkipsCoverArt() {
+        // The manual list (08-10-2026): a one-song, no-artist, no-bit-rate MP3 folder is no good to the
+        // search, but it is a person's option; a folder of cover art is nobody's.
+        List<DownloadTask> tracks = album("Oasis", "Live Forever", 277, "Wonderwall", 258, "Supersonic", 284);
+        SearchResponseItem whole = peer("whole", "Oasis\\Definitely Maybe\\",
+                file("03 Live Forever.flac", 277), file("04 Wonderwall.flac", 258), file("05 Supersonic.flac", 284));
+        SearchResponseItem oneSong = peer("onesong", "Music\\Random\\", file("Live Forever.mp3", 277));
+        SearchResponseItem art = peer("art", "Oasis\\Definitely Maybe\\", file("cover.jpg", 0));
+        List<SearchResponseItem> responses = List.of(oneSong, art, whole);
+
+        List<AlbumFolderPicker.Folder> judged = picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING);
+        List<AlbumFolderPicker.Folder> all = picker.allFolders(responses, tracks, "Definitely Maybe", List.of("Oasis"));
+
+        assertEquals(List.of("whole"), judged.stream().map(f -> f.peer().getUsername()).toList(), "the search itself takes the whole folder only");
+        assertEquals(List.of("whole", "onesong"), all.stream().map(f -> f.peer().getUsername()).toList(), "the person also sees the one-song folder; cover art is no option");
+        AlbumFolderPicker.Folder part = all.getLast();
+        assertEquals(Set.of(tracks.getFirst().taskId()), part.files().keySet());
+        assertEquals(0, part.extras());
+    }
+
     private static List<DownloadTask> album(String artist, Object... titlesAndSeconds) {
         List<DownloadTask> songs = new ArrayList<>();
         for (int i = 0; i < titlesAndSeconds.length; i += 2) {

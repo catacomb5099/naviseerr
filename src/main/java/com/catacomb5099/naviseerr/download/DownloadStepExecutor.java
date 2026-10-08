@@ -34,7 +34,7 @@ public class DownloadStepExecutor {
      * How many of a search's files are kept for the manual picker. 100 x about 350 bytes is 35 KB per
      * song; a 500-song playlist writes 17 MB once. Lower it if a self-hoster's database minds.
      */
-    static final int REMEMBERED_FILES = 100;
+    static final int REMEMBERED_FILES = 500;
 
     private final SlskdService slskdService;
     private final SlskdSearchResultProcessor searchResultProcessor;
@@ -174,15 +174,16 @@ public class DownloadStepExecutor {
     }
 
     /**
-     * Keeps every file the search found that is the song (the first {@link #REMEMBERED_FILES}, in the
-     * picker's order) on the row, for a person to choose from later without searching again (manual
-     * pick, 07-10-2026). This is the one moment the full result is in hand; slskd may age it out.
+     * Keeps every audio file the search found (the first {@link #REMEMBERED_FILES}, in the picker's
+     * order: the files that are the song first, the ones the matcher calls another song last) on the
+     * row, for a person to choose from later without searching again (manual pick, 07-10-2026; every
+     * file since 08-10-2026). This is the one moment the full result is in hand; slskd may age it out.
      * Its own statement, never part of the decision: a database hiccup here is logged and the song
      * carries on exactly as if nothing had been remembered, since a missing list costs a person a
      * retry while a failed search costs them the song.
      */
     private Mono<Void> remember(DownloadTask task, SearchState full, Instant now) {
-        return Mono.fromCallable(() -> searchResultProcessor.relevantFiles(full,
+        return Mono.fromCallable(() -> searchResultProcessor.allFiles(full,
                         SearchQueryTiers.pickerName(task.songName()), task.searchQuery()))
                 .flatMap(files -> repository.saveSearchResults(task.taskId(),
                         files.stream().limit(REMEMBERED_FILES).map(DownloadCandidate::from).toList(), now))

@@ -25,10 +25,12 @@ public record AlbumCandidatesView(UUID downloadId, PickListStatus status, String
      * @param totalSize    bytes, over those files
      * @param extras       other usable audio files there: a deluxe-edition hint, never downloaded
      * @param songsCurrent how many of the album's songs download (or downloaded) from this folder
+     * @param judged       whether the album search itself would take this folder; false for one kept only for
+     *                     a person to choose (too few songs, no artist in its path, low bit rate, stalling sharer)
      */
     public record Folder(String username, String folder, int fileCount, long totalSize, Integer uploadSpeed,
                          Boolean freeSlot, Integer queueLength, int extras, int songsCurrent, boolean isCurrent,
-                         List<File> files) {
+                         boolean judged, List<File> files) {
     }
 
     /**
