@@ -8,6 +8,8 @@ import com.catacomb5099.naviseerr.schema.response.Track;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicSearchResponse;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -100,8 +102,34 @@ class YtMusicSearchResponseMapperTest {
         assertEquals("Wonderwall", track.getName());
         assertEquals(List.of("Oasis"), track.getArtists());
         assertFalse(track.getArtists().contains("UCmMUZbaYdNH0bEd1PAlAqsA"));
+        assertEquals(List.of("UCmMUZbaYdNH0bEd1PAlAqsA"), track.getArtistIds(), "the id rides beside the name, for the link");
         assertTrue(result.getAlbums().isEmpty());
         assertTrue(result.getArtists().isEmpty());
+    }
+
+    @Test
+    void artistIds_lineUpWithNames_nullWhereYouTubeGaveNoChannel_andSkipNamelessRefs() {
+        YtMusicSearchResponse.Item item = songItem().toBuilder().artists(List.of(
+                YtMusicSearchResponse.ArtistRef.builder().name("Oasis").channelId("UCmMUZbaYdNH0bEd1PAlAqsA").build(),
+                YtMusicSearchResponse.ArtistRef.builder().name(null).channelId("UCdropped").build(),
+                YtMusicSearchResponse.ArtistRef.builder().name("Someone").channelId(null).build()
+        )).build();
+
+        Track track = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item)).build()).getTracks().get(0);
+
+        assertEquals(List.of("Oasis", "Someone"), track.getArtists());
+        assertEquals(Arrays.asList("UCmMUZbaYdNH0bEd1PAlAqsA", null), track.getArtistIds(),
+                "same filter as the names, so index i of one is index i of the other");
+    }
+
+    @Test
+    void albums_carryArtistIds_andPlaylists_foldedAuthor_hasNullId() {
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(albumItem(), playlistItem())).build());
+
+        assertEquals(List.of("UCmMUZbaYdNH0bEd1PAlAqsA"), result.getAlbums().get(0).getArtistIds());
+        assertEquals(Collections.singletonList(null), result.getPlaylists().get(0).getArtistIds());
     }
 
     @Test

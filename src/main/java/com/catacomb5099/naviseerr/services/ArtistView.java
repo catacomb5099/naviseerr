@@ -26,8 +26,9 @@ import java.util.Objects;
  *                       per-video thumbnail, since the adapter's artist answer carries no artwork for them.
  *                       {@code plays} is YouTube's wording ("1.7B plays"), null from an adapter that
  *                       sends none.
- * @param albums         {@code artists} is {@code [this artist's name]}: the shelf lists only the
- *                       artist's own releases and the adapter gives no per-album artists.
+ * @param albums         {@code artists} is {@code [this artist's name]} and {@code artistIds} is
+ *                       {@code [the requested id]}: the shelf lists only the artist's own releases
+ *                       and the adapter gives no per-album artists.
  * @param playlists      YouTube Music's own featured playlists that its search links to this artist,
  *                       minus those titled after the artist or a related artist, kept only when the
  *                       playlist's track list (its first 100 tracks) credits the artist by name.
@@ -44,11 +45,13 @@ public record ArtistView(String id, String name, String iconURL, String descript
 
     static ArtistView from(YtMusicDetailResponse.Artist artist, List<Playlist> playlists, String requestedId) {
         List<String> ownName = artist.getName() == null ? List.of() : List.of(artist.getName());
+        List<String> ownId = ownName.isEmpty() ? List.of() : List.of(requestedId);
         List<Track> topSongs = orEmpty(artist.getTopSongs()).stream()
                 .filter(track -> track.getVideoId() != null && !Boolean.FALSE.equals(track.getIsAvailable()))
                 .limit(MAX)
                 .map(track -> new Track(track.getVideoId(), YtMusicService.fallbackThumbnail(track.getVideoId()),
                         "", orEmpty(track.getTitle()), YtMusicSearchResponseMapper.mapArtistNames(track.getArtists()),
+                        YtMusicSearchResponseMapper.mapArtistIds(track.getArtists()),
                         "", 0, YtMusicSearchResponseMapper.plays(track.getViews())))
                 .toList();
         List<Artist> similar = orEmpty(artist.getRelated()).stream()
@@ -59,16 +62,16 @@ public record ArtistView(String id, String name, String iconURL, String descript
                 .toList();
         return new ArtistView(requestedId, orEmpty(artist.getName()), orEmpty(artist.getThumbnailUrl()),
                 artist.getDescription(), artist.getSubscribers(), topSongs,
-                albums(artist.getAlbums(), ownName), albums(artist.getSingles(), ownName),
+                albums(artist.getAlbums(), ownName, ownId), albums(artist.getSingles(), ownName, ownId),
                 orEmpty(playlists).stream().limit(MAX).toList(), similar);
     }
 
-    private static List<Album> albums(List<YtMusicDetailResponse.AlbumStub> stubs, List<String> ownName) {
+    private static List<Album> albums(List<YtMusicDetailResponse.AlbumStub> stubs, List<String> ownName, List<String> ownId) {
         return orEmpty(stubs).stream()
                 .filter(stub -> stub.getBrowseId() != null)
                 .limit(MAX)
                 .map(stub -> new Album(stub.getBrowseId(), orEmpty(stub.getThumbnailUrl()), orEmpty(stub.getTitle()),
-                        ownName, stub.getYear() == null ? 0 : stub.getYear()))
+                        ownName, ownId, stub.getYear() == null ? 0 : stub.getYear()))
                 .toList();
     }
 

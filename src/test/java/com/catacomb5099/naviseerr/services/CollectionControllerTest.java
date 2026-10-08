@@ -13,6 +13,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,16 +28,16 @@ class CollectionControllerTest {
 
     private static YoutubeCollectionInfo album() {
         return new YoutubeCollectionInfo("MPREb_1", List.of(
-                new YoutubeSongInfo("vid1", List.of("Oasis"), "Rock 'n' Roll Star", "https://img/a.jpg", 322, "28M plays"),
+                new YoutubeSongInfo("vid1", List.of("Oasis"), List.of("UCoasis"), "Rock 'n' Roll Star", "https://img/a.jpg", 322, "28M plays"),
                 new YoutubeSongInfo("vid2", List.of("Oasis"), "Shakermaker", "https://img/a.jpg", null)),
-                1994, "Definitely Maybe", List.of("Oasis"), List.of(), "https://img/a.jpg", "OLAK5uy_1",
+                1994, "Definitely Maybe", List.of("Oasis"), List.of("UCoasis"), "https://img/a.jpg", "OLAK5uy_1",
                 null, null);
     }
 
     private static YoutubeCollectionInfo playlist() {
         return new YoutubeCollectionInfo("PL1", List.of(
-                new YoutubeSongInfo("vid9", List.of("Blur"), "Parklife", "https://i.ytimg.com/vi/vid9/hqdefault.jpg", 185)),
-                null, "Britpop Essentials", List.of("YouTube Music"), "https://img/p.jpg");
+                new YoutubeSongInfo("vid9", List.of("Blur"), List.of(""), "Parklife", "https://i.ytimg.com/vi/vid9/hqdefault.jpg", 185, null)),
+                null, "Britpop Essentials", List.of("YouTube Music"), List.of(""), "https://img/p.jpg");
     }
 
     @Test
@@ -52,6 +53,7 @@ class CollectionControllerTest {
                     assertEquals(DownloadType.ALBUM, view.type());
                     assertEquals("Definitely Maybe", view.name());
                     assertEquals(List.of("Oasis"), view.artists());
+                    assertEquals(List.of("UCoasis"), view.artistIds(), "what the client links the header name to");
                     assertEquals("https://img/a.jpg", view.iconURL());
                     assertEquals(1994, view.year());
                     assertEquals(2, view.trackCount());
@@ -62,6 +64,7 @@ class CollectionControllerTest {
                     assertEquals("vid1", first.id());
                     assertEquals("Rock 'n' Roll Star", first.name());
                     assertEquals(List.of("Oasis"), first.artists());
+                    assertEquals(List.of("UCoasis"), first.artistIds());
                     assertEquals("https://img/a.jpg", first.iconURL());
                     assertEquals(322, first.durationSeconds());
                     assertEquals("28M plays", first.plays());
@@ -71,6 +74,7 @@ class CollectionControllerTest {
                     assertEquals("vid2", second.id());
                     assertNull(second.durationSeconds());
                     assertNull(second.plays());
+                    assertEquals(List.of(), second.artistIds(), "a source with no ids gives an empty list, never a dead link");
                     assertEquals(2, second.position());
                 })
                 .verifyComplete();
@@ -91,6 +95,8 @@ class CollectionControllerTest {
                     assertEquals("PL1", view.id());
                     assertNull(view.year());
                     assertEquals(List.of("YouTube Music"), view.artists());
+                    assertEquals(Collections.singletonList(null), view.artistIds(), "\"\" (no channel) is null on the wire");
+                    assertEquals(Collections.singletonList(null), view.tracks().get(0).artistIds());
                     assertEquals(1, view.trackCount());
                     assertEquals("vid9", view.tracks().get(0).id());
                     assertNull(view.tracks().get(0).plays(), "YouTube gives playlist rows no play count");

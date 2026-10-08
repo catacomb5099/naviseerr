@@ -11,7 +11,8 @@ public class Album {
     String id;
     String iconURL;
     String name;
-    List<String> artists; // List of artist IDs
+    List<String> artists; // artist display names; the client shows them as-is
+    /** Channel id per {@code artists} entry, index-aligned; null where YouTube gave none. See {@link Track#artistIds}. */
+    List<String> artistIds;
     int year;
 }
-

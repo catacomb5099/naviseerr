@@ -30,6 +30,7 @@ public class SearchResponseMapper {
                 "",
                 lastFMTrack.getName(),
                 List.of(lastFMTrack.getArtist()),
+                List.of(), // Last.fm has no channel ids; shorter list = no links
                 "lol",
                 0,
                 null
@@ -54,6 +55,7 @@ public class SearchResponseMapper {
             imageUrl,
             lastFMAlbum.getName(),
             List.of(lastFMAlbum.getArtist()),
+            List.of(),
             0
         );
     }
