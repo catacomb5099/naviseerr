@@ -4,8 +4,13 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -17,6 +22,7 @@ import java.util.UUID;
 
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.T0;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -108,6 +114,29 @@ class AlbumSearchStepTest {
         step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0, "me").block();
 
         verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), T0);
+    }
+
+    @Test
+    void slskdNotAnswering_releasesTheSongs_atTheCostOfOneWarningLine_withoutAStackTrace() {
+        Logger logger = (Logger) LoggerFactory.getLogger(AlbumSearchStep.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            when(slskd.searchResults(any())).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
+
+            step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0, "me").block();
+
+            verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), T0);
+            // WARN and worse only: the DEBUG "ended SEARCH_FAILED" line is there or not with the test log level.
+            List<ILoggingEvent> loud = logs.list.stream().filter(e -> e.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+            assertEquals(1, loud.size(), () -> "one line: " + loud);
+            assertEquals(Level.WARN, loud.getFirst().getLevel());
+            assertTrue(loud.getFirst().getFormattedMessage().contains("Operation timed out"));
+            assertTrue(logs.list.stream().allMatch(e -> e.getThrowableProxy() == null), () -> "no stack trace: " + logs.list);
+        } finally {
+            logger.detachAppender(logs);
+        }
     }
 
     @Test

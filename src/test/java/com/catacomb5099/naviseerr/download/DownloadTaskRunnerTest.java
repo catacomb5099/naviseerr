@@ -15,10 +15,16 @@ import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 import java.time.Clock;
@@ -31,6 +37,7 @@ import java.util.UUID;
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.*;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -87,6 +94,37 @@ class DownloadTaskRunnerTest {
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
                 ytMusicService, curatorClient, radioRepository, organiser, albumSearches, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
+    }
+
+    /** Everything the runner logs during a test, for the "one line, no stack trace" assertions. */
+    private ListAppender<ILoggingEvent> logs;
+
+    private void captureRunnerLogs() {
+        logs = new ListAppender<>();
+        logs.start();
+        ((Logger) LoggerFactory.getLogger(DownloadTaskRunner.class)).addAppender(logs);
+    }
+
+    @AfterEach
+    void detachRunnerLogs() {
+        if (logs != null) {
+            ((Logger) LoggerFactory.getLogger(DownloadTaskRunner.class)).detachAppender(logs);
+        }
+    }
+
+    private List<ILoggingEvent> warningsAndWorse() {
+        return logs.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+    }
+
+    /** An outage is a fact worth one line; its stack trace, every two seconds, is noise. */
+    private void assertOneWarningLineAndNoStackTrace(String saying) {
+        List<ILoggingEvent> loud = warningsAndWorse();
+        assertEquals(1, loud.size(), () -> "expected one WARN, got " + loud);
+        assertEquals(Level.WARN, loud.getFirst().getLevel());
+        assertTrue(loud.getFirst().getFormattedMessage().contains(saying),
+                () -> "expected the line to say '" + saying + "': " + loud.getFirst().getFormattedMessage());
+        assertTrue(logs.list.stream().allMatch(event -> event.getThrowableProxy() == null),
+                () -> "no logged line may carry a stack trace: " + logs.list);
     }
 
     // ---- library organiser ---------------------------------------------------------------------
@@ -445,9 +483,47 @@ class DownloadTaskRunnerTest {
 
     @Test
     void pass_whenNothingIsClaimed_andTheKeepAliveCallFails_isSwallowedNotPropagated() {
-        when(slskdService.getServerState()).thenReturn(Mono.error(new RuntimeException("slskd is down")));
+        captureRunnerLogs();
+        when(slskdService.getServerState()).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
 
         assertDoesNotThrow(() -> runner.pass().block());
+
+        verify(repository).concludeDownloads();
+        assertOneWarningLineAndNoStackTrace("Operation timed out");
+    }
+
+    @Test
+    void anErrorThatIsNotSlskd_stillLetsThePassConclude_butKeepsItsStackTrace() {
+        captureRunnerLogs();
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt()))
+                .thenReturn(Flux.error(new IllegalStateException("database gone")));
+
+        assertDoesNotThrow(() -> runner.pass().block());
+
+        verify(repository).concludeDownloads();
+        // Not slskd's fault, so not slskd's one-liner: a database failure or a bug is logged as an ERROR
+        // with its trace, as before -- the one-line treatment is for WebClientException only.
+        List<ILoggingEvent> loud = warningsAndWorse();
+        assertEquals(1, loud.size(), () -> "one ERROR, got " + loud);
+        assertEquals(Level.ERROR, loud.getFirst().getLevel());
+        assertTrue(loud.getFirst().getThrowableProxy() != null, "the stack trace is kept");
+        assertTrue(loud.getFirst().getThrowableProxy().getMessage().contains("database gone"));
+    }
+
+    @Test
+    void whenTheBatchedSlskdCallFails_finishedDownloadsAreStillConcluded_atTheCostOfOneLine() {
+        captureRunnerLogs();
+        DownloadTask task = searchPolling("s1");
+        when(repository.claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt())).thenReturn(Flux.just(task));
+        when(slskdService.getAllSearches()).thenReturn(Flux.error(SlskdFixtures.transportFailure()));
+
+        assertDoesNotThrow(() -> runner.pass().block());
+
+        // Nothing could be stepped (the lease simply expires), but the rest of the pass needs no slskd:
+        // before 07-10-2026 this error skipped concludeDownloads and organise for as long as slskd was down.
+        verify(executor, never()).execute(any(), any(), any(), any());
+        verify(repository).concludeDownloads();
+        assertOneWarningLineAndNoStackTrace("Operation timed out");
     }
 
     @Test
@@ -880,6 +956,7 @@ class DownloadTaskRunnerTest {
         when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
         when(ytMusicService.getSongInfo("vid-1"))
                 .thenReturn(Mono.error(new YtMusicUnavailableException("connection refused")));
+        captureRunnerLogs();
 
         assertDoesNotThrow(() -> runner.pass().block());
 
@@ -887,6 +964,7 @@ class DownloadTaskRunnerTest {
         // the sidecar happened to be restarting.
         verify(repository, never()).failUnadmitted(any(), any(), any());
         verify(repository, never()).createTasks(any(), any(), any(), any());
+        assertOneWarningLineAndNoStackTrace("connection refused");
     }
 
     @Test
