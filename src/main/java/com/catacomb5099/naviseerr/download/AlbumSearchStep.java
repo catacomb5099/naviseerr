@@ -20,9 +20,9 @@ import java.util.UUID;
  * P5, whole album first, and P6, part album next: one album download's search for a sharer holding every
  * song, or failing that the most of them, stepped by {@link DownloadTaskRunner} on the same two search
  * slots the songs use. While it runs, the album's songs are held (their {@code next_attempt_at} lies
- * {@link #holdUntil} ahead, re-extended at each wording), so they do not start searches of their own. It
- * ends by releasing them in one statement: songs the best folder holds go straight to downloading that
- * folder's file, the rest are due now and search on their own as before. If this step dies, the hold
+ * {@link #holdUntil} ahead, re-extended when the search starts), so they do not start searches of their
+ * own. It ends by releasing them in one statement: songs the best folder holds go straight to downloading
+ * that folder's file, the rest are due now and search on their own as before. If this step dies, the hold
  * simply runs out and every song searches on its own.
  *
  * <p>Its own I/O shell and decisions in one place: two phases, one slskd call each, and every way out
@@ -115,9 +115,8 @@ public class AlbumSearchStep {
 
     /**
      * Reads the batched {@code GET /searches} summary. Once the search is complete, or has had its
-     * search budget (slskd leaves some searches "InProgress" for days), its responses are fetched once and
-     * judged: no sharer has the whole album and another wording exists, try that; otherwise release
-     * the songs.
+     * search budget (slskd leaves some searches "InProgress" for days), its responses are fetched once,
+     * judged, and the songs released.
      */
     private Mono<Void> poll(AlbumSearch album, SearchState summary, Instant now, String owner) {
         boolean complete = summary != null && Boolean.TRUE.equals(summary.getIsComplete());
@@ -149,22 +148,7 @@ public class AlbumSearchStep {
         return Mono.fromCallable(() -> picker.folders(responses, songs, album.title(), album.artists(),
                         sharer -> stallingSharers.isStalling(sharer, now)))
                 .subscribeOn(Schedulers.parallel())
-                .flatMap(folders -> {
-                    boolean whole = !folders.isEmpty() && folders.getFirst().files().size() == songs.size();
-                    if (!whole && album.hasAnotherWording()) {
-                        // ponytail: a part folder this wording found is not kept; the title alone finds
-                        // every folder the pair did unless slskd's response cap fills with other albums.
-                        log.info("Album '{}' of download {}: nobody among {} answering '{}' has all {} song(s); "
-                                        + "trying '{}'", album.title(), album.downloadId(), responses.size(),
-                                album.searchQuery(), songs.size(),
-                                album.toBuilder().searchTier(album.searchTier() + 1).build().searchQuery());
-                        // A new wording is a new search: back to SEARCH_INIT for a free slot, with a fresh budget.
-                        return repository.saveAlbumSearch(album.toBuilder().phase(DownloadPhase.SEARCH_INIT)
-                                .searchTier(album.searchTier() + 1).searchId(null).phaseEnteredAt(now)
-                                .nextAttemptAt(now).build(), owner, now, null).then();
-                    }
-                    return settle(album, responses.size(), songs.size(), folders, now, owner);
-                });
+                .flatMap(folders -> settle(album, responses.size(), songs.size(), folders, now, owner));
     }
 
     private Mono<Void> settle(AlbumSearch album, int responses, int songs, List<AlbumFolderPicker.Folder> folders,

@@ -50,10 +50,14 @@ class AlbumSearchStepTest {
     }
 
     @Test
-    void theFirstWordingNamesTheArtist_theSecondIsTheTitleAlone_andACompilationOnlyHasItsTitle() {
-        assertEquals(List.of("Laughing Stock - Talk Talk", "Laughing Stock"), album(DownloadPhase.SEARCH_INIT, 0).wordings());
+    void theOnlyWordingIsTheAlbumNameAlone_theArtistIsNeverSearched() {
+        assertEquals(List.of("Laughing Stock"), album(DownloadPhase.SEARCH_INIT, 0).wordings());
         assertEquals(List.of("Driving"), album(DownloadPhase.SEARCH_INIT, 0).toBuilder().title("Driving")
-                .artists(List.of("Various Artists")).build().wordings());
+                .artists(List.of("Various Artists")).build().wordings(), "a compilation is no different");
+        assertEquals(List.of("Blood Bank"), album(DownloadPhase.SEARCH_INIT, 0).toBuilder().title("Blood Bank")
+                .artists(List.of("Bon Iver")).build().wordings());
+        assertEquals("Laughing Stock", album(DownloadPhase.SEARCH_POLL, 1).searchQuery(),
+                "a row left at tier 1 by an older build still searches the title");
     }
 
     private static List<String> wordings(String title, String artist) {
@@ -61,44 +65,23 @@ class AlbumSearchStepTest {
     }
 
     @Test
-    void bothWordingsLoseBracketsEditionsAndPunctuation() {
-        assertEquals(List.of("Morning Glory - Oasis", "Morning Glory"), wordings("(What's the Story) Morning Glory?", "Oasis"));
-        assertEquals(List.of("Definitely Maybe - Oasis", "Definitely Maybe"),
-                wordings("Definitely Maybe (30th Anniversary Deluxe Edition)", "Oasis"));
-        assertEquals(List.of("Nevermind - Nirvana", "Nevermind"), wordings("Nevermind 20th Anniversary Super Deluxe Edition", "Nirvana"));
-        assertEquals(List.of("Abbey Road - The Beatles", "Abbey Road"), wordings("Abbey Road (Remastered 2009)", "The Beatles"));
-        assertEquals(List.of("Sgt Pepper Lonely Hearts Club Band - The Beatles", "Sgt Pepper Lonely Hearts Club Band"),
-                wordings("Sgt. Pepper's Lonely Hearts Club Band", "The Beatles"));
-        assertEquals(List.of("Back In Black - AC DC", "Back In Black"), wordings("Back In Black", "AC/DC"));
-        assertEquals(List.of("Ágætis byrjun - Sigur Rós", "Ágætis byrjun"), wordings("Ágætis byrjun", "Sigur Rós"));
-        assertEquals(List.of("21 - Adele", "21"), wordings("21", "Adele"));
-        assertEquals(List.of("4 - Beyoncé", "4"), wordings("4", "Beyoncé"), "a title with no word left is searched as it is");
+    void theWordingLosesBracketsEditionsAndPunctuation() {
+        assertEquals(List.of("Morning Glory"), wordings("(What's the Story) Morning Glory?", "Oasis"));
+        assertEquals(List.of("Definitely Maybe"), wordings("Definitely Maybe (30th Anniversary Deluxe Edition)", "Oasis"));
+        assertEquals(List.of("Nevermind"), wordings("Nevermind 20th Anniversary Super Deluxe Edition", "Nirvana"));
+        assertEquals(List.of("Abbey Road"), wordings("Abbey Road (Remastered 2009)", "The Beatles"));
+        assertEquals(List.of("Sgt Pepper Lonely Hearts Club Band"), wordings("Sgt. Pepper's Lonely Hearts Club Band", "The Beatles"));
+        assertEquals(List.of("Back In Black"), wordings("Back In Black", "AC/DC"));
+        assertEquals(List.of("Ágætis byrjun"), wordings("Ágætis byrjun", "Sigur Rós"));
+        assertEquals(List.of("21"), wordings("21", "Adele"));
+        assertEquals(List.of("4"), wordings("4", "Beyoncé"), "a title with no word left is searched as it is");
         assertEquals(List.of("Automatic for the People"), wordings("Automatic for the People", "R.E.M."),
-                "an artist with no word left is left out");
-    }
-
-    @Test
-    void aPartFolderFromTheArtistWording_stillTriesTheTitleAlone() {
-        DownloadTask second = DownloadTask.initial(DOWNLOAD, "v2", "Ascension Day - Talk Talk", T0);
-        when(repository.waitingAlbumSongs(any(), any())).thenReturn(Flux.just(song, second));
-        SearchFile first = new SearchFile("A\\1.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(333));
-        SearchResponseItem a = new SearchResponseItem(1, List.of(first), true, 0, List.of(), 0, 1, 1, "a");
-        when(slskd.getSearchWithResponses("s1"))
-                .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(a))));
-        when(picker.folders(any(), any(), any(), any(), any()))
-                .thenReturn(List.of(new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), first), 0)));
-
-        step.step(album(DownloadPhase.SEARCH_POLL, 0),
-                Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
-
-        verify(repository).saveAlbumSearch(argThat(a2 -> a2.phase() == DownloadPhase.SEARCH_INIT
-                && a2.searchTier() == 1 && a2.searchId() == null), eq("me"), any(), isNull());
-        verify(repository, never()).releaseAlbumSongs(any(), any(), any(), any(), any());
+                "an artist of dots is no special case any more");
     }
 
     @Test
     void starting_postsTheSearch_andHoldsTheSongsForAnotherTwoBudgets() {
-        when(slskd.searchResults("Laughing Stock - Talk Talk"))
+        when(slskd.searchResults("Laughing Stock"))
                 .thenReturn(Mono.just(SlskdFixtures.searchState("s1", false, "InProgress")));
 
         step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0.plusSeconds(5), "me").block();
@@ -138,16 +121,15 @@ class AlbumSearchStepTest {
     }
 
     @Test
-    void nobodyAnsweringTheArtistWording_triesTheTitleAlone() {
+    void nobodyAnswering_releasesTheSongsToTheirOwnSearches_thereIsNoSecondWording() {
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of())));
 
         step.step(album(DownloadPhase.SEARCH_POLL, 0),
                 Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
 
-        verify(repository).saveAlbumSearch(argThat(a -> a.phase() == DownloadPhase.SEARCH_INIT
-                && a.searchTier() == 1 && a.searchId() == null), eq("me"), any(), isNull());
-        verify(repository, never()).releaseAlbumSongs(any(), any(), any(), any(), any());
+        verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.NO_WHOLE_FOLDER, Map.of(), T0.plusSeconds(4));
+        verify(repository, never()).saveAlbumSearch(any(), any(), any(), any());
     }
 
     @Test
@@ -185,8 +167,8 @@ class AlbumSearchStepTest {
                 new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), aFirst, third.taskId(), aThird), 0),
                 new AlbumFolderPicker.Folder(b, "B", Map.of(song.taskId(), bFirst, second.taskId(), bSecond), 0)));
 
-        // The title alone, the last wording: what it found is what the songs get.
-        step.step(album(DownloadPhase.SEARCH_POLL, 1),
+        // The one and only search: what it found is what the songs get, no second wording to try.
+        step.step(album(DownloadPhase.SEARCH_POLL, 0),
                 Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
 
         // The second song only b's part has: it searches on its own rather than coming from a second folder.
@@ -204,7 +186,7 @@ class AlbumSearchStepTest {
                 "s1", false, "InProgress", List.of(new SearchResponseItem(0, List.of(), true, 0, List.of(), 0, 1, 1, "x")))));
         when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of());
 
-        step.step(album(DownloadPhase.SEARCH_POLL, 1),
+        step.step(album(DownloadPhase.SEARCH_POLL, 0),
                 Map.of("s1", SlskdFixtures.searchState("s1", false, "InProgress")), T0.plus(BUDGET), "me").block();
 
         verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.NO_WHOLE_FOLDER, Map.of(), T0.plus(BUDGET));

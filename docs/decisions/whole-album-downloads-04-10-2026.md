@@ -1,7 +1,7 @@
 # Whole-album downloads
 
 **Date:** 04-10-2026
-**Status:** Accepted. A1, A2 and A3 implemented.
+**Status:** Accepted. A1, A2 and A3 implemented. Wordings amended 07-10-2026 (addendum at the end).
 **Covers:** A1 (P9, many songs from one sharer), A2 (P5, whole album first), A3 (P6, the biggest part
 from one sharer). The joining and tagging half of the same request (B1-B3) has its own ADR.
 **Builds on:** `durable-download-state-machine-13-08-2026.md` (the loop, leases, one slskd call per
@@ -47,17 +47,14 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
   album searches first (`CLAIM_DUE_ALBUM_SEARCHES_SQL`, starts limited to the free slots) and gives the
   songs only the slots left; `COUNT_ACTIVE_SEARCHES_SQL` counts both tables. Starting the album search
   runs inside the same one-at-a-time section as song searches (slskd answers overlapping starts with 429).
-- **Wordings.** "Title - Artist", then the title alone whenever the first found no sharer with the whole
-  album (the owner's call of 04-10-2026; until then only when it found nobody at all). The title loses
-  what a song's does (brackets, quotes, version words such as "Live" or "Remastered 2009") plus a
-  trailing edition ("Deluxe Edition", "30th Anniversary Super Deluxe"); both names are split at
+- **Wording.** The clean album name alone, never the artist (since 07-10-2026, see the addendum; from
+  04-10 to 07-10 it was "Title - Artist" first, then the title alone when that found no whole folder).
+  The title loses what a song's does (brackets, quotes, version words such as "Live" or "Remastered
+  2009") plus a trailing edition ("Deluxe Edition", "30th Anniversary Super Deluxe") and is split at
   punctuation with one-letter pieces dropped ("(What's the Story) Morning Glory?" searches "Morning
-  Glory - Oasis", then "Morning Glory"; "AC/DC" is "AC DC"; "R.E.M." is left out). A wrong album from the
-  broader search is still turned away: the folder must name the album artist and match every song. The
-  second search costs about 10 s of the shared search slot. A part folder the first wording found is
-  not kept: the title alone finds every folder the pair did unless slskd's response cap fills with
-  other albums (`ponytail:` in `AlbumSearchStep.judge`). A compilation ("Various Artists") searches its
-  title only.
+  Glory"; "Definitely Maybe (30th Anniversary Deluxe Edition)" searches "Definitely Maybe"). A wrong
+  album is still turned away: the folder must name the album artist and match every song. One search
+  per album, so one slot of about 10 s.
 - **The step** (`AlbumSearchStep`): start the search; poll the batched search list; when the search is
   complete or has used `search-budget-ms`, fetch its responses once and judge them with
   `AlbumFolderPicker`.
@@ -111,8 +108,8 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 |---|---|
 | Whole album first at all | `DownloadTaskRunner.gatherMetadata`: pass no hold for `ALBUM` and albums behave as before |
 | How long songs wait (2 × `search-budget-ms`) | `AlbumSearchStep.holdUntil` |
-| Wordings and their order, title clean-up | `AlbumSearch.wordings`, `AlbumSearch.EDITION`, `AlbumSearch.plain` |
-| When the title alone is tried (no whole folder) | `whole` in `AlbumSearchStep.judge`; `folders.isEmpty()` there is the old "nobody had anything" rule |
+| The wording, title clean-up | `AlbumSearch.wordings`, `AlbumSearch.EDITION`, `AlbumSearch.plain` |
+| A second wording (none since 07-10-2026) | re-add it as the addendum below says: PR #108's diff is the recipe |
 | Candidates per song (3, other sharers) | `AlbumSearchStep.CANDIDATES_PER_SONG`, `AlbumFolderPicker.candidates` |
 | Last-track allowance, 30 s floor | `AlbumFolderPicker.lengthGap` |
 | Words that mark another take | `AlbumFolderPicker.OTHER_TAKE`, `PLAIN_VERSION` |
@@ -159,3 +156,34 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
   only the length catches such a take.
 - Asking a sharer for its whole folder listing (slskd's directory endpoint) when the search returned only
   part of it.
+
+## Addendum 07-10-2026: the album name alone, never the artist
+
+The owner's call of 07-10-2026 (ask 8 of the sweep): an album search asks Soulseek for the clean album
+name only. `AlbumSearch.wordings()` returns one wording; the "trying the next wording" branch in
+`AlbumSearchStep.judge` and `hasAnotherWording()` are gone. `artists` stays on the record because the
+picker needs it; `search_tier` stays on the row (always 0) and `searchQuery()` keeps clamping, so a row an
+older build left at tier 1 still searches the title. No migration.
+
+Why it is safe: the artist guard was never in the query. `AlbumFolderPicker` rejects every folder whose
+path and file names do not name the album artist (`Grouped.names`, `TrackMatchingService.nameInPath`),
+whatever was searched; the fixture `album-laughing-stock.json` is a title-only search and already proves
+it (filfil's `(1991) Laughing Stock` folder with no "Talk Talk" anywhere is turned away).
+
+Why it is better: Soulseek silently drops any search naming certain artists (Gorillaz, Lady Gaga,
+Depeche Mode...; `soulseek-search-lab-26-09-2026.md`), so "Meanwhile EP - Gorillaz" got nothing on 04-10
+and only the second search found it; now the first and only search does. Every album in the 04-10 probe
+was found whole from a title-only search (72-230 whole folders each). And Soulseek requires every term
+to match, so adding the artist can only return a subset of what the title alone returns; the second
+search could never find what the first missed, except through the 250-response cap.
+
+Known exposure: a title that is a bare number or a generic phrase ("1989", "21", "Greatest Hits",
+"Live") can fill the 250 responses with other artists' folders; the album then ends `NO_WHOLE_FOLDER`
+and its songs search on their own, as before the album work. The 04-10 probe did not see it happen; the
+`slskd-album-probe` scripts can measure it on request.
+
+How to re-add a wording: PR #108 (`1eb8a31`) is the diff to reapply. Give `wordings()` a second element,
+restore `hasAnotherWording()`, and in `AlbumSearchStep.judge` send the row back to `SEARCH_INIT` at
+`searchTier + 1` when the best folder is not whole. The only wording with a mechanism behind it would be
+the title plus its edition words ("Definitely Maybe Deluxe"), for a deluxe request whose folders got
+crowded out of the cap by plain editions.
