@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static reactor.netty.http.HttpConnectionLiveness.log;
@@ -83,12 +84,7 @@ public class SlskdSearchResultProcessor {
             // what it is in the log below rather than as a generic step error.
             List<SearchResponseItem> responses =
                     state.getResponses() == null ? List.of() : state.getResponses();
-            List<Pick> candidates = responses.stream()
-                    .flatMap(item -> item.getFiles().stream()
-                            .filter(this::isLosslessOrHighBitRate)
-                            .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename(), wording))))
-                    .filter(pick -> pick.grade() != TrackMatchingService.Match.NONE)
-                    .toList();
+            List<Pick> candidates = graded(state, query, wording, this::isLosslessOrHighBitRate);
             if (albumTrackSeconds != null) {
                 List<Pick> sameLength = candidates.stream()
                         .filter(pick -> pick.file().getLength()
@@ -121,18 +117,7 @@ public class SlskdSearchResultProcessor {
             // is small: only when EVERY sharer of the majority length is that overloaded does an
             // odd-length file get tried first, and the threshold is set high enough that "busy" alone
             // never triggers it.
-            Map<TrackMatchingService.Match, Map<Integer, Long>> countByLength = candidates.stream()
-                    .filter(pick -> pick.file().getLength().isPresent())
-                    .collect(Collectors.groupingBy(Pick::grade,
-                            Collectors.groupingBy(pick -> pick.file().getLength().get(), Collectors.counting())));
-            candidates = candidates.stream()
-                    .sorted(Comparator
-                            .comparing(Pick::grade)
-                            .thenComparing(pick -> isOverloaded(pick.peer()))
-                            .thenComparingLong((Pick pick) -> -pick.file().getLength()
-                                    .map(length -> countByLength.get(pick.grade()).get(length)).orElse(0L))
-                            .thenComparing(Pick::peer, BY_AVAILABILITY))
-                    .toList();
+            candidates = rank(candidates);
 
             long exact = candidates.stream().filter(pick -> pick.grade() == TrackMatchingService.Match.EXACT).count();
             log.info("Completed candidate selection for query='{}' (searched '{}') - {} response(s), {} total files, {} relevant candidates ({} in the requested version, {} other versions, {} unverified artist{}); limiting to {} by maxFilesPerDownload",
@@ -141,6 +126,45 @@ public class SlskdSearchResultProcessor {
                     unverified < candidates.size() || unverified == 0 ? "" : ", no file names the artist", maxFilesPerDownload);
             return spreadAcrossSharers(candidates).stream().limit(maxFilesPerDownload).toList();
         });
+    }
+
+    /**
+     * Every file of the search that is the song -- any grade but NONE, any format or bit rate -- in
+     * the order the automatic picker would try them. For a person to choose from (manual pick,
+     * 07-10-2026): the format and bit-rate rule, the album-length rule and the unverified-artist rule
+     * are the picker's judgement calls, and the whole point of choosing by hand is to overrule them,
+     * so none is applied here; the grade travels on each file instead and is shown as a badge. Nothing
+     * is capped either: the caller keeps as many as it wants to store.
+     */
+    public List<Pick> relevantFiles(SearchState state, String query, String wording) {
+        return rank(graded(state, query, wording, file -> true));
+    }
+
+    /** Every file passing {@code keep}, graded against the song; files the matcher rejects (NONE) are gone. */
+    private List<Pick> graded(SearchState state, String query, String wording, Predicate<SearchFile> keep) {
+        List<SearchResponseItem> responses = state.getResponses() == null ? List.of() : state.getResponses();
+        return responses.stream()
+                .flatMap(item -> item.getFiles().stream()
+                        .filter(keep)
+                        .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename(), wording))))
+                .filter(pick -> pick.grade() != TrackMatchingService.Match.NONE)
+                .toList();
+    }
+
+    /** The picker's order: grade, then overloaded sharers last, then the length most files share, then availability. */
+    private List<Pick> rank(List<Pick> candidates) {
+        Map<TrackMatchingService.Match, Map<Integer, Long>> countByLength = candidates.stream()
+                .filter(pick -> pick.file().getLength().isPresent())
+                .collect(Collectors.groupingBy(Pick::grade,
+                        Collectors.groupingBy(pick -> pick.file().getLength().get(), Collectors.counting())));
+        return candidates.stream()
+                .sorted(Comparator
+                        .comparing(Pick::grade)
+                        .thenComparing(pick -> isOverloaded(pick.peer()))
+                        .thenComparingLong((Pick pick) -> -pick.file().getLength()
+                                .map(length -> countByLength.get(pick.grade()).get(length)).orElse(0L))
+                        .thenComparing(Pick::peer, BY_AVAILABILITY))
+                .toList();
     }
 
     /**
@@ -206,10 +230,15 @@ public class SlskdSearchResultProcessor {
      * claimed "mp3"). Falls back to that field only for a name with no suffix.
      */
     private static String format(SearchFile file) {
-        String name = file.getFilename() == null ? "" : file.getFilename();
+        return format(file.getFilename(), file.getExtension());
+    }
+
+    /** The same from the two stored fields of a candidate; public so the manual picker's views can show it. */
+    public static String format(String filename, String extension) {
+        String name = filename == null ? "" : filename;
         String leaf = name.substring(Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/')) + 1);
         int dot = leaf.lastIndexOf('.');
-        String format = dot >= 0 ? leaf.substring(dot + 1) : file.getExtension();
+        String format = dot >= 0 ? leaf.substring(dot + 1) : extension;
         return format == null ? "" : format.toLowerCase(Locale.ROOT);
     }
 

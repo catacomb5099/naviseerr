@@ -768,7 +768,56 @@ public class DownloadTaskRepository {
                AND (t.lease_expires_at IS NULL OR t.lease_expires_at < :now)
             """;
 
+    // ---- manual pick: what a search found, kept for a person to choose from (V15) ---------------
+
+    /**
+     * Writes the files a completed search found that are the song. Never with a lease: this is a side
+     * cache the loop never reads, written by the step that holds the full result. An EMPTY list only
+     * lands on a row that has nothing yet (stamping "searched, nothing relevant"); it never wipes a list
+     * an earlier wording found -- the title alone and "title - artist" each see files the other misses.
+     */
+    private static final String SAVE_SEARCH_RESULTS_SQL = """
+            UPDATE download_tasks
+               SET search_results = :files::jsonb,
+                   search_results_at = :now
+             WHERE task_id = :id
+               AND (search_results_at IS NULL OR jsonb_array_length(:files::jsonb) > 0)
+            """;
+
+    /** One song with what the manual picker shows: its own state and the files its search found. */
+    private static final String CACHED_SEARCH_SQL = """
+            SELECT task_id, phase, song_name, search_tier, candidates, candidate_index, library_path,
+                   slskd_filename, search_results::text AS search_results, search_results_at
+              FROM download_tasks
+             WHERE download_id = :id
+               AND task_id = :taskId
+            """;
+
+    /** The folders an album search judged, best first; written whole each time the step judges a wording. */
+    private static final String SAVE_ALBUM_FOLDERS_SQL = """
+            UPDATE album_searches
+               SET folders = :folders::jsonb,
+                   folders_at = :now
+             WHERE download_id = :id
+            """;
+
+    /**
+     * One download's album search with its remembered folders, plus the download's type (the album
+     * picker refuses anything but an ALBUM) and the album's name (the wording it searched with). A
+     * download with no album search row (admitted before P5, or not an album) reads a null phase.
+     */
+    private static final String CACHED_ALBUM_SEARCH_SQL = """
+            SELECT d.download_type, a.phase, a.outcome, a.search_tier, m.title, m.artists,
+                   a.folders::text AS folders, a.folders_at
+              FROM downloads d
+              LEFT JOIN album_searches a ON a.download_id = d.download_id
+              LEFT JOIN media_items m ON m.youtube_id = d.youtube_id
+             WHERE d.download_id = :id
+            """;
+
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
+            new TypeReference<>() {};
+    private static final TypeReference<List<StoredFolder>> FOLDER_LIST =
             new TypeReference<>() {};
 
     private final DatabaseClient client;
@@ -1163,6 +1212,107 @@ public class DownloadTaskRepository {
                 .bind("now", now)
                 .fetch()
                 .rowsUpdated();
+    }
+
+    /**
+     * One song's row as the manual picker reads it: the files its search found ({@code files}, best
+     * first, empty with a null {@code searchedAt} for a row from before V15 or a search that never
+     * completed), and what it is doing now. {@code phase} is the raw column, which unlike
+     * {@link DownloadPhase} includes the two terminal values.
+     */
+    public record CachedSearch(UUID taskId, String phase, String songName, int searchTier,
+                               List<DownloadCandidate> candidates, int candidateIndex, String libraryPath,
+                               String slskdFilename, List<DownloadCandidate> files, Instant searchedAt) {
+        /** The file this song is downloading (or downloaded) from; null before any was chosen. */
+        public DownloadCandidate current() {
+            return candidateIndex >= 0 && candidateIndex < candidates.size() ? candidates.get(candidateIndex) : null;
+        }
+    }
+
+    /**
+     * One download's album search as the manual picker reads it. {@code phase} is null when the download
+     * has no album search row; {@code title} and {@code artists} are the album's media row, for the
+     * wording it searched with; {@code folders} is empty with a null {@code foldersAt} when nothing was
+     * remembered.
+     */
+    public record CachedAlbumSearch(DownloadType type, String phase, String outcome, Integer searchTier,
+                                    String title, List<String> artists, List<StoredFolder> folders,
+                                    Instant foldersAt) {
+        /** The folders that hold a file for this song: the list a song inside an album chooses from. */
+        public List<StoredFolder> holding(UUID taskId) {
+            return folders.stream().filter(folder -> folder.files().containsKey(taskId)).toList();
+        }
+    }
+
+    /** Remembers what a completed search found for the manual picker; see SAVE_SEARCH_RESULTS_SQL. */
+    public Mono<Long> saveSearchResults(UUID taskId, List<DownloadCandidate> files, Instant now) {
+        return client.sql(SAVE_SEARCH_RESULTS_SQL)
+                .bind("id", taskId)
+                .bind("files", writeCandidates(files))
+                .bind("now", now)
+                .fetch()
+                .rowsUpdated();
+    }
+
+    /** One song of one download with its remembered files; empty when the ids do not match a row. */
+    public Mono<CachedSearch> cachedSearch(UUID downloadId, UUID taskId) {
+        return client.sql(CACHED_SEARCH_SQL)
+                .bind("id", downloadId)
+                .bind("taskId", taskId)
+                .map((row, meta) -> new CachedSearch(
+                        row.get("task_id", UUID.class),
+                        row.get("phase", String.class),
+                        row.get("song_name", String.class),
+                        row.get("search_tier", Integer.class),
+                        readCandidates(row.get("candidates", String.class)),
+                        row.get("candidate_index", Integer.class),
+                        row.get("library_path", String.class),
+                        row.get("slskd_filename", String.class),
+                        readCandidates(row.get("search_results", String.class)),
+                        row.get("search_results_at", Instant.class)))
+                .one();
+    }
+
+    /** Remembers the folders an album search judged, best first; see SAVE_ALBUM_FOLDERS_SQL. */
+    public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now) {
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(folders);
+        } catch (Exception e) {
+            return Mono.error(new IllegalStateException("Could not serialise album folders", e));
+        }
+        return client.sql(SAVE_ALBUM_FOLDERS_SQL)
+                .bind("id", downloadId)
+                .bind("folders", json)
+                .bind("now", now)
+                .fetch()
+                .rowsUpdated();
+    }
+
+    /** One download's album search with its remembered folders; empty for an unknown download. */
+    public Mono<CachedAlbumSearch> cachedAlbumSearch(UUID downloadId) {
+        return client.sql(CACHED_ALBUM_SEARCH_SQL)
+                .bind("id", downloadId)
+                .map((row, meta) -> new CachedAlbumSearch(
+                        DownloadType.valueOf(row.get("download_type", String.class)),
+                        row.get("phase", String.class),
+                        row.get("outcome", String.class),
+                        row.get("search_tier", Integer.class),
+                        row.get("title", String.class),
+                        artists(row.get("artists", String[].class)),
+                        readFolders(row.get("folders", String.class)),
+                        row.get("folders_at", Instant.class)))
+                .one();
+    }
+
+    private List<StoredFolder> readFolders(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return objectMapper.readValue(json, FOLDER_LIST);
+        } catch (Exception e) {
+            log.error("Could not deserialise remembered album folders; treating as none", e);
+            return List.of();
+        }
     }
 
     public Mono<Long> save(DownloadTask task, String owner) {

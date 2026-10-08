@@ -34,6 +34,8 @@ public class AlbumSearchStep {
 
     /** A song gets its file in the best folder plus the same track in the next two (other sharers). */
     static final int CANDIDATES_PER_SONG = 3;
+    /** How many judged folders are kept for the manual picker (about 75 KB at 20 x 15 files). */
+    static final int REMEMBERED_FOLDERS = 20;
 
     private final DownloadTaskRepository repository;
     private final SlskdService slskdService;
@@ -149,7 +151,25 @@ public class AlbumSearchStep {
         return Mono.fromCallable(() -> picker.folders(responses, songs, album.title(), album.artists(),
                         sharer -> stallingSharers.isStalling(sharer, now)))
                 .subscribeOn(Schedulers.parallel())
+                .flatMap(folders -> remember(album, folders, now).thenReturn(folders))
                 .flatMap(folders -> settle(album, responses.size(), songs.size(), folders, now, owner));
+    }
+
+    /**
+     * Keeps the judged folders (best first, the top {@link #REMEMBERED_FOLDERS}) on the album row for a
+     * person to choose from later (manual pick, 07-10-2026). Nothing to write when no folder qualified; a failed write is logged and the search goes on.
+     */
+    private Mono<Void> remember(AlbumSearch album, List<AlbumFolderPicker.Folder> folders, Instant now) {
+        if (folders.isEmpty()) {
+            return Mono.empty();
+        }
+        return repository.saveAlbumFolders(album.downloadId(), StoredFolder.of(folders, REMEMBERED_FOLDERS), now)
+                .onErrorResume(error -> {
+                    log.warn("Could not remember the {} folder(s) the album search of download {} found; the "
+                            + "manual picker will have nothing to show for it", folders.size(), album.downloadId(), error);
+                    return Mono.empty();
+                })
+                .then();
     }
 
     private Mono<Void> settle(AlbumSearch album, int responses, int songs, List<AlbumFolderPicker.Folder> folders,

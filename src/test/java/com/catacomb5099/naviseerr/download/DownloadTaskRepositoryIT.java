@@ -1856,6 +1856,112 @@ class DownloadTaskRepositoryIT {
                 .map((row, meta) -> List.of(row.get("artist_ids", String[].class))).one().block();
     }
 
+    // ---- manual pick: what a search found, remembered (V15) ---------------------------------------
+
+    @Test
+    void saveSearchResults_roundTripsTheFilesWithTheirLength_andStampsWhenTheyWereFound() {
+        UUID id = admitOneSong("PENDING");
+        UUID task = taskIdOf(id);
+        DownloadTaskRepository.CachedSearch before = repository.cachedSearch(id, task).block();
+        assertEquals("SEARCH_INIT", before.phase());
+        assertTrue(before.files().isEmpty());
+        assertNull(before.searchedAt(), "nothing searched yet reads as never searched");
+        assertNull(before.current(), "no candidate chosen yet");
+
+        assertEquals(1L, repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice", "bob"), NOW).block());
+
+        DownloadTaskRepository.CachedSearch after = repository.cachedSearch(id, task).block();
+        assertEquals(List.of("alice", "bob"), after.files().stream().map(DownloadCandidate::username).toList());
+        assertEquals(240, after.files().getFirst().length(), "the length survives the JSON round trip");
+        assertEquals(NOW, after.searchedAt());
+        assertEquals("song", after.songName());
+        assertEquals(0, after.searchTier());
+    }
+
+    @Test
+    void saveSearchResults_anEmptyListStampsAFreshRow_butNeverWipesAListAnotherWordingFound() {
+        UUID id = admitOneSong("PENDING");
+        UUID task = taskIdOf(id);
+
+        assertEquals(1L, repository.saveSearchResults(task, List.of(), NOW).block(), "searched, nothing relevant: stamped");
+        assertEquals(NOW, repository.cachedSearch(id, task).block().searchedAt());
+
+        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice"), NOW.plusSeconds(5)).block();
+        assertEquals(0L, repository.saveSearchResults(task, List.of(), NOW.plusSeconds(9)).block(),
+                "the next wording finding nothing leaves the files the first one found");
+
+        DownloadTaskRepository.CachedSearch cached = repository.cachedSearch(id, task).block();
+        assertEquals(1, cached.files().size());
+        assertEquals(NOW.plusSeconds(5), cached.searchedAt());
+    }
+
+    @Test
+    void cachedSearch_isKeyedOnBothIds_andReadsTerminalRowsToo() {
+        UUID id = admitOneSong("PENDING");
+        UUID other = admitOneSong("PENDING");
+        UUID task = taskIdOf(id);
+        assertNull(repository.cachedSearch(other, task).blockOptional().orElse(null), "a song of another download is not found");
+
+        finish(template, downloadService, task, DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES, NOW);
+
+        assertEquals("FAILED", repository.cachedSearch(id, task).block().phase());
+    }
+
+    @Test
+    void retry_leavesTheRememberedFilesInPlace() {
+        UUID id = failedSong();
+        UUID task = taskIdOf(id);
+        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice"), NOW).block();
+
+        assertEquals(1L, repository.retry(id, null, NOW.plusSeconds(1)).block());
+
+        DownloadTaskRepository.CachedSearch cached = repository.cachedSearch(id, task).block();
+        assertEquals(1, cached.files().size(), "the picker still has something to show while the new search runs");
+        assertEquals("SEARCH_INIT", cached.phase());
+    }
+
+    @Test
+    void saveAlbumFolders_roundTripsTheFoldersWithTheirFilesByTaskId_underTheDownloadsTypeAndName() {
+        UUID id = admitAlbum("1 a", "2 b");
+        List<UUID> songs = taskIdsOf(id);
+        DownloadTaskRepository.CachedAlbumSearch before = repository.cachedAlbumSearch(id).block();
+        assertEquals(DownloadType.ALBUM, before.type());
+        assertEquals("SEARCH_INIT", before.phase());
+        assertEquals("Laughing Stock", before.title());
+        assertEquals(List.of("Talk Talk"), before.artists());
+        assertTrue(before.folders().isEmpty());
+        assertNull(before.foldersAt());
+
+        StoredFolder folder = new StoredFolder("Baron53", "TALK TALK\\LAUGHING STOCK", true, 3, 1_500_000, 2,
+                java.util.Map.of(songs.get(0), DownloadTaskFixtures.albumFolderCandidates("Baron53").getFirst()));
+        assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW).block());
+
+        DownloadTaskRepository.CachedAlbumSearch after = repository.cachedAlbumSearch(id).block();
+        assertEquals(NOW, after.foldersAt());
+        assertEquals(1, after.folders().size());
+        StoredFolder read = after.folders().getFirst();
+        assertEquals("Baron53", read.username());
+        assertEquals("TALK TALK\\LAUGHING STOCK", read.path());
+        assertEquals(3, read.queueLength());
+        assertEquals(2, read.extras());
+        assertEquals("music/Baron53/song.flac", read.files().get(songs.get(0)).filename(), "UUID keys survive JSON");
+        assertEquals(DownloadCandidate.ALBUM_FOLDER, read.files().get(songs.get(0)).source());
+        assertEquals(1, after.holding(songs.get(0)).size());
+        assertTrue(after.holding(songs.get(1)).isEmpty(), "a song the folder lacks has no folder to choose");
+    }
+
+    @Test
+    void cachedAlbumSearch_forASongDownload_hasItsTypeAndNoAlbumSearch_andIsEmptyForAnUnknownId() {
+        UUID id = admitOneSong("PENDING");
+
+        DownloadTaskRepository.CachedAlbumSearch song = repository.cachedAlbumSearch(id).block();
+
+        assertEquals(DownloadType.SONG, song.type());
+        assertNull(song.phase(), "no album_searches row");
+        assertTrue(song.folders().isEmpty());
+        assertNull(repository.cachedAlbumSearch(UUID.randomUUID()).blockOptional().orElse(null));
+    }
+
     private String phaseOf(UUID id) {
         return template.getDatabaseClient()
                 .sql("SELECT phase FROM download_tasks WHERE download_id = :id").bind("id", id)

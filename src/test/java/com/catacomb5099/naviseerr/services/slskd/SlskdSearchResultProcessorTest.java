@@ -360,6 +360,43 @@ class SlskdSearchResultProcessorTest {
     }
 
     @Test
+    void relevantFiles_keepsEveryGradedFileWhateverItsFormat_inThePickersOrder_andDropsOnlyNone() {
+        // The manual picker's list: the 192 kbps MP3 and the other version the automatic picker would
+        // drop are a person's to refuse, and nothing is capped.
+        ReflectionTestUtils.setField(processor, "minBitRate", 320);
+        ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 1);
+        SearchFile exactFlac = new SearchFile("Oasis\\Definitely Maybe\\05 - Live Forever.flac", 30_000_000L, 1, false, "",
+                Optional.empty(), Optional.of(276));
+        SearchFile lowMp3 = new SearchFile("Oasis\\Live Forever.mp3", 4_000_000L, 1, false, "", Optional.of(192), Optional.of(276));
+        SearchFile liveTake = new SearchFile("Oasis\\Live at Knebworth\\Live Forever (Live).flac", 40_000_000L, 1, false, "",
+                Optional.empty(), Optional.of(301));
+        SearchFile unrelated = new SearchFile("Oasis\\Wonderwall.flac", 30_000_000L, 1, false, "", Optional.empty(), Optional.of(258));
+        when(trackMatchingService.grade(eq("Live Forever - Oasis"), eq(exactFlac.getFilename()), eq("Live Forever"))).thenReturn(Match.EXACT);
+        when(trackMatchingService.grade(eq("Live Forever - Oasis"), eq(lowMp3.getFilename()), eq("Live Forever"))).thenReturn(Match.EXACT);
+        when(trackMatchingService.grade(eq("Live Forever - Oasis"), eq(liveTake.getFilename()), eq("Live Forever"))).thenReturn(Match.OTHER_VERSION);
+        when(trackMatchingService.grade(eq("Live Forever - Oasis"), eq(unrelated.getFilename()), eq("Live Forever"))).thenReturn(Match.NONE);
+        SearchResponseItem busy = peer("busy", 9_000_000, false, 40, lowMp3);
+        SearchResponseItem free = peer("free", 2_000_000, true, 0, exactFlac);
+        SearchResponseItem other = peer("other", 5_000_000, true, 0, liveTake);
+        SearchResponseItem noise = peer("noise", 5_000_000, true, 0, unrelated);
+
+        var files = processor.relevantFiles(state(busy, free, other, noise), "Live Forever - Oasis", "Live Forever");
+
+        assertEquals(List.of("free", "busy", "other"), files.stream().map(pick -> pick.peer().getUsername()).toList(),
+                "exact files first (the free slot ahead of the busy sharer), then the other version; the unrelated file is gone");
+        assertEquals(Match.OTHER_VERSION, files.getLast().grade());
+        assertEquals(List.of("free"), processor.selectBestFiles(state(busy, free, other, noise), "Live Forever - Oasis", "Live Forever")
+                .block().stream().map(pick -> pick.peer().getUsername()).toList(), "the automatic pick is unchanged by the refactor");
+    }
+
+    @Test
+    void format_readsTheSuffix_andFallsBackToSlskdsField() {
+        assertEquals("flac", SlskdSearchResultProcessor.format("Music\\Daft Punk\\03 - Digital Love.FLAC", "mp3"));
+        assertEquals("flac", SlskdSearchResultProcessor.format("Music\\Mr. Big\\Wild World", "flac"));
+        assertEquals("", SlskdSearchResultProcessor.format(null, null));
+    }
+
+    @Test
     void lengthTolerance_isTenSecondsOrThreePercent() {
         assertEquals(10, SlskdSearchResultProcessor.lengthTolerance(270));
         assertEquals(18, SlskdSearchResultProcessor.lengthTolerance(587));

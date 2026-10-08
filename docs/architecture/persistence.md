@@ -187,6 +187,34 @@ those changes add no migration of their own and cannot land out of order.
   and the opposite order deadlocks with a release. Its `SEARCH_POLL` rows are added into `COUNT_ACTIVE_SEARCHES_SQL`. Rows are kept once
   DONE, like task rows.
 
+### V15: what a search found, remembered (manual pick, 07-10-2026)
+
+[V15__manual_pick_results.sql](../../src/main/resources/db/migration/V15__manual_pick_results.sql) adds
+two JSONB side caches so a person can choose the file a song (or the folder an album) downloads from
+without searching again. Both are written by their own statements, never by `SAVE_SQL`, so the per-poll
+write volume is unchanged and `DownloadTask` does not carry them. JSONB rather than the `TEXT` of
+`candidates`: written as `:json::jsonb`, read as `col::text`, exactly like `radios.songs`, and
+`jsonb_array_length` needs no cast if a view ever wants a count.
+
+- `download_tasks.search_results` (default `'[]'`), `search_results_at`: every file of the completed
+  search that is the song (any grade but NONE, any format or bit rate, the picker's order, the first
+  `DownloadStepExecutor.REMEMBERED_FILES` = 100) as a `DownloadCandidate` array, written by
+  `SAVE_SEARCH_RESULTS_SQL` from `DownloadStepExecutor.remember` on the completion transition, after the
+  one refetch. An empty list only lands on a row with no timestamp yet (searched, nothing relevant), never
+  over a list another wording found. `search_results_at IS NULL` means never searched or before V15.
+  `RETRY_SQL` leaves both alone, so the picker has something to show while a re-search runs.
+  `DownloadCandidate` gained a nullable `length` (seconds) for this; older rows read null.
+- `album_searches.folders` (default `'[]'`), `folders_at`: the folders `AlbumFolderPicker.folders`
+  ranked (the first `AlbumSearchStep.REMEMBERED_FOLDERS` = 20) as `StoredFolder` records -- sharer, path,
+  the sharer's slot/queue/speed, `extras`, and `files`: the matched `DownloadCandidate` per task id --
+  written by `SAVE_ALBUM_FOLDERS_SQL` from `AlbumSearchStep.judge` whenever the list is non-empty, also
+  when the step then moves on to the next wording.
+
+Read by `cachedSearch(downloadId, taskId)` (one song's row with its files: `CachedSearch`) and
+`cachedAlbumSearch(downloadId)` (the download's type, its album search's phase/outcome/tier, the album's
+name and the folders: `CachedAlbumSearch`). Both writes swallow and log their own errors at the call
+site: a cache miss must never fail a search.
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.

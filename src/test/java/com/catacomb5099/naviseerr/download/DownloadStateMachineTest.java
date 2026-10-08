@@ -200,7 +200,7 @@ class DownloadStateMachineTest {
     private static List<DownloadCandidate> graded(String grade, String... usernames) {
         return candidates(usernames).stream().map(c -> new DownloadCandidate(c.username(), c.filename(),
                 c.extension(), c.bitRate(), c.size(), c.code(), c.isLocked(), c.hasFreeUploadSlot(),
-                c.queueLength(), c.uploadSpeed(), grade, null)).toList();
+                c.queueLength(), c.uploadSpeed(), grade, null, c.length())).toList();
     }
 
     @Test
