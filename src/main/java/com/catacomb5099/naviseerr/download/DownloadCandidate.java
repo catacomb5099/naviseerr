@@ -80,6 +80,16 @@ public record DownloadCandidate(
                 file.getLength() == null ? null : file.getLength().orElse(null));
     }
 
+    /**
+     * The same file as a person's choice: source {@link #MANUAL}, and grade EXACT whatever the matcher
+     * said -- the person has decided this is the song, so "already downloaded" and filing treat it as
+     * the real one (not as a stand-in).
+     */
+    public DownloadCandidate asManual() {
+        return new DownloadCandidate(username, filename, extension, bitRate, size, code, isLocked, hasFreeUploadSlot,
+                queueLength, uploadSpeed, TrackMatchingService.Match.EXACT.name(), MANUAL, length);
+    }
+
     public SearchFile toSearchFile() {
         return new SearchFile(filename, size, code, isLocked, extension, Optional.ofNullable(bitRate),
                 Optional.ofNullable(length));

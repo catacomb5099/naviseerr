@@ -268,6 +268,94 @@ class DownloadServiceTest {
         assertEquals(320, carol.files().getFirst().bitrateKbps());
     }
 
+    // ---- picking ------------------------------------------------------------------------------------
+
+    @Test
+    void pick_ofAFileNotInTheSongsList_changesNothing_andTellsSlskdNothing() {
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(song("DOWNLOAD_POLL", candidates("alice"), candidates("alice"), NOW)));
+
+        assertEquals(0L, service.pick(id, taskId, "zed", "music/zed/song.flac", NOW).block(), "a stale dialog: the endpoint answers 409");
+
+        verify(repository, never()).pick(any(), any(), any());
+        verifyNoInteractions(slskd, organiser);
+    }
+
+    @Test
+    void pick_rePointsTheSongAtTheChosenFileAsItsOnlyCandidate_cancelsTheOldTransfer_andRemovesItsPartials() {
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(song("DOWNLOAD_POLL", candidates("alice"), candidates("alice", "bob"), NOW)));
+        DownloadTask old = DownloadTaskFixtures.downloadPolling(candidates("alice"), 0, 0, "t-1");
+        when(repository.pick(eq(id), any(), eq(NOW))).thenReturn(Flux.just(old));
+
+        assertEquals(1L, service.pick(id, taskId, "bob", "music/bob/song.flac", NOW).block());
+
+        DownloadCandidate manual = candidate("bob").asManual();
+        assertEquals(DownloadCandidate.MANUAL, manual.source());
+        assertEquals("EXACT", manual.grade());
+        verify(repository).pick(id, Map.of(taskId, manual), NOW);
+        verify(slskd).cancelDownload("alice", "t-1");
+        verify(organiser).deletePartials(old);
+    }
+
+    @Test
+    void pick_ofAnAlbumsSong_choosesAmongTheFoldersThatHoldIt() {
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(song("DOWNLOAD_INIT", candidates("bob"), List.of(), null)));
+        when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(album("DONE", "WHOLE_FOLDER", List.of(
+                folder("bob", "music/bob", Map.of(taskId, candidate("bob"))),
+                folder("dave", "music/dave", Map.of(taskId, candidate("dave")))))));
+        when(repository.pick(eq(id), any(), eq(NOW))).thenReturn(Flux.just(DownloadTaskFixtures.downloadInit(candidates("bob"), 0, 0)));
+
+        assertEquals(1L, service.pick(id, taskId, "dave", "music/dave/song.flac", NOW).block());
+
+        verify(repository).pick(id, Map.of(taskId, candidate("dave").asManual()), NOW);
+        verify(slskd, never()).cancelDownload(any(), any());   // nothing was enqueued yet
+        verify(organiser).deletePartials(any());
+    }
+
+    @Test
+    void pick_ofAnUnknownSong_isEmpty_soTheEndpointAnswers404() {
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.empty());
+        assertTrue(service.pick(id, taskId, "alice", "x", NOW).blockOptional().isEmpty());
+    }
+
+    @Test
+    void albumPick_rePointsEverySongTheFolderHolds_andStopsEachOldTransfer() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(album("DONE", "WHOLE_FOLDER", List.of(
+                folder("bob", "music/bob", Map.of(first, candidate("bob"), second, candidate("bob"))),
+                folder("carol", "music/carol", Map.of(first, candidate("carol"), second, candidate("carol")))))));
+        DownloadTask oldFirst = DownloadTaskFixtures.downloadPolling(candidates("bob"), 0, 0, "t-1").toBuilder().taskId(first).build();
+        DownloadTask oldSecond = DownloadTaskFixtures.downloadPolling(candidates("bob"), 0, 0, "t-2").toBuilder().taskId(second).build();
+        when(repository.pick(eq(id), any(), eq(NOW))).thenReturn(Flux.just(oldFirst, oldSecond));
+
+        assertEquals(2L, service.albumPick(id, "carol", "music/carol", NOW).block());
+
+        verify(repository).pick(id, Map.of(first, candidate("carol").asManual(), second, candidate("carol").asManual()), NOW);
+        verify(slskd).cancelDownload("bob", "t-1");
+        verify(slskd).cancelDownload("bob", "t-2");
+        verify(organiser, times(2)).deletePartials(any());
+    }
+
+    @Test
+    void albumPick_ofAFolderNotRemembered_changesNothing() {
+        when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(album("DONE", "WHOLE_FOLDER", List.of(
+                folder("bob", "music/bob", Map.of(taskId, candidate("bob")))))));
+
+        assertEquals(0L, service.albumPick(id, "bob", "music/elsewhere", NOW).block());
+
+        verify(repository, never()).pick(any(), any(), any());
+    }
+
+    @Test
+    void albumPick_ofAPlaylist_isNotAnAlbum_andAnUnknownDownloadIsEmpty() {
+        when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(new DownloadTaskRepository.CachedAlbumSearch(
+                DownloadType.PLAYLIST, null, null, null, "Britpop", List.of(), List.of(), null)));
+        assertThrows(DownloadService.NotAnAlbumException.class, () -> service.albumPick(id, "bob", "x", NOW).block());
+
+        when(repository.cachedAlbumSearch(id)).thenReturn(Mono.empty());
+        assertTrue(service.albumPick(id, "bob", "x", NOW).blockOptional().isEmpty());
+    }
+
     @Test
     void albumCandidates_withNoFolders_saysWhy() {
         when(repository.songPicks(id)).thenReturn(Flux.empty());

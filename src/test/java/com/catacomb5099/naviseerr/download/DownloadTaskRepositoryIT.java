@@ -1981,6 +1981,103 @@ class DownloadTaskRepositoryIT {
         assertEquals("DOWNLOAD_INIT", picks.get(1).phase());
     }
 
+    // ---- manual pick: PICK_SQL ----------------------------------------------------------------------
+
+    private static final String TWO_CANDIDATES = "[{\"username\":\"alice\",\"filename\":\"music/alice/song.flac\",\"size\":1,\"code\":1},"
+            + "{\"username\":\"bob\",\"filename\":\"music/bob/song.flac\",\"size\":1,\"code\":1}]";
+
+    @Test
+    void pick_resetsADownloadingSongInPlaceToTheChosenFile_returnsWhatItWasDoing_andLeavesItsSiblingsAlone() {
+        UUID id = admitAlbum("1 a", "2 b");
+        List<UUID> songs = taskIdsOf(id);
+        setTask(songs.get(0), "phase = 'DOWNLOAD_POLL', candidates = '" + TWO_CANDIDATES + "', candidate_index = 1, retry_index = 1, "
+                + "slskd_username = 'bob', slskd_filename = 'music/bob/song.flac', slskd_transfer_id = 't-1', progress_percent = 42, "
+                + "last_error = 'slow', lease_owner = 'x', lease_expires_at = '" + NOW.plusSeconds(30) + "'");
+
+        List<DownloadTask> old = repository.pick(id, java.util.Map.of(songs.get(0), DownloadTaskFixtures.candidate("carol").asManual()),
+                NOW.plusSeconds(10)).collectList().block();
+
+        assertEquals(1, old.size());
+        assertEquals(songs.get(0), old.getFirst().taskId());
+        assertEquals(List.of("alice", "bob"), old.getFirst().candidates().stream().map(DownloadCandidate::username).toList(),
+                "the OLD list, so deletePartials walks the files that were tried");
+        assertEquals(1, old.getFirst().candidateIndex());
+        assertEquals("bob", old.getFirst().slskdUsername());
+        assertEquals("t-1", old.getFirst().slskdTransferId());
+
+        assertEquals("DOWNLOAD_INIT", taskField(songs.get(0), "phase"));
+        assertEquals("0", taskField(songs.get(0), "candidate_index"));
+        assertEquals("0", taskField(songs.get(0), "retry_index"));
+        assertEquals("0.00", taskField(songs.get(0), "progress_percent"));
+        assertNull(taskField(songs.get(0), "slskd_transfer_id"));
+        assertNull(taskField(songs.get(0), "slskd_username"));
+        assertNull(taskField(songs.get(0), "last_error"));
+        assertNull(taskField(songs.get(0), "lease_owner"), "a step mid-flight on the old attempt can no longer write the row");
+        assertEquals("SEARCH_INIT", taskField(songs.get(1), "phase"), "the sibling is untouched");
+        assertEquals(HOLD, nextAttemptOf(songs.get(1)), "and still held for the album search");
+
+        DownloadTask due = repository.claimDueTasks(10, "me", NOW.plusSeconds(10), Duration.ofMinutes(1), true, 2).blockFirst();
+        assertEquals(songs.get(0), due.taskId(), "due now");
+        assertEquals(1, due.candidates().size(), "the chosen file is the only candidate: no silent fallback");
+        assertEquals("carol", due.currentCandidate().username());
+        assertEquals(DownloadCandidate.MANUAL, due.currentCandidate().source());
+        assertEquals("EXACT", due.currentCandidate().grade());
+        assertEquals(NOW.plusSeconds(10), due.phaseEnteredAt());
+    }
+
+    @Test
+    void pick_refusesASucceededSong_andATaskOfAnotherDownload() {
+        UUID id = insertDownload("PENDING", "ALBUM");
+        admit(id, "1 done", "2 live");
+        List<UUID> songs = taskIdsOf(id);
+        finish(template, downloadService, songs.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        UUID other = admitOneSong("PENDING");
+
+        assertTrue(repository.pick(id, java.util.Map.of(songs.get(0), DownloadTaskFixtures.candidate("carol").asManual()), NOW)
+                .collectList().block().isEmpty(), "a filed file is not replaced (v1)");
+        assertEquals("SUCCEEDED", taskField(songs.get(0), "phase"));
+
+        assertTrue(repository.pick(id, java.util.Map.of(taskIdOf(other), DownloadTaskFixtures.candidate("carol").asManual()), NOW)
+                .collectList().block().isEmpty(), "the other download's song is not this download's to re-point");
+        assertEquals("SEARCH_INIT", taskField(taskIdOf(other), "phase"));
+        assertEquals("[]", taskField(taskIdOf(other), "candidates"));
+    }
+
+    @Test
+    void pick_reopensAPartlyDownloadedDownload_andClearsItsPlaylistStamp_likeRetry() {
+        UUID id = insertDownload("PENDING", "PLAYLIST");
+        admit(id, "1 ok", "2 bad");
+        List<UUID> songs = taskIdsOf(id);
+        finish(template, downloadService, songs.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, songs.get(1), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
+        repository.concludeDownloads().block();
+        repository.setOrganisedAt(id, NOW).block();
+        assertEquals("PARTIAL_SUCCESS", statusOf(id));
+
+        assertEquals(1, repository.pick(id, java.util.Map.of(songs.get(1), DownloadTaskFixtures.candidate("carol").asManual()), NOW.plusSeconds(5))
+                .collectList().block().size());
+
+        assertEquals("IN_PROGRESS", statusOf(id));
+        assertNull(organisedAtOf(id), "the playlist file is rewritten once the re-pointed song lands");
+        assertEquals("DOWNLOAD_INIT", taskField(songs.get(1), "phase"));
+        assertNull(taskField(songs.get(1), "failure_reason"));
+        assertNull(taskField(songs.get(1), "finished_at"));
+        assertEquals("SUCCEEDED", taskField(songs.get(0), "phase"), "the song with a file is left alone");
+    }
+
+    @Test
+    void pick_aStepStillHoldingTheOldLease_cannotSaveOverIt() {
+        UUID id = admitOneSong("PENDING");
+        DownloadTask claimed = repository.claimDueTasks(10, "slow-step", NOW, Duration.ofMinutes(1), true, 2).blockFirst();
+
+        repository.pick(id, java.util.Map.of(claimed.taskId(), DownloadTaskFixtures.candidate("carol").asManual()), NOW.plusSeconds(1))
+                .collectList().block();
+
+        assertEquals(0L, repository.save(claimed.withPhase(DownloadPhase.SEARCH_POLL, NOW), "slow-step").block(),
+                "the stale step's write lands nowhere");
+        assertEquals("DOWNLOAD_INIT", taskField(claimed.taskId(), "phase"));
+    }
+
     private String phaseOf(UUID id) {
         return template.getDatabaseClient()
                 .sql("SELECT phase FROM download_tasks WHERE download_id = :id").bind("id", id)

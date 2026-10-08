@@ -828,6 +828,62 @@ public class DownloadTaskRepository {
              ORDER BY t.position NULLS LAST, t.phase_entered_at, t.task_id
             """;
 
+    /**
+     * A person's choice: N songs of one download each get ONE chosen file, in place (same row, same
+     * task id, same titles), and go straight to the enqueue step; the download reopens if it had
+     * finished. Shaped like RETRY_SQL, with two differences. The candidate list is replaced by the one
+     * file ({@code :candidates}, index-aligned JSON): no silent fallback to the automatic list, so a
+     * file that fails ends the song SOURCES_EXHAUSTED and the person picks again. And it RETURNS what
+     * the OLD attempt held -- its list, index, sharer and transfer -- read through a second scan of the
+     * same table ({@code old}, the statement's snapshot), so the caller can stop that transfer in
+     * slskd and delete the right partial files: {@code deletePartials} walks the old list up to the old
+     * index. A SUCCEEDED song is refused (a filed file is not replaced in v1). Not a lease test, like
+     * CANCEL_SQL: the lease is cleared, so a step that was mid-flight on the old attempt writes nothing
+     * when it comes back (SAVE_SQL / FINISH_TASK_SQL guards), and the runner cancels a transfer it had
+     * just started. Tasks are locked before the download row, the same order as RETRY_SQL.
+     */
+    private static final String PICK_SQL = """
+            WITH picked AS (
+                UPDATE download_tasks t
+                   SET phase = 'DOWNLOAD_INIT',
+                       phase_entered_at = :now,
+                       next_attempt_at = :now,
+                       finished_at = NULL,
+                       failure_reason = NULL,
+                       last_error = NULL,
+                       candidates = p.candidates,
+                       candidate_index = 0,
+                       retry_index = 0,
+                       slskd_username = NULL,
+                       slskd_filename = NULL,
+                       slskd_transfer_id = NULL,
+                       progress_percent = 0,
+                       updated_at = now(),
+                       lease_owner = NULL,
+                       lease_expires_at = NULL
+                  FROM download_tasks old,
+                       unnest(:taskIds::text[], :candidates::text[]) AS p(task_id, candidates)
+                 WHERE t.task_id = p.task_id::uuid
+                   AND old.task_id = t.task_id
+                   AND t.download_id = :id
+                   AND t.phase <> 'SUCCEEDED'
+             RETURNING t.task_id, t.download_id,
+                       old.candidates AS old_candidates, old.candidate_index AS old_index,
+                       old.slskd_username AS old_username, old.slskd_filename AS old_filename,
+                       old.slskd_transfer_id AS old_transfer_id
+            ), reopened AS (
+                UPDATE downloads
+                   SET status = 'IN_PROGRESS',
+                       failure_reason = NULL,
+                       finished_at = NULL,
+                       organised_at = NULL
+                 WHERE download_id = :id
+                   AND status IN ('FAILED', 'PARTIAL_SUCCESS')
+                   AND EXISTS (SELECT 1 FROM picked)
+            )
+            SELECT * FROM picked
+            """;
+
     private static final TypeReference<List<DownloadCandidate>> CANDIDATE_LIST =
             new TypeReference<>() {};
     private static final TypeReference<List<StoredFolder>> FOLDER_LIST =
@@ -1271,6 +1327,34 @@ public class DownloadTaskRepository {
                             row.get("title", String.class), row.get("phase", String.class),
                             index >= 0 && index < candidates.size() ? candidates.get(index) : null);
                 })
+                .all();
+    }
+
+    /**
+     * Re-points each song in {@code picks} at its chosen file; see PICK_SQL.
+     *
+     * @return for every song that was re-pointed, what its OLD attempt held (candidates, index, sharer,
+     *         file, transfer id): what stopping it in slskd and on disk needs. Empty when nothing changed.
+     */
+    public Flux<DownloadTask> pick(UUID downloadId, java.util.Map<UUID, DownloadCandidate> picks, Instant now) {
+        if (picks.isEmpty()) {
+            return Flux.empty();
+        }
+        List<java.util.Map.Entry<UUID, DownloadCandidate>> picked = List.copyOf(picks.entrySet());
+        return client.sql(PICK_SQL)
+                .bind("id", downloadId)
+                .bind("now", now)
+                .bind("taskIds", picked.stream().map(e -> e.getKey().toString()).toArray(String[]::new))
+                .bind("candidates", picked.stream().map(e -> writeCandidates(List.of(e.getValue()))).toArray(String[]::new))
+                .map((row, meta) -> DownloadTask.builder()
+                        .taskId(row.get("task_id", UUID.class))
+                        .downloadId(row.get("download_id", UUID.class))
+                        .candidates(readCandidates(row.get("old_candidates", String.class)))
+                        .candidateIndex(row.get("old_index", Integer.class))
+                        .slskdUsername(row.get("old_username", String.class))
+                        .slskdFilename(row.get("old_filename", String.class))
+                        .slskdTransferId(row.get("old_transfer_id", String.class))
+                        .build())
                 .all();
     }
 

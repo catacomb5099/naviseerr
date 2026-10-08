@@ -166,17 +166,20 @@ public class DownloadService {
      * unknown download or song.
      */
     public Mono<TaskCandidatesView> candidates(UUID downloadId, UUID taskId) {
-        return repository.cachedSearch(downloadId, taskId).flatMap(song -> {
-            if (!song.files().isEmpty()) {
-                return Mono.just(view(song, song.files(), PickListStatus.READY, null));
-            }
-            return repository.cachedAlbumSearch(downloadId)
-                    .map(album -> album.holding(taskId).stream().map(folder -> folder.files().get(taskId)).toList())
-                    .defaultIfEmpty(List.of())
-                    .map(fromFolders -> fromFolders.isEmpty()
-                            ? view(song, fromFolders, statusOf(song), reasonOf(song))
-                            : view(song, fromFolders, PickListStatus.READY, null));
-        });
+        return repository.cachedSearch(downloadId, taskId).flatMap(song -> listFor(downloadId, taskId, song)
+                .map(files -> files.isEmpty()
+                        ? view(song, files, statusOf(song), reasonOf(song))
+                        : view(song, files, PickListStatus.READY, null)));
+    }
+
+    /** The song's own remembered files, else one file per remembered album folder that holds the song. */
+    private Mono<List<DownloadCandidate>> listFor(UUID downloadId, UUID taskId, DownloadTaskRepository.CachedSearch song) {
+        if (!song.files().isEmpty()) {
+            return Mono.just(song.files());
+        }
+        return repository.cachedAlbumSearch(downloadId)
+                .map(album -> album.holding(taskId).stream().map(folder -> folder.files().get(taskId)).toList())
+                .defaultIfEmpty(List.of());
     }
 
     private static TaskCandidatesView view(DownloadTaskRepository.CachedSearch song, List<DownloadCandidate> files,
@@ -262,6 +265,60 @@ public class DownloadService {
                     ? "NO_WHOLE_FOLDER" : "BEFORE_CACHE";
         }
         return new AlbumCandidatesView(downloadId, status, reason, query, album.foldersAt(), songs.size(), folders);
+    }
+
+    // ---- manual pick: re-pointing songs at a chosen file ----------------------------------------------
+
+    /**
+     * A person chose the file one song downloads from. The file must be in the song's own list
+     * ({@link #candidates}); the song is then reset in place to the enqueue step with that file as its
+     * only candidate (PICK_SQL), its old transfer cancelled in slskd and its partial files removed, and
+     * a finished download reopened. The ordinary loop takes it from there.
+     *
+     * @return empty for an unknown download or song; 0 when nothing changed (the file is not in the
+     *         list -- a stale dialog -- or the song already succeeded); 1 when the song was re-pointed
+     */
+    public Mono<Long> pick(UUID downloadId, UUID taskId, String username, String filename, Instant now) {
+        return repository.cachedSearch(downloadId, taskId)
+                .flatMap(song -> listFor(downloadId, taskId, song))
+                .flatMap(files -> files.stream()
+                        .filter(file -> file.username().equals(username) && file.filename().equals(filename))
+                        .findFirst()
+                        .map(chosen -> repoint(downloadId, Map.of(taskId, chosen.asManual()), now))
+                        .orElse(Mono.just(0L)));
+    }
+
+    /**
+     * A person chose the folder an album downloads from: every song the folder holds that has not
+     * succeeded is re-pointed at that folder's file for it, as {@link #pick} does one song. Songs the
+     * folder lacks, and finished songs, are left exactly as they are.
+     *
+     * @return empty for an unknown download; an error for one that is not an album; 0 when nothing
+     *         changed (the folder is not remembered, or every song it holds already succeeded); else the
+     *         number of songs re-pointed
+     */
+    public Mono<Long> albumPick(UUID downloadId, String username, String folder, Instant now) {
+        return repository.cachedAlbumSearch(downloadId).flatMap(album -> {
+            if (album.type() != DownloadType.ALBUM) {
+                return Mono.error(new NotAnAlbumException(downloadId));
+            }
+            return album.folders().stream()
+                    .filter(f -> f.username().equals(username) && f.path().equals(folder))
+                    .findFirst()
+                    .map(f -> repoint(downloadId, f.files().entrySet().stream()
+                            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().asManual())), now))
+                    .orElse(Mono.just(0L));
+        });
+    }
+
+    /** Re-points the songs, then stops what each was doing before -- the same two steps as cancel. */
+    private Mono<Long> repoint(UUID downloadId, Map<UUID, DownloadCandidate> picks, Instant now) {
+        return repository.pick(downloadId, picks, now)
+                .doOnNext(this::stopInSlskd)
+                .count()
+                .doOnNext(rows -> {
+                    if (rows > 0) log.info("Re-pointed {} song(s) of download {} at a file a person chose", rows, downloadId);
+                });
     }
 
     /** Same shape as DownloadStepExecutor.cancelIfAbandoned: the decision is written; slskd is told after, best effort. */

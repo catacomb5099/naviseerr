@@ -276,6 +276,85 @@ class DownloadControllerTest {
                 .jsonPath("$.message").isNotEmpty();
     }
 
+    // ---- picking a file by hand ------------------------------------------------------------------
+
+    @Test
+    void pick_whenTheSongWasRePointed_is202WithTheFreshCard() {
+        ActiveDownloadView card = view();
+        UUID taskId = UUID.randomUUID();
+        when(downloadService.pick(card.downloadId(), taskId, "bob", "music/bob/song.flac", NOW)).thenReturn(Mono.just(1L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<Object> response = controller.pick(card.downloadId(), taskId,
+                new DownloadController.PickRequest("bob", "music/bob/song.flac", null)).block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void pick_whenNothingChanged_is409WithTheCurrentCard() {
+        ActiveDownloadView card = view();
+        UUID taskId = UUID.randomUUID();
+        when(downloadService.pick(any(), any(), any(), any(), any())).thenReturn(Mono.just(0L));
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+
+        ResponseEntity<Object> response = controller.pick(card.downloadId(), taskId,
+                new DownloadController.PickRequest("bob", "music/bob/song.flac", null)).block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(card, response.getBody());
+    }
+
+    @Test
+    void pick_withoutBothFields_is400_withoutWriting() {
+        ResponseEntity<Object> response = controller.pick(UUID.randomUUID(), UUID.randomUUID(),
+                new DownloadController.PickRequest("bob", " ", null)).block();
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        verify(downloadService, never()).pick(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void pick_ofUnknownIds_is404WithAMessage() {
+        UUID id = UUID.randomUUID();
+        when(downloadService.pick(any(), any(), any(), any(), any())).thenReturn(Mono.empty());
+
+        WebTestClient.bindToController(controller).build()
+                .post().uri("/downloads/" + id + "/tasks/" + UUID.randomUUID() + "/pick")
+                .bodyValue(new DownloadController.PickRequest("bob", "music/bob/song.flac", null))
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody().jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    void albumPick_mapsTheSameWay_andAnythingButAnAlbumIs409NotAnAlbum() {
+        ActiveDownloadView card = view();
+        when(activeDownloadRepository.findByIds(List.of(card.downloadId()))).thenReturn(Flux.just(card));
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+
+        when(downloadService.albumPick(card.downloadId(), "bob", "music\\bob\\DM", NOW)).thenReturn(Mono.just(11L));
+        http.post().uri("/downloads/" + card.downloadId() + "/album-pick")
+                .bodyValue(new DownloadController.PickRequest("bob", null, "music\\bob\\DM"))
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody().jsonPath("$.downloadId").isEqualTo(card.downloadId().toString());
+
+        http.post().uri("/downloads/" + card.downloadId() + "/album-pick")
+                .bodyValue(new DownloadController.PickRequest("bob", "a file, not a folder", null))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        when(downloadService.albumPick(any(), any(), any(), any()))
+                .thenReturn(Mono.error(new DownloadService.NotAnAlbumException(card.downloadId())));
+        http.post().uri("/downloads/" + card.downloadId() + "/album-pick")
+                .bodyValue(new DownloadController.PickRequest("bob", null, "music\\bob\\DM"))
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("NOT_AN_ALBUM");
+    }
+
     // ---- requesting a download -----------------------------------------------------------------
 
     @Test
