@@ -93,9 +93,10 @@ status and reason.
 
 The owner saw the first lists and asked for everything Soulseek returned, not what Naviseerr judged relevant. So the
 song list now keeps every audio file of the search (cover art, cue sheets and logs left out), the files the matcher
-calls another song included and graded `NONE`, in the picker's order with those last, the first 500 instead of 100.
+calls another song included and graded `NONE`, in the picker's order with those last, and no cap at all (it was 100; the
+owner: "the results won't be long enough to worry"; slskd's own response and file limits bound a search anyway).
 The album list keeps every folder holding at least one of the album's songs by the song rules, whatever its bit rate,
 whether or not its path names the artist, stalling sharer or not: the folders the search itself would take come first
-and carry `judged: true`, the rest `judged: false`; the first 50 instead of 20. The automatic search is unchanged:
+and carry `judged: true`, the rest `judged: false`; no cap either (it was 20). The automatic search is unchanged:
 `selectBestFiles` and `AlbumFolderPicker.folders` still apply every rule. Rows written before this change keep their
 shorter lists until the song or album is searched again.

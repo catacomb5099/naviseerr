@@ -35,7 +35,6 @@ public class AlbumSearchStep {
     /** A song gets its file in the best folder plus the same track in the next two (other sharers). */
     static final int CANDIDATES_PER_SONG = 3;
     /** How many judged folders are kept for the manual picker (about 75 KB at 20 x 15 files). */
-    static final int REMEMBERED_FOLDERS = 50;
 
     private final DownloadTaskRepository repository;
     private final SlskdService slskdService;
@@ -156,15 +155,15 @@ public class AlbumSearchStep {
     }
 
     /**
-     * Keeps every folder the search found that holds any of the album's songs (the top
-     * {@link #REMEMBERED_FOLDERS}: the judged ones first, best first, then the rest) on the album row
+     * Keeps every folder the search found that holds any of the album's songs (the judged ones first,
+     * best first, then the rest; no cap, the owner's call of 08-10-2026) on the album row
      * for a person to choose from later (manual pick, 07-10-2026; every option since 08-10-2026).
      * Nothing to write when no folder holds a song; a failed write is logged and the search goes on.
      */
     private Mono<Void> remember(AlbumSearch album, List<SearchResponseItem> responses, List<DownloadTask> songs,
                                 List<AlbumFolderPicker.Folder> judged, Instant now) {
         List<StoredFolder> stored = StoredFolder.of(judged,
-                picker.allFolders(responses, songs, album.title(), album.artists()), REMEMBERED_FOLDERS);
+                picker.allFolders(responses, songs, album.title(), album.artists()));
         if (stored.isEmpty()) {
             return Mono.empty();
         }

@@ -226,7 +226,7 @@ class DownloadStepExecutorTest {
         @SuppressWarnings("unchecked")
         var files = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(repository).saveSearchResults(eq(TASK_ID), files.capture(), eq(T0));
-        assertEquals(500, files.getValue().size(), "the first five hundred in the picker's order");
+        assertEquals(501, files.getValue().size(), "every one of them, in the picker's order; nothing is capped");
         DownloadCandidate first = (DownloadCandidate) files.getValue().getFirst();
         assertEquals("sharer0", first.username());
         assertEquals(240, first.length());

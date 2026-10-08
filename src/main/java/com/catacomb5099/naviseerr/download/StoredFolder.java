@@ -40,8 +40,8 @@ public record StoredFolder(
                 folder.peer().getQueueLength(), folder.peer().getUploadSpeed(), folder.extras(), files, judged);
     }
 
-    /** The judged folders first (in their order), then every other folder of {@code all}; the first {@code limit}. */
-    public static List<StoredFolder> of(List<AlbumFolderPicker.Folder> judged, List<AlbumFolderPicker.Folder> all, int limit) {
+    /** The judged folders first (in their order), then every other folder of {@code all}. */
+    public static List<StoredFolder> of(List<AlbumFolderPicker.Folder> judged, List<AlbumFolderPicker.Folder> all) {
         Set<String> taken = new HashSet<>();
         List<StoredFolder> out = new ArrayList<>();
         for (AlbumFolderPicker.Folder folder : judged) {
@@ -54,6 +54,6 @@ public record StoredFolder(
                 out.add(of(folder, false));
             }
         }
-        return out.stream().limit(limit).toList();
+        return out;
     }
 }
