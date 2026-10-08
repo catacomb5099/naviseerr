@@ -215,10 +215,10 @@ class DownloadStepExecutorTest {
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
         when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of()));
         List<SlskdSearchResultProcessor.Pick> found = new java.util.ArrayList<>();
-        for (int i = 0; i < 101; i++) {
+        for (int i = 0; i < 501; i++) {
             found.add(pick("sharer" + i, "music/" + i + "/song.mp3", 240 + i, TrackMatchingService.Match.OTHER_VERSION));
         }
-        when(searchProcessor.relevantFiles(eq(full), eq("never gonna give you up"), eq("never gonna give you up")))
+        when(searchProcessor.allFiles(eq(full), eq("never gonna give you up"), eq("never gonna give you up")))
                 .thenReturn(found);
 
         executor.execute(searchPolling("s1"), Map.of("s1", summary), Map.of(), none()).block();
@@ -226,7 +226,7 @@ class DownloadStepExecutorTest {
         @SuppressWarnings("unchecked")
         var files = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(repository).saveSearchResults(eq(TASK_ID), files.capture(), eq(T0));
-        assertEquals(100, files.getValue().size(), "the first hundred in the picker's order");
+        assertEquals(501, files.getValue().size(), "every one of them, in the picker's order; nothing is capped");
         DownloadCandidate first = (DownloadCandidate) files.getValue().getFirst();
         assertEquals("sharer0", first.username());
         assertEquals(240, first.length());
@@ -241,7 +241,7 @@ class DownloadStepExecutorTest {
         executor.execute(searchPolling("s1"), Map.of("s1", state), Map.of(), none()).block();
 
         verify(repository, never()).saveSearchResults(any(), any(), any());
-        verify(searchProcessor, never()).relevantFiles(any(), any(), any());
+        verify(searchProcessor, never()).allFiles(any(), any(), any());
     }
 
     @Test
@@ -253,7 +253,7 @@ class DownloadStepExecutorTest {
         var full = SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(peer));
         var exact = new SlskdSearchResultProcessor.Pick(peer, file, TrackMatchingService.Match.EXACT);
         when(slskdService.getSearchWithResponses("s1")).thenReturn(Mono.just(full));
-        when(searchProcessor.relevantFiles(eq(full), any(), any())).thenReturn(List.of(exact));
+        when(searchProcessor.allFiles(eq(full), any(), any())).thenReturn(List.of(exact));
         when(searchProcessor.selectBestFiles(eq(full), any(), any(), any())).thenReturn(Mono.just(List.of(exact)));
         when(repository.saveSearchResults(any(), any(), any()))
                 .thenReturn(Mono.error(new RuntimeException("database away")));

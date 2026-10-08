@@ -84,7 +84,7 @@ public class SlskdSearchResultProcessor {
             // what it is in the log below rather than as a generic step error.
             List<SearchResponseItem> responses =
                     state.getResponses() == null ? List.of() : state.getResponses();
-            List<Pick> candidates = graded(state, query, wording, this::isLosslessOrHighBitRate);
+            List<Pick> candidates = graded(state, query, wording, this::isLosslessOrHighBitRate, true);
             if (albumTrackSeconds != null) {
                 List<Pick> sameLength = candidates.stream()
                         .filter(pick -> pick.file().getLength()
@@ -129,25 +129,27 @@ public class SlskdSearchResultProcessor {
     }
 
     /**
-     * Every file of the search that is the song -- any grade but NONE, any format or bit rate -- in
-     * the order the automatic picker would try them. For a person to choose from (manual pick,
-     * 07-10-2026): the format and bit-rate rule, the album-length rule and the unverified-artist rule
+     * Every audio file the search returned -- any grade, NONE included, any format or bit rate -- in
+     * the order the automatic picker would try them, the files the matcher calls another song last.
+     * For a person to choose from (manual pick, 07-10-2026; every file since 08-10-2026): the format
+     * and bit-rate rule, the album-length rule, the unverified-artist rule and the name match itself
      * are the picker's judgement calls, and the whole point of choosing by hand is to overrule them,
-     * so none is applied here; the grade travels on each file instead and is shown as a badge. Nothing
-     * is capped either: the caller keeps as many as it wants to store.
+     * so none is applied here; the grade travels on each file instead and is shown as a badge. Cover
+     * art, cue sheets and logs are left out: a song cannot download as one. Nothing is capped either:
+     * the caller keeps as many as it wants to store.
      */
-    public List<Pick> relevantFiles(SearchState state, String query, String wording) {
-        return rank(graded(state, query, wording, file -> true));
+    public List<Pick> allFiles(SearchState state, String query, String wording) {
+        return rank(graded(state, query, wording, SlskdSearchResultProcessor::isAudio, false));
     }
 
-    /** Every file passing {@code keep}, graded against the song; files the matcher rejects (NONE) are gone. */
-    private List<Pick> graded(SearchState state, String query, String wording, Predicate<SearchFile> keep) {
+    /** Every file passing {@code keep}, graded against the song; with {@code dropNone} the files the matcher rejects are gone. */
+    private List<Pick> graded(SearchState state, String query, String wording, Predicate<SearchFile> keep, boolean dropNone) {
         List<SearchResponseItem> responses = state.getResponses() == null ? List.of() : state.getResponses();
         return responses.stream()
                 .flatMap(item -> item.getFiles().stream()
                         .filter(keep)
                         .map(file -> new Pick(item, file, trackMatchingService.grade(query, file.getFilename(), wording))))
-                .filter(pick -> pick.grade() != TrackMatchingService.Match.NONE)
+                .filter(pick -> !dropNone || pick.grade() != TrackMatchingService.Match.NONE)
                 .toList();
     }
 
@@ -215,6 +217,13 @@ public class SlskdSearchResultProcessor {
     }
 
     private static final Set<String> LOSSLESS = Set.of("flac", "wav", "aif", "aiff", "ape", "wv");
+    /** What a song can download as. Cover art, cue sheets, logs and playlists are not an option, so the manual list skips them. */
+    private static final Set<String> AUDIO = Set.of("flac", "wav", "aif", "aiff", "aifc", "ape", "wv", "mp3", "m4a", "aac",
+            "ogg", "oga", "opus", "wma", "alac", "mpc", "dsf");
+
+    public static boolean isAudio(SearchFile file) {
+        return AUDIO.contains(format(file));
+    }
 
     /**
      * Lossless files always pass; slskd reports no bit rate for them (13,845 of 14,188 FLAC files on

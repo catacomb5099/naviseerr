@@ -233,6 +233,32 @@ class AlbumSearchStepTest {
     }
 
     @Test
+    void aFolderTheSearchRejects_isStillRemembered_afterTheJudgedOne_andMarkedSo() {
+        // Every option (08-10-2026): the person sees the part folder the search would not take, flagged.
+        SearchFile aFile = new SearchFile("A\\1.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(333));
+        SearchFile bFile = new SearchFile("B\\1.mp3", 1L, 1L, false, "", Optional.of(128), Optional.of(333));
+        SearchResponseItem a = new SearchResponseItem(1, List.of(aFile), true, 0, List.of(), 0, 1, 1, "a");
+        SearchResponseItem b = new SearchResponseItem(1, List.of(bFile), true, 0, List.of(), 0, 1, 9, "b");
+        AlbumFolderPicker.Folder judged = new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), aFile), 0);
+        AlbumFolderPicker.Folder rejected = new AlbumFolderPicker.Folder(b, "B", Map.of(song.taskId(), bFile), 0);
+        when(slskd.getSearchWithResponses("s1"))
+                .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(a, b))));
+        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of(judged));
+        when(picker.allFolders(any(), any(), any(), any())).thenReturn(List.of(rejected, judged));
+
+        step.step(album(DownloadPhase.SEARCH_POLL, 0),
+                Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
+
+        verify(repository).saveAlbumFolders(eq(DOWNLOAD), argThat(folders -> folders.size() == 2
+                && folders.get(0).username().equals("a") && Boolean.TRUE.equals(folders.get(0).judged())
+                && folders.get(1).username().equals("b") && Boolean.FALSE.equals(folders.get(1).judged())
+                && folders.get(1).files().get(song.taskId()).bitRate() == 128), eq(T0.plusSeconds(4)));
+        // The search itself still takes the judged folder only.
+        verify(repository).releaseAlbumSongs(eq(DOWNLOAD), eq("me"), eq(AlbumSearch.Outcome.WHOLE_FOLDER),
+                eq(Map.of(song.taskId(), List.of(DownloadCandidate.fromAlbumFolder(a, aFile)))), any());
+    }
+
+    @Test
     void noFolderQualified_remembersNothing_andAFailedWriteStillReleasesTheSongs() {
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of())));
