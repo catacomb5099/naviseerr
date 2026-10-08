@@ -59,7 +59,8 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    Later you can read it with `docker compose exec slskd cat /app/slskd.yml` (the `password:` under
    `soulseek:`). Keep it somewhere safe: **Soulseek passwords cannot be reset.**
 5. Open the web app at `http://<this computer's address>:5056`, or http://localhost:5056 on the same
-   computer. Is it working? `docker compose ps` shows every part running, and
+   computer. Is it working? `docker compose ps` shows every part running, the web app has no amber
+   "Not connected to Soulseek" strip across its top (it stays until the Soulseek login works), and
    `docker compose logs slskd` does not keep saying "Failed to reconnect" (slskd cannot reach
    Soulseek) or "invalid username or password" (see Troubleshooting).
 6. Point your music app at the music folder (`LIBRARY_DIR`). If your music app runs in Docker too, give
@@ -104,9 +105,11 @@ git pull && docker compose up -d --build
 - **Nothing starts.** If `docker compose up -d` stops at once with "Set SOULSEEK_USERNAME in .env,
   see README step 2", fill in `SOULSEEK_USERNAME` in `.env` (step 2). Otherwise
   `docker compose logs setup` says what is wrong.
-- **"Username taken".** If `docker compose logs slskd` says "invalid username or password", someone
+- **"Username taken".** The web app keeps its "Not connected to Soulseek" strip, and
+  `docker compose logs slskd` says "invalid username or password": someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,
-  then `docker compose restart slskd` (slskd tries to log in once and then waits).
+  then `docker compose restart slskd` (slskd tries to log in once and then waits). The strip goes
+  within about 30 seconds of the login working, or reload the page.
 - **Linux: permission errors** ("permission denied", "Could not file song"). Every container runs as
   one user, `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into
   `LIBRARY_DIR`: set them to the folder's owner (`ls -ln` shows its numbers; `id -u` and `id -g` show
