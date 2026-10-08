@@ -15,9 +15,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Read model behind the download feed. Three queries over the same projection — everything the
- * client should be showing right now, a by-id lookup for cards a client held across a restart, and
- * the paged history — plus the per-song breakdown of one download.
+ * Read model behind the download feed. Four queries over the same projection — everything the
+ * client should be showing right now, a by-id lookup for cards a client held across a restart, the
+ * paged history, and the download that already stands for an item — plus the per-song breakdown of
+ * one download.
  */
 @Repository
 public class ActiveDownloadRepository {
@@ -213,6 +214,42 @@ public class ActiveDownloadRepository {
                           TASK_AGGREGATE.formatted("WHERE t.download_id = ANY(:ids)"));
 
     /**
+     * The one download that counts for an item: the newest of the same type and YouTube id whose
+     * status is in {@code :statuses}. Answers "is this already queued, running or downloaded?" before
+     * a request inserts a second row for it; a FAILED row is deliberately never found, so a failed or
+     * cancelled download can be asked for again.
+     *
+     * <p>Newest first because an install predating this rule already holds several rows per id, and
+     * the latest one is the one the user remembers. {@code created_at} rather than {@code updated_at}:
+     * a retry stamps the latter and would make an old row outrank a newer request.
+     */
+    // ponytail: a scan of downloads (one row per request) per click; add
+    // CREATE INDEX ON downloads (download_type, youtube_id) in a later migration if an install's history grows large.
+    private static final String CURRENT_SQL = """
+            SELECT %s
+              FROM downloads d
+              %s
+              LEFT JOIN (%s) t ON t.download_id = d.download_id
+             WHERE d.download_type = :type
+               AND d.youtube_id = :id
+               AND d.status = ANY(:statuses)
+             ORDER BY d.created_at DESC, d.download_id DESC
+             FETCH FIRST 1 ROW ONLY
+            """.formatted(PROJECTION, JOIN_MEDIA,
+                          TASK_AGGREGATE.formatted("""
+                                  WHERE t.download_id IN (SELECT download_id FROM downloads
+                                                           WHERE download_type = :type AND youtube_id = :id)"""));
+
+    /** Everything that is not FAILED: queued, running, downloaded, or partly downloaded (Retry covers the rest). */
+    private static final String[] CURRENT_STATUSES = {"PENDING", "IN_PROGRESS", "SUCCEEDED", "PARTIAL_SUCCESS"};
+
+    /**
+     * A curated id is the CATEGORY KEY, reused by a new edition every week, so last week's finished
+     * edition must not refuse this week's download: only a live one counts.
+     */
+    private static final String[] CURRENT_LIVE_STATUSES = {"PENDING", "IN_PROGRESS"};
+
+    /**
      * Every song of one download, in track order, with the pipeline bookkeeping a self-hoster wants
      * when asking "which three failed, and why". No aggregate: this is the one place the task rows
      * are shown as themselves. {@code candidate_count} is computed in SQL rather than by parsing the
@@ -253,6 +290,19 @@ public class ActiveDownloadRepository {
                 .bind("ids", ids.toArray(UUID[]::new))
                 .map(ActiveDownloadRepository::toView)
                 .all();
+    }
+
+    /**
+     * The download that already stands for {@code (type, youtubeId)}, or empty when a new request is
+     * the right answer. See {@link #CURRENT_SQL} for which statuses count.
+     */
+    public Mono<ActiveDownloadView> findCurrent(DownloadType type, String youtubeId) {
+        return client.sql(CURRENT_SQL)
+                .bind("type", type.name())
+                .bind("id", youtubeId)
+                .bind("statuses", type == DownloadType.CURATED ? CURRENT_LIVE_STATUSES : CURRENT_STATUSES)
+                .map(ActiveDownloadRepository::toView)
+                .one();
     }
 
     /**

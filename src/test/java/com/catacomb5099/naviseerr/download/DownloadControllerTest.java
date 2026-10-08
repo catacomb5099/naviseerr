@@ -41,6 +41,8 @@ class DownloadControllerTest {
         activeDownloadRepository = mock(ActiveDownloadRepository.class);
         controller = new DownloadController(downloadService, activeDownloadRepository,
                 Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(5), RETENTION);
+        // Nothing already exists unless a test says so; Mockito's default for a Mono is null.
+        when(activeDownloadRepository.findCurrent(any(), any())).thenReturn(Mono.empty());
     }
 
     private static ActiveDownloadView view() {
@@ -203,10 +205,57 @@ class DownloadControllerTest {
         when(downloadService.requestDownload("vid-1", DownloadType.SONG))
                 .thenReturn(Mono.just(saved));
 
-        ResponseEntity<Download> response = controller.downloadSong("vid-1").block();
+        ResponseEntity<?> response = controller.downloadSong("vid-1").block();
 
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
         assertEquals(saved, response.getBody());
+    }
+
+    @Test
+    void downloadSong_whenTheSameSongAlreadyHasADownload_is409WithItsCard_andInsertsNothing() {
+        ActiveDownloadView existing = view();
+        when(activeDownloadRepository.findCurrent(DownloadType.SONG, "vid-1")).thenReturn(Mono.just(existing));
+
+        ResponseEntity<?> response = controller.downloadSong("vid-1").block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(existing, response.getBody());   // the same card cancel and retry answer with
+        verify(downloadService, never()).requestDownload(any(), any());
+    }
+
+    @Test
+    void downloadSong_whenNothingMatches_acksAsBefore() {
+        Download saved = Download.builder().downloadId(UUID.randomUUID()).build();
+        when(activeDownloadRepository.findCurrent(DownloadType.SONG, "vid-1")).thenReturn(Mono.empty());
+        when(downloadService.requestDownload("vid-1", DownloadType.SONG)).thenReturn(Mono.just(saved));
+
+        ResponseEntity<?> response = controller.downloadSong("vid-1").block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(saved, response.getBody());
+    }
+
+    @Test
+    void downloadCollection_checksForAnExistingDownloadByTheRequestedType() {
+        ActiveDownloadView existing = view();
+        when(activeDownloadRepository.findCurrent(DownloadType.ALBUM, "MPREb_1")).thenReturn(Mono.just(existing));
+
+        ResponseEntity<?> response = controller.downloadCollection("MPREb_1", DownloadType.ALBUM).block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        // Exact type + id: the same id requested as a PLAYLIST would be a different download.
+        verify(activeDownloadRepository).findCurrent(DownloadType.ALBUM, "MPREb_1");
+        verify(downloadService, never()).requestDownload(any(), any());
+    }
+
+    @Test
+    void aFailedLookupIsReportedAsAServerError_notAsAnAck() {
+        when(activeDownloadRepository.findCurrent(any(), any()))
+                .thenReturn(Mono.error(new RuntimeException("db down")));
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR,
+                controller.downloadSong("vid-1").block().getStatusCode());
+        verify(downloadService, never()).requestDownload(any(), any());
     }
 
     @Test
@@ -221,7 +270,7 @@ class DownloadControllerTest {
         when(downloadService.requestDownload("MPREb_1", DownloadType.ALBUM))
                 .thenReturn(Mono.just(saved));
 
-        ResponseEntity<Download> response =
+        ResponseEntity<?> response =
                 controller.downloadCollection("MPREb_1", DownloadType.ALBUM).block();
 
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());

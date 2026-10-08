@@ -49,12 +49,29 @@ class ActiveDownloadRepositoryIT {
 
     private UUID insertDownload(String status, String type) {
         UUID id = UUID.randomUUID();
+        return insertDownload(id, status, type, "yt-" + id);
+    }
+
+    private UUID insertDownload(UUID id, String status, String type, String youtubeId) {
         template.getDatabaseClient()
                 .sql("INSERT INTO downloads (download_id, youtube_id, download_type, status, created_at) "
                         + "VALUES (:id, :ytId, :type, :status, now())")
-                .bind("id", id).bind("ytId", "yt-" + id).bind("type", type).bind("status", status)
+                .bind("id", id).bind("ytId", youtubeId).bind("type", type).bind("status", status)
                 .fetch().rowsUpdated().block();
         return id;
+    }
+
+    /** A second request for the same item, made {@code minutesAgo} before the others. */
+    private UUID insertOlderDownload(String status, String type, String youtubeId, int minutesAgo) {
+        UUID id = insertDownload(UUID.randomUUID(), status, type, youtubeId);
+        template.getDatabaseClient()
+                .sql("UPDATE downloads SET created_at = now() - make_interval(mins => :m) WHERE download_id = :id")
+                .bind("m", minutesAgo).bind("id", id).fetch().rowsUpdated().block();
+        return id;
+    }
+
+    private ActiveDownloadView current(DownloadType type, String youtubeId) {
+        return activeDownloadRepository.findCurrent(type, youtubeId).block();
     }
 
     /** What the runner writes before the task rows: the download's own name and picture. */
@@ -101,6 +118,68 @@ class ActiveDownloadRepositoryIT {
 
     private List<ActiveDownloadView> active() {
         return activeDownloadRepository.findActive(ANCIENT_CUTOFF).collectList().block();
+    }
+
+    // ---- the download that already stands for an item -----------------------------------------
+
+    @Test
+    void findCurrent_returnsTheNewestRowThatIsNotFailed() {
+        insertOlderDownload("SUCCEEDED", "SONG", "vid-1", 60);
+        insertOlderDownload("FAILED", "SONG", "vid-1", 30);
+        UUID newest = insertDownload(UUID.randomUUID(), "SUCCEEDED", "SONG", "vid-1");
+
+        ActiveDownloadView view = current(DownloadType.SONG, "vid-1");
+
+        assertEquals(newest, view.downloadId(), "the latest request is the one the user remembers");
+        assertEquals(DownloadStage.SUCCEEDED, view.stage());
+    }
+
+    @Test
+    void findCurrent_skipsAFailedRow_soTheItemCanBeAskedForAgain() {
+        insertOlderDownload("FAILED", "SONG", "vid-1", 30);
+        insertDownload(UUID.randomUUID(), "FAILED", "SONG", "vid-1");   // cancelled is FAILED too
+
+        assertNull(current(DownloadType.SONG, "vid-1"), "nothing was fetched, so nothing can duplicate");
+    }
+
+    @Test
+    void findCurrent_prefersNothingOverAFailedRow_evenWhenItIsNewest() {
+        UUID done = insertOlderDownload("PARTIAL_SUCCESS", "ALBUM", "MPREb_1", 30);
+        insertDownload(UUID.randomUUID(), "FAILED", "ALBUM", "MPREb_1");
+
+        // The newer FAILED row does not hide the partly downloaded one: Retry is the way to finish it.
+        assertEquals(done, current(DownloadType.ALBUM, "MPREb_1").downloadId());
+    }
+
+    @Test
+    void findCurrent_isExactOnTypeAndId() {
+        insertDownload(UUID.randomUUID(), "SUCCEEDED", "SONG", "vid-1");
+
+        assertNull(current(DownloadType.SONG, "vid-2"), "another id");
+        assertNull(current(DownloadType.PLAYLIST, "vid-1"), "the same id as another type is another download");
+    }
+
+    @Test
+    void findCurrent_forCurated_countsOnlyALiveRow() {
+        // The curated id is the category key, reused by a new edition every week.
+        insertDownload(UUID.randomUUID(), "SUCCEEDED", "CURATED", "80s-indie-pop");
+        assertNull(current(DownloadType.CURATED, "80s-indie-pop"), "last week's edition must not refuse this week's");
+
+        UUID live = insertDownload(UUID.randomUUID(), "IN_PROGRESS", "CURATED", "80s-indie-pop");
+        assertEquals(live, current(DownloadType.CURATED, "80s-indie-pop").downloadId());
+    }
+
+    @Test
+    void findCurrent_reportsTheAggregatedStage_likeTheFeed() {
+        UUID id = insertDownload(UUID.randomUUID(), "PENDING", "SONG", "yt-song");
+        admit(id, "song");
+        template.getDatabaseClient().sql("UPDATE downloads SET status = 'IN_PROGRESS'").fetch().rowsUpdated().block();
+
+        ActiveDownloadView view = current(DownloadType.SONG, "yt-song");
+
+        assertEquals(id, view.downloadId());
+        assertEquals(DownloadStage.STARTING, view.stage(), "a SEARCH_INIT task reads as starting, as on the feed");
+        assertEquals(1, view.songCount());
     }
 
     // ---- stage mapping -------------------------------------------------------------------------
