@@ -473,7 +473,7 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
-    void pass_whenNothingIsClaimed_stillMakesAKeepAliveCall_toExerciseTheConnectionPool() {
+    void pass_whenNothingIsClaimed_stillAsksSlskdForItsServerState_andNothingElse() {
         runner.pass().block();
 
         verify(slskdService).getServerState();
@@ -482,7 +482,7 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
-    void pass_whenNothingIsClaimed_andTheKeepAliveCallFails_isSwallowedNotPropagated() {
+    void pass_whenTheServerStateCallFails_isSwallowedNotPropagated_atTheCostOfOneLine() {
         captureRunnerLogs();
         when(slskdService.getServerState()).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
 
@@ -524,6 +524,93 @@ class DownloadTaskRunnerTest {
         verify(executor, never()).execute(any(), any(), any(), any());
         verify(repository).concludeDownloads();
         assertOneWarningLineAndNoStackTrace("Operation timed out");
+    }
+
+    // ---- Soulseek offline: downloads wait (07-10-2026) --------------------------------------------
+
+    /** slskd up and answering, but not logged in to Soulseek: the internet is down, or it is reconnecting. */
+    private static ServerState notLoggedIn() {
+        return new ServerState("vps.slsknet.org:2242", null, "Disconnected", false, false, false, false, false);
+    }
+
+    private long linesSaying(String text) {
+        return logs.list.stream().filter(event -> event.getFormattedMessage().contains(text)).count();
+    }
+
+    @Test
+    void whileSoulseekIsOffline_nothingIsClaimedOrStepped_theClocksAreHeld_andFinishedDownloadsStillConclude() {
+        captureRunnerLogs();
+        when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));
+        when(repository.pauseDueWork(any(), any())).thenReturn(Mono.just(3L));
+
+        runner.pass().block();
+        runner.pass().block();
+
+        verify(repository, never()).claimDueAlbumSearches(anyInt(), any(), any(), any(), anyInt());
+        verify(repository, never()).claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt());
+        verify(executor, never()).execute(any(), any(), any(), any());
+        verify(repository, times(2)).pauseDueWork(T0, Duration.ofSeconds(2));
+        verify(repository, times(2)).concludeDownloads();
+        // The outage is logged once, when it starts -- not on every pass, and not as a warning.
+        assertEquals(1, linesSaying("Soulseek is offline"));
+        assertTrue(warningsAndWorse().isEmpty(), () -> "nothing to warn about: " + warningsAndWorse());
+    }
+
+    @Test
+    void theClocksMoveByTheTimeSinceThePreviousHeldPass_notByTheInterval() {
+        // Admission runs before the gate and can wait on ytmusic-adapter for 45 s with the internet down,
+        // so the second held pass comes 45 s after the first, not 2 s: the clocks must move by 45 s.
+        Clock clock = mock(Clock.class);
+        when(clock.instant()).thenReturn(T0, T0.plusSeconds(45));
+        runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
+                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, clock,
+                Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
+        when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));
+        when(repository.pauseDueWork(any(), any())).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+        runner.pass().block();
+
+        verify(repository).pauseDueWork(T0, Duration.ofSeconds(2));   // the first hold has no previous one
+        verify(repository).pauseDueWork(T0.plusSeconds(45), Duration.ofSeconds(45));
+    }
+
+    @Test
+    void whenSoulseekComesBack_steppingResumes_andTheReturnIsLoggedOnce() {
+        captureRunnerLogs();
+        when(slskdService.getServerState())
+                .thenReturn(Mono.just(notLoggedIn()), Mono.just(SlskdFixtures.serverState()));
+        when(repository.pauseDueWork(any(), any())).thenReturn(Mono.just(0L));
+
+        runner.pass().block();
+        runner.pass().block();
+        runner.pass().block();
+
+        verify(repository, times(1)).pauseDueWork(any(), any());
+        verify(repository, times(2)).claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt());
+        assertEquals(1, linesSaying("Soulseek is offline"));
+        assertEquals(1, linesSaying("Soulseek is back"));
+    }
+
+    @Test
+    void afterTheCeiling_steppingResumesWhileStillOffline_soAWrongPasswordStillEndsInARedCard() {
+        Clock clock = mock(Clock.class);
+        when(clock.instant()).thenReturn(T0, T0.plus(DownloadTaskRunner.OFFLINE_PAUSE_CEILING));
+        runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
+                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, clock,
+                Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
+        captureRunnerLogs();
+        when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));
+        when(repository.pauseDueWork(any(), any())).thenReturn(Mono.just(0L));
+
+        runner.pass().block();   // T0: just went offline, held
+        runner.pass().block();   // T0 + 30 min: still offline, past the ceiling -- stepped as before
+        runner.pass().block();   // and again, without repeating the warning
+
+        verify(repository, times(1)).pauseDueWork(any(), any());
+        verify(repository, times(2)).claimDueTasks(anyInt(), any(), any(), any(), anyBoolean(), anyInt());
+        assertEquals(1, warningsAndWorse().size(), () -> "one warning at the ceiling: " + warningsAndWorse());
+        assertTrue(warningsAndWorse().getFirst().getFormattedMessage().contains("SOULSEEK_OFFLINE"));
     }
 
     @Test
