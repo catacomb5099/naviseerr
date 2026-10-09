@@ -80,8 +80,9 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
   back to its own search at the first wording instead of ending "sources exhausted"; the runner removes
   the partial files of the folder attempts.
 - **Cancel and retry.** Cancelling the whole download ends its album search (`CANCELLED`), so a search
-  still running cannot hand files to songs a later retry reopens. Retry is unchanged: failed songs search
-  on their own (P8).
+  still running cannot hand files to songs a later retry reopens. Retry of one track: it searches on its
+  own (P8). Retry of the whole album, since 09-10-2026: the album search runs again first, the failed
+  songs held for it (`retry-and-cancel-28-09-2026.md`, addendum 09-10-2026).
 
 ## How part album next works (A3)
 

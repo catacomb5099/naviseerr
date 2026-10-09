@@ -412,17 +412,47 @@ public class DownloadTaskRepository {
      * its songs', so a stale one would outrank the fresh rows. {@code organised_at = NULL}: the playlist
      * file is rewritten whole once the retried songs are filed; songs already filed keep library_path.
      *
+     * <p>A whole retry of an ALBUM (09-10-2026) also puts its finished {@code album_searches} row back
+     * to {@code SEARCH_INIT}, so the album looks for one sharer with every missing song again before
+     * the songs search on their own, and the reset songs are written held (due at {@code :holdUntil},
+     * the hold a fresh album gets from CREATE_TASKS_SQL) rather than due now, or the restarted search
+     * would find nothing waiting. The remembered folders stay for the picker, as the song lists do; the
+     * step overwrites them when it finds any. One song's retry ({@code :taskId} given) leaves the
+     * search done. The album row is locked before the song rows (the {@code count(*)} line), the order
+     * CANCEL_SQL and the album step use.
+     *
      * <p>ponytail: a one-song retry on a LIVE parent can land between CONCLUDE_SQL's snapshot (every
      * song terminal) and its write, leaving a concluded parent with one live song: the song still runs
      * and finishes, but the card keeps its terminal word. Window: one conclude statement every pass.
      * Closed 09-10-2026: REOPEN_SQL, run before CONCLUDE_SQL every pass, is that reopen.
      */
     private static final String RETRY_SQL = """
-            WITH reset AS (
+            WITH album AS (
+                UPDATE album_searches
+                   SET phase = 'SEARCH_INIT',
+                       search_tier = 0,
+                       search_id = NULL,
+                       outcome = NULL,
+                       finished_at = NULL,
+                       phase_entered_at = :now,
+                       next_attempt_at = :now,
+                       lease_owner = NULL,
+                       lease_expires_at = NULL
+                 WHERE download_id = :id
+                   AND :taskId::uuid IS NULL
+                   AND phase = 'DONE'
+                   AND EXISTS (SELECT 1 FROM downloads
+                                WHERE download_id = :id
+                                  AND status IN ('FAILED', 'PARTIAL_SUCCESS'))
+                   AND EXISTS (SELECT 1 FROM download_tasks
+                                WHERE download_id = :id
+                                  AND phase = 'FAILED')
+                RETURNING download_id
+            ), reset AS (
                 UPDATE download_tasks
                    SET phase = 'SEARCH_INIT',
                        phase_entered_at = :now,
-                       next_attempt_at = :now,
+                       next_attempt_at = CASE WHEN EXISTS (SELECT 1 FROM album) THEN :holdUntil ELSE :now END,
                        finished_at = NULL,
                        failure_reason = NULL,
                        last_error = NULL,
@@ -445,6 +475,7 @@ public class DownloadTaskRepository {
                         OR EXISTS (SELECT 1 FROM downloads
                                     WHERE download_id = :id
                                       AND status IN ('FAILED', 'PARTIAL_SUCCESS')))
+                   AND (SELECT count(*) FROM album) >= 0
                 RETURNING task_id
             ), reopened AS (
                 UPDATE downloads
@@ -1089,9 +1120,18 @@ public class DownloadTaskRepository {
                 .all();
     }
 
-    /** The number of songs reset: every FAILED one, or the one {@code taskId} names; 0 when there was nothing to retry. See RETRY_SQL. */
+    /** The number of songs reset: every FAILED one, or the one {@code taskId} names; 0 when there was nothing to retry. See RETRY_SQL. Reset songs are due now; {@link DownloadService#retry} passes the album hold. */
     public Mono<Long> retry(UUID downloadId, UUID taskId, Instant now) {
-        DatabaseClient.GenericExecuteSpec spec = client.sql(RETRY_SQL).bind("id", downloadId).bind("now", now);
+        return retry(downloadId, taskId, now, null);
+    }
+
+    /**
+     * {@link #retry(UUID, UUID, Instant)}, with the reset songs of a whole album retry held until
+     * {@code holdUntil} (null: due now) while its restarted folder search runs. See RETRY_SQL.
+     */
+    public Mono<Long> retry(UUID downloadId, UUID taskId, Instant now, Instant holdUntil) {
+        DatabaseClient.GenericExecuteSpec spec = client.sql(RETRY_SQL).bind("id", downloadId).bind("now", now)
+                .bind("holdUntil", holdUntil == null ? now : holdUntil);
         spec = taskId == null ? spec.bindNull("taskId", UUID.class) : spec.bind("taskId", taskId);
         return spec.map((row, meta) -> row.get("reset", Long.class)).one();
     }

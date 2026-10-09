@@ -27,12 +27,16 @@ class DownloadServiceTest {
     private final DownloadTaskRepository repository = mock(DownloadTaskRepository.class);
     private final SlskdService slskd = mock(SlskdService.class);
     private final LibraryOrganiser organiser = mock(LibraryOrganiser.class);
+    private final AlbumSearchStep albumSearches = mock(AlbumSearchStep.class);
     private final R2dbcEntityTemplate template = mock(R2dbcEntityTemplate.class);
-    private final DownloadService service = new DownloadService(template, repository, slskd, organiser);
+    private final DownloadService service = new DownloadService(template, repository, slskd, organiser, albumSearches);
+    /** The hold a fresh album's songs get; a whole-album retry gives its reset songs the same. */
+    private static final Instant HOLD = NOW.plusSeconds(240);
 
     @BeforeEach
     void defaults() {
         when(repository.concludeDownloads()).thenReturn(Mono.just(0L));
+        when(albumSearches.holdUntil(NOW)).thenReturn(HOLD);
         when(organiser.deletePartials(any())).thenReturn(Mono.empty());
         when(slskd.cancelDownload(any(), any())).thenReturn(Mono.empty());
     }
@@ -90,30 +94,39 @@ class DownloadServiceTest {
 
     @Test
     void retry_thatResetSongs_doesNotReadmit() {
-        when(repository.retry(id, null, NOW)).thenReturn(Mono.just(1L));
+        when(repository.retry(id, null, NOW, HOLD)).thenReturn(Mono.just(1L));
         assertEquals(1L, service.retry(id, null, NOW).block());
         verify(repository, never()).readmit(any());
     }
 
     @Test
     void retry_withNothingToReset_fallsBackToReadmitting() {
-        when(repository.retry(id, null, NOW)).thenReturn(Mono.just(0L));
+        when(repository.retry(id, null, NOW, HOLD)).thenReturn(Mono.just(0L));
         when(repository.readmit(id)).thenReturn(Mono.just(1L));
         assertEquals(1L, service.retry(id, null, NOW).block());
     }
 
     @Test
     void retry_withNothingToRetryOrReadmit_isZero() {
-        when(repository.retry(id, null, NOW)).thenReturn(Mono.just(0L));
+        when(repository.retry(id, null, NOW, HOLD)).thenReturn(Mono.just(0L));
         when(repository.readmit(id)).thenReturn(Mono.just(0L));
 
         assertEquals(0L, service.retry(id, null, NOW).block());   // the endpoint turns this 0 into its 409
     }
 
     @Test
+    void retry_passesTheAlbumHoldThrough() {
+        when(repository.retry(id, null, NOW, HOLD)).thenReturn(Mono.just(2L));
+
+        assertEquals(2L, service.retry(id, null, NOW).block());
+
+        verify(repository).retry(id, null, NOW, HOLD);   // a restarted album search needs its songs held, as a fresh album's are
+    }
+
+    @Test
     void retry_ofOneSong_neverReadmits() {
         UUID taskId = UUID.randomUUID();
-        when(repository.retry(id, taskId, NOW)).thenReturn(Mono.just(0L));
+        when(repository.retry(id, taskId, NOW, HOLD)).thenReturn(Mono.just(0L));
 
         assertEquals(0L, service.retry(id, taskId, NOW).block());
         verify(repository, never()).readmit(any());   // a bogus taskId must not re-queue an unadmitted failure

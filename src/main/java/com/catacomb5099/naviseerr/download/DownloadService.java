@@ -51,13 +51,15 @@ public class DownloadService {
     private final DownloadTaskRepository repository;
     private final SlskdService slskdService;
     private final LibraryOrganiser organiser;
+    private final AlbumSearchStep albumSearches;
 
     public DownloadService(R2dbcEntityTemplate entityTemplate, DownloadTaskRepository repository,
-                           SlskdService slskdService, LibraryOrganiser organiser) {
+                           SlskdService slskdService, LibraryOrganiser organiser, AlbumSearchStep albumSearches) {
         this.entityTemplate = entityTemplate;
         this.repository = repository;
         this.slskdService = slskdService;
         this.organiser = organiser;
+        this.albumSearches = albumSearches;
     }
 
     /**
@@ -141,9 +143,11 @@ public class DownloadService {
      * is re-queued for admission instead -- only for a whole retry: a download with no songs has no
      * song to retry, and a bogus taskId must not re-queue it. 0 means nothing to retry: still running
      * (whole retry), fully downloaded, the song is not FAILED, or a concurrent retry got there first.
+     * A whole retry of an album looks for one sharer with every missing song again first, its songs
+     * held for that search as a fresh album's are ({@link AlbumSearchStep#holdUntil}).
      */
     public Mono<Long> retry(UUID downloadId, UUID taskId, Instant now) {
-        return repository.retry(downloadId, taskId, now)
+        return repository.retry(downloadId, taskId, now, albumSearches.holdUntil(now))
                 .flatMap(rows -> rows > 0 || taskId != null ? Mono.just(rows) : repository.readmit(downloadId))
                 .doOnNext(rows -> {
                     if (rows > 0) log.info("Retrying {} song(s) of download {}", rows, downloadId);

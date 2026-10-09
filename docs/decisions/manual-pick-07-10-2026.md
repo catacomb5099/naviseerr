@@ -61,7 +61,9 @@ show.
     a reason when it never will (`BEFORE_CACHE`, `NO_RESULTS`, `ALREADY_IN_LIBRARY`; for an album
     `NO_WHOLE_FOLDER`, `BEFORE_CACHE`, `NO_ALBUM_SEARCH`). `POST /searches` must run one at a time under
     the two-slot gate; doing it from a controller would race the loop and wait the full search timeout
-    anyway. Retry is the one lazy way to a fresh search, and it fills the cache.
+    anyway. Retry is the one lazy way to a fresh search, and it fills the cache. Since 09-10-2026 a
+    whole-album retry re-runs the album's folder search too, so the pop-up can offer the retry as
+    "Try again" for an album as well as for a song (`retry-and-cancel-28-09-2026.md`, addendum 09-10-2026).
 11. **Pick responses return the card** (like cancel and retry), not the song row; the client re-reads
     `GET /downloads/{id}` as it already does. 404s and 400s carry `{message}`; the album routes answer
     409 `{reason: NOT_AN_ALBUM, message}` for anything but an album (no album picker for playlists).

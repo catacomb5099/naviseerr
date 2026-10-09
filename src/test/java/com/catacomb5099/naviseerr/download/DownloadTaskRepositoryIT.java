@@ -1745,6 +1745,75 @@ class DownloadTaskRepositoryIT {
         assertEquals("IN_PROGRESS", statusOf(id));
     }
 
+    /** An album the loop left partly downloaded: no sharer had the whole of it, one song then failed on its own. */
+    private UUID partlyDownloadedAlbum() {
+        UUID id = admitAlbum("1 a", "2 b");
+        List<UUID> songs = taskIdsOf(id);
+        repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+        repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.NO_WHOLE_FOLDER, java.util.Map.of(), NOW).block();
+        finish(template, downloadService, songs.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, songs.get(1), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
+        repository.concludeDownloads().block();
+        assertEquals("PARTIAL_SUCCESS", statusOf(id));
+        assertEquals("NO_WHOLE_FOLDER", albumField(id, "outcome"));
+        return id;
+    }
+
+    @Test
+    void retry_ofAWholeAlbum_restartsItsFolderSearch_andHoldsItsFailedSongs() {
+        UUID id = partlyDownloadedAlbum();
+        List<UUID> songs = taskIdsOf(id);
+        Instant later = NOW.plusSeconds(60);
+        Instant hold = NOW.plusSeconds(300);
+
+        assertEquals(1L, repository.retry(id, null, later, hold).block());
+
+        assertEquals("SEARCH_INIT", albumField(id, "phase"), "the album looks for one sharer with the missing song again");
+        assertNull(albumField(id, "outcome"));
+        assertNull(albumField(id, "search_id"));
+        assertNull(albumField(id, "finished_at"));
+        assertEquals("SEARCH_INIT", taskField(songs.get(1), "phase"));
+        assertEquals(hold, nextAttemptOf(songs.get(1)), "held for the album search, as a fresh album's songs are");
+        assertEquals("SUCCEEDED", taskField(songs.get(0), "phase"), "a song with a file is left alone");
+        assertEquals("IN_PROGRESS", statusOf(id));
+        assertTrue(repository.claimDueTasks(10, "me", later.plusSeconds(1), Duration.ofMinutes(1), true, 2)
+                .collectList().block().isEmpty(), "the held song does not start a search of its own");
+        assertEquals(List.of(id), repository.claimDueAlbumSearches(10, "me", later.plusSeconds(1), Duration.ofSeconds(60), 2)
+                .map(AlbumSearch::downloadId).collectList().block(), "the album search is due instead");
+        assertEquals(List.of(songs.get(1)), repository.waitingAlbumSongs(id, later.plusSeconds(1))
+                .map(DownloadTask::taskId).collectList().block(), "and it plans for the missing song only");
+    }
+
+    @Test
+    void retry_ofAWholeAlbum_leavesTheRememberedFoldersInPlace() {
+        UUID id = partlyDownloadedAlbum();
+        StoredFolder folder = new StoredFolder("Baron53", "TALK TALK\\LAUGHING STOCK", true, 3, 1_500_000, 2,
+                java.util.Map.of(taskIdsOf(id).get(1), DownloadTaskFixtures.albumFolderCandidates("Baron53").getFirst()), true);
+        repository.saveAlbumFolders(id, List.of(folder), NOW).block();
+
+        assertEquals(1L, repository.retry(id, null, NOW.plusSeconds(60), NOW.plusSeconds(300)).block());
+
+        DownloadTaskRepository.CachedAlbumSearch cached = repository.cachedAlbumSearch(id).block();
+        assertEquals(1, cached.folders().size(), "the picker still has something to show while the new search runs");
+        assertEquals("SEARCH_INIT", cached.phase());
+    }
+
+    @Test
+    void retry_ofAWholeAlbum_whileItRuns_leavesItsFolderSearchDone() {
+        UUID id = admitAlbum("1 a", "2 b");
+        List<UUID> songs = taskIdsOf(id);
+        repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+        repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.NO_WHOLE_FOLDER, java.util.Map.of(), NOW).block();
+        finish(template, downloadService, songs.get(1), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
+
+        assertEquals(0L, repository.retry(id, null, NOW.plusSeconds(1), NOW.plusSeconds(241)).block(),
+                "a whole retry still waits for the download to finish");
+
+        assertEquals("DONE", albumField(id, "phase"));
+        assertEquals("NO_WHOLE_FOLDER", albumField(id, "outcome"));
+        assertEquals("FAILED", taskField(songs.get(1), "phase"));
+    }
+
     @Test
     void finishTask_afterTheRowWasCancelledAndRetried_isANoOp() {
         UUID id = admitOneSong("PENDING");
