@@ -787,7 +787,8 @@ public class DownloadTaskRepository {
     /** One song with what the manual picker shows: its own state and the files its search found. */
     private static final String CACHED_SEARCH_SQL = """
             SELECT task_id, phase, song_name, search_tier, candidates, candidate_index, library_path,
-                   slskd_filename, search_results::text AS search_results, search_results_at
+                   slskd_filename, search_results::text AS search_results, search_results_at,
+                   search_id, failure_reason
               FROM download_tasks
              WHERE download_id = :id
                AND task_id = :taskId
@@ -808,7 +809,7 @@ public class DownloadTaskRepository {
      */
     private static final String CACHED_ALBUM_SEARCH_SQL = """
             SELECT d.download_type, a.phase, a.outcome, a.search_tier, m.title, m.artists,
-                   a.folders::text AS folders, a.folders_at
+                   a.folders::text AS folders, a.folders_at, a.search_id, a.finished_at
               FROM downloads d
               LEFT JOIN album_searches a ON a.download_id = d.download_id
               LEFT JOIN media_items m ON m.youtube_id = d.youtube_id
@@ -1287,11 +1288,15 @@ public class DownloadTaskRepository {
      * One song's row as the manual picker reads it: the files its search found ({@code files}, best
      * first, empty with a null {@code searchedAt} for a row from before V15 or a search that never
      * completed), and what it is doing now. {@code phase} is the raw column, which unlike
-     * {@link DownloadPhase} includes the two terminal values.
+     * {@link DownloadPhase} includes the two terminal values. {@code searchId} is slskd's id for the
+     * song's own search (null when it never searched on its own: an album's song handed a folder file,
+     * or a search slskd never took); {@code failureReason} the row's failure code, so an empty list can
+     * say whether the search ever completed (09-10-2026).
      */
     public record CachedSearch(UUID taskId, String phase, String songName, int searchTier,
                                List<DownloadCandidate> candidates, int candidateIndex, String libraryPath,
-                               String slskdFilename, List<DownloadCandidate> files, Instant searchedAt) {
+                               String slskdFilename, List<DownloadCandidate> files, Instant searchedAt,
+                               String searchId, String failureReason) {
         /** The file this song is downloading (or downloaded) from; null before any was chosen. */
         public DownloadCandidate current() {
             return candidateIndex >= 0 && candidateIndex < candidates.size() ? candidates.get(candidateIndex) : null;
@@ -1302,11 +1307,13 @@ public class DownloadTaskRepository {
      * One download's album search as the manual picker reads it. {@code phase} is null when the download
      * has no album search row; {@code title} and {@code artists} are the album's media row, for the
      * wording it searched with; {@code folders} is empty with a null {@code foldersAt} when nothing was
-     * remembered.
+     * remembered. {@code searchId} is slskd's id for the album search (null when slskd never took it)
+     * and {@code finishedAt} when the search ended, so a row from before V15 can still say when it
+     * searched (09-10-2026).
      */
     public record CachedAlbumSearch(DownloadType type, String phase, String outcome, Integer searchTier,
                                     String title, List<String> artists, List<StoredFolder> folders,
-                                    Instant foldersAt) {
+                                    Instant foldersAt, String searchId, Instant finishedAt) {
         /** The folders that hold a file for this song: the list a song inside an album chooses from. */
         public List<StoredFolder> holding(UUID taskId) {
             return folders.stream().filter(folder -> folder.files().containsKey(taskId)).toList();
@@ -1383,7 +1390,9 @@ public class DownloadTaskRepository {
                         row.get("library_path", String.class),
                         row.get("slskd_filename", String.class),
                         readCandidates(row.get("search_results", String.class)),
-                        row.get("search_results_at", Instant.class)))
+                        row.get("search_results_at", Instant.class),
+                        row.get("search_id", String.class),
+                        row.get("failure_reason", String.class)))
                 .one();
     }
 
@@ -1415,7 +1424,9 @@ public class DownloadTaskRepository {
                         row.get("title", String.class),
                         artists(row.get("artists", String[].class)),
                         readFolders(row.get("folders", String.class)),
-                        row.get("folders_at", Instant.class)))
+                        row.get("folders_at", Instant.class),
+                        row.get("search_id", String.class),
+                        row.get("finished_at", Instant.class)))
                 .one();
     }
 

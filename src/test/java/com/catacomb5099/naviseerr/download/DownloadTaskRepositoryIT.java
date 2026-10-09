@@ -1901,10 +1901,16 @@ class DownloadTaskRepositoryIT {
         UUID other = admitOneSong("PENDING");
         UUID task = taskIdOf(id);
         assertNull(repository.cachedSearch(other, task).blockOptional().orElse(null), "a song of another download is not found");
+        assertNull(repository.cachedSearch(id, task).block().searchId(), "not searched yet");
+        assertNull(repository.cachedSearch(id, task).block().failureReason());
 
+        setTask(task, "search_id = 's7'");
         finish(template, downloadService, task, DownloadStatus.FAILED, DownloadFailureCode.NO_CANDIDATES, NOW);
 
-        assertEquals("FAILED", repository.cachedSearch(id, task).block().phase());
+        DownloadTaskRepository.CachedSearch failed = repository.cachedSearch(id, task).block();
+        assertEquals("FAILED", failed.phase());
+        assertEquals("s7", failed.searchId(), "slskd's id for the song's own search, so the picker can name it");
+        assertEquals("NO_CANDIDATES", failed.failureReason());
     }
 
     @Test
@@ -1948,6 +1954,27 @@ class DownloadTaskRepositoryIT {
         assertEquals(DownloadCandidate.ALBUM_FOLDER, read.files().get(songs.get(0)).source());
         assertEquals(1, after.holding(songs.get(0)).size());
         assertTrue(after.holding(songs.get(1)).isEmpty(), "a song the folder lacks has no folder to choose");
+    }
+
+    @Test
+    void cachedAlbumSearch_readsSlskdsSearchId_andWhenTheSearchEnded() {
+        UUID id = admitAlbum("1 a");
+        DownloadTaskRepository.CachedAlbumSearch before = repository.cachedAlbumSearch(id).block();
+        assertNull(before.searchId());
+        assertNull(before.finishedAt());
+
+        AlbumSearch claimed = repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
+        repository.saveAlbumSearch(claimed.toBuilder().phase(DownloadPhase.SEARCH_POLL).searchId("s1").build(),
+                "me", NOW, HOLD.plusSeconds(60)).block();
+        repository.claimDueAlbumSearches(10, "me", NOW.plusSeconds(1), Duration.ofSeconds(60), 2).blockFirst(); // the save cleared the lease
+        assertEquals(1L, repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.NO_WHOLE_FOLDER, java.util.Map.of(),
+                NOW.plusSeconds(9)).block());
+
+        DownloadTaskRepository.CachedAlbumSearch after = repository.cachedAlbumSearch(id).block();
+        assertEquals("s1", after.searchId());
+        assertEquals(NOW.plusSeconds(9), after.finishedAt(), "when the search ended, for a row with no folders remembered");
+        assertEquals("NO_WHOLE_FOLDER", after.outcome());
+        assertNull(after.foldersAt());
     }
 
     @Test

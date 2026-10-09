@@ -214,7 +214,7 @@ class DownloadControllerTest {
     void candidates_isTheListAsJson_withIsCurrentOnTheWire() {
         UUID id = UUID.randomUUID();
         UUID taskId = UUID.randomUUID();
-        TaskCandidatesView list = new TaskCandidatesView(taskId, PickListStatus.READY, null, "Live Forever", NOW,
+        TaskCandidatesView list = new TaskCandidatesView(taskId, PickListStatus.READY, null, "Live Forever", "s-1", NOW,
                 DownloadStage.DOWNLOADING, new TaskCandidatesView.Current("alice", "music/alice/song.flac"),
                 List.of(new TaskCandidatesView.Candidate("alice", "music/alice/song.flac", 1000L, null, 240, "flac",
                         1_000_000, true, 0, "EXACT", true)));
@@ -228,6 +228,7 @@ class DownloadControllerTest {
                 .jsonPath("$.status").isEqualTo("READY")
                 .jsonPath("$.reason").isEmpty()
                 .jsonPath("$.query").isEqualTo("Live Forever")
+                .jsonPath("$.searchId").isEqualTo("s-1")
                 .jsonPath("$.songStage").isEqualTo("DOWNLOADING")
                 .jsonPath("$.current.username").isEqualTo("alice")
                 .jsonPath("$.candidates[0].isCurrent").isEqualTo(true)
@@ -252,7 +253,7 @@ class DownloadControllerTest {
     void albumCandidates_isTheFolderList_or404_or409ForAnythingButAnAlbum() {
         UUID id = UUID.randomUUID();
         AlbumCandidatesView list = new AlbumCandidatesView(id, PickListStatus.NONE, "NO_WHOLE_FOLDER", "Definitely Maybe",
-                null, 11, List.of());
+                "s-2", NOW, 11, List.of());
         when(downloadService.albumCandidates(id)).thenReturn(Mono.just(list));
         WebTestClient http = WebTestClient.bindToController(controller).build();
 
@@ -261,6 +262,8 @@ class DownloadControllerTest {
                 .expectBody()
                 .jsonPath("$.status").isEqualTo("NONE")
                 .jsonPath("$.reason").isEqualTo("NO_WHOLE_FOLDER")
+                .jsonPath("$.searchId").isEqualTo("s-2")
+                .jsonPath("$.searchedAt").isNotEmpty()
                 .jsonPath("$.songCount").isEqualTo(11);
 
         when(downloadService.albumCandidates(id)).thenReturn(Mono.empty());

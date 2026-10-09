@@ -100,3 +100,41 @@ whether or not its path names the artist, stalling sharer or not: the folders th
 and carry `judged: true`, the rest `judged: false`; no cap either (it was 20). The automatic search is unchanged:
 `selectBestFiles` and `AlbumFolderPicker.folders` still apply every rule. Rows written before this change keep their
 shorter lists until the song or album is searched again.
+
+## Addendum of 09-10-2026: the empty list says what really happened
+
+The owner opened the pop-up on an album, read "This album was downloaded before folder lists were kept",
+looked for the search in slskd's history by the current wording, found nothing, and asked whether the search
+had ever been made. It had (05-10-2026, slskd search `10549190-…`, 250 answers, a whole folder, 15 songs done
+in under two minutes), but nothing on screen or in the log said so; and in one case the pop-up was plainly
+wrong: an album search slskd refused (`SEARCH_FAILED`) read as "Nobody shared enough of this album as one
+folder", when nobody had been asked.
+
+Decisions, server side (the client words them):
+
+1. **The reason is read off the columns the rows already have**, no new table, no migration.
+   `download_tasks.search_id` and `failure_reason`, `album_searches.search_id`, `outcome` and
+   `finished_at` join the two cache reads. Song: `ALREADY_IN_LIBRARY`; then `NO_OWN_SEARCH` (a file but
+   no search id of its own: the album folder or a person gave it the file; it was never searched for by
+   itself); then `SEARCH_FAILED` / `SOULSEEK_OFFLINE` (no list, no file, and a failure code that means
+   the search never completed: `SEARCH_FAILED`, `TIMED_OUT`, `SOULSEEK_OFFLINE`); then `NO_RESULTS`
+   (completed, nothing relevant); else `BEFORE_CACHE`. Album: the outcome as it is (`NO_WHOLE_FOLDER`,
+   `SEARCH_FAILED`, `NOTHING_TO_SEARCH`, `CANCELLED`), `BEFORE_CACHE` only for a folder found with nothing
+   remembered. `SOULSEEK_OFFLINE` stays its own reason because the card already words that code;
+   flip: fold it into `SEARCH_FAILED` in `DownloadService.reasonOf`. `TIMED_OUT` is reported as
+   `SEARCH_FAILED` (a search that ran out of time never completed either); a `TIMED_OUT` row that has a
+   file is a transfer timeout after a completed search and reads `BEFORE_CACHE`.
+2. **Both views name slskd's search** (`searchId`) and the album view's `searchedAt` falls back to
+   `finished_at`, so a pre-V15 row still says when it searched. The id is the one thing a person can
+   paste into slskd's Searches page; what was actually sent is not stored (the id leads to it), and a
+   self-hoster who sets `retention.search` short in slskd will find the id gone after that period: the
+   Postgres lists (decision 1 above) are the durable copy. Flip: hide the id in the client, keep it in
+   the API.
+3. **The response shape is additive**: two new optional fields, new `reason` values; a client that does
+   not know a reason falls through to its generic sentence, so the old client keeps working.
+4. Not done (ponytail): storing the wording actually sent; re-reading slskd's stored search for pre-V15
+   rows ("Try again" in the pop-up, ask 3 of this sweep, makes it moot); ordering the card's
+   `MIN(failure_reason)` by severity.
+
+The companion change makes the log name slskd's search id when an album search starts and warn when
+one never starts (`AlbumSearchStep`), so the question is answerable from the log too.
