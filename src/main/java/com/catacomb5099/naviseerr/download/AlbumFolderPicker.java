@@ -248,8 +248,7 @@ public class AlbumFolderPicker {
             for (SearchFile file : usable) {
                 Optional<Integer> gap = lengthGap(track.durationSeconds(), file.getLength(), last);
                 String leaf = LibraryOrganiser.baseName(file.getFilename());
-                if (gap.isEmpty() || matching.grade(request, file.getFilename()) != TrackMatchingService.Match.EXACT
-                        || namesAnotherTake(leaf, allowed)) {
+                if (gap.isEmpty() || !exact(request, picker, file.getFilename()) || namesAnotherTake(leaf, allowed)) {
                     continue;
                 }
                 pairs.add(new Pair(track, file, sameTitle(title, leaf), gap.get(),
@@ -271,6 +270,16 @@ public class AlbumFolderPicker {
             }
         }
         return assigned;
+    }
+
+    /**
+     * The title alone first ("1-01 Myrrhman.mp3" scores too low against "Myrrhman - Talk Talk"), else the
+     * title with the artist: "01 Rock 'n' Roll Star - Oasis.flac" has the artist, not the title, in its
+     * last segment, and only the artist-aware grade reads its whole name (21 such files in one real search).
+     */
+    private boolean exact(String request, String picker, String filename) {
+        return matching.grade(request, filename) == TrackMatchingService.Match.EXACT
+                || matching.grade(picker, filename) == TrackMatchingService.Match.EXACT;
     }
 
     /**
