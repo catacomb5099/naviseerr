@@ -43,6 +43,8 @@ class DownloadControllerTest {
                 Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(5), RETENTION);
         // Nothing already exists unless a test says so; Mockito's default for a Mono is null.
         when(activeDownloadRepository.findCurrent(any(), any())).thenReturn(Mono.empty());
+        // And whatever exists still has its files, unless a test says so (same null-Mono trap).
+        when(downloadService.filesMissing(any())).thenReturn(Mono.just(false));
     }
 
     private static ActiveDownloadView view() {
@@ -50,6 +52,14 @@ class DownloadControllerTest {
                 List.of("artist", "nobody"), Arrays.asList("UC-artist", null), "https://img/1.jpg",
                 DownloadStage.DOWNLOADING,
                 new BigDecimal("43.00"), 1, 0, 0, 0, NOW, NOW, NOW, null, null);
+    }
+
+    /** The same song, downloaded a while ago. */
+    private static ActiveDownloadView finished() {
+        return new ActiveDownloadView(UUID.randomUUID(), "vid-1", DownloadType.SONG, "song",
+                List.of("artist", "nobody"), Arrays.asList("UC-artist", null), "https://img/1.jpg",
+                DownloadStage.SUCCEEDED,
+                new BigDecimal("100.00"), 1, 1, 0, 0, NOW, NOW, NOW, NOW, null);
     }
 
     private static DownloadSongView song() {
@@ -381,6 +391,49 @@ class DownloadControllerTest {
 
         assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
         assertEquals(existing, response.getBody());   // the same card cancel and retry answer with
+        verify(downloadService, never()).requestDownload(any(), any());
+    }
+
+    @Test
+    void downloadSong_whenTheExistingDownloadsFilesAreGone_acksANewRow() {
+        ActiveDownloadView existing = finished();
+        Download saved = Download.builder().downloadId(UUID.randomUUID()).build();
+        when(activeDownloadRepository.findCurrent(DownloadType.SONG, "vid-1")).thenReturn(Mono.just(existing));
+        when(downloadService.filesMissing(existing.downloadId())).thenReturn(Mono.just(true));
+        when(downloadService.requestDownload("vid-1", DownloadType.SONG)).thenReturn(Mono.just(saved));
+
+        ResponseEntity<?> response = controller.downloadSong("vid-1").block();
+
+        // The file is gone, so "you already have it" would be wrong: a new row, and admission fetches
+        // only what is missing.
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(saved, response.getBody());
+        verify(downloadService).requestDownload("vid-1", DownloadType.SONG);
+    }
+
+    @Test
+    void downloadSong_whenTheFilesAreStillThere_is409AsBefore() {
+        ActiveDownloadView existing = finished();
+        when(activeDownloadRepository.findCurrent(DownloadType.SONG, "vid-1")).thenReturn(Mono.just(existing));
+        when(downloadService.filesMissing(existing.downloadId())).thenReturn(Mono.just(false));
+
+        ResponseEntity<?> response = controller.downloadSong("vid-1").block();
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(existing, response.getBody());
+        verify(downloadService, never()).requestDownload(any(), any());
+    }
+
+    @Test
+    void downloadSong_neverChecksFilesForALiveDownload() {
+        when(activeDownloadRepository.findCurrent(DownloadType.SONG, "vid-1")).thenReturn(Mono.just(view()));
+
+        ResponseEntity<?> response = controller.downloadSong("vid-1").block();
+
+        // Still downloading: a second copy is a duplicate whatever the disk says, and there is no file
+        // to look for yet anyway.
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        verify(downloadService, never()).filesMissing(any());
         verify(downloadService, never()).requestDownload(any(), any());
     }
 

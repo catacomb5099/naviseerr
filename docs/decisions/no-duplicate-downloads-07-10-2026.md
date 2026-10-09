@@ -47,3 +47,45 @@ it already has and for the client to grey out anything in progress so it cannot 
   "Downloaded" for the panel's usual 30 seconds and is green again until the next click, which the server
   refuses again; pre-greying something finished hours ago needs a lookup-by-id endpoint, not built.
 - Existing histories with several rows per id are read newest-first; nothing is migrated or deleted.
+
+## Addendum 09-10-2026: files gone from the library
+
+**Context.** Decision 2 refused a request for a downloaded item from `downloads.status` alone; nothing
+looked at the disk. People delete and move files (a Finder clean-up, a disk swap, a Navidrome purge), and
+then "you already have it" was wrong and there was no way to get the song back short of editing the
+database. Admission already knew how to skip the songs still on disk (#109, `stillFiled`), but the 409
+never let a second row reach it.
+
+**Decisions.**
+
+1. **A finished download (SUCCEEDED or PARTIAL_SUCCESS) refuses only while its files are still in the
+   library.** Before the 409, `DownloadController.request` asks `DownloadService.filesMissing(downloadId)`:
+   the download's filed songs (`library_path IS NOT NULL`, the same rows the playlist file lists) go
+   through `LibraryOrganiser.anyMissing`, one `stat` each on `boundedElastic`. If any is gone, the request
+   is inserted as if nothing existed and one INFO line says so (`Download ... has files missing from the
+   library; a new request is allowed`); admission then creates the songs still on disk `SUCCEEDED` pointing
+   at their files and fetches only the missing ones. A SUCCEEDED task row is never reopened: the
+   re-download is a new row, honest history. Both checks end in `LibraryOrganiser.inLibrary`, so they agree.
+2. **A live duplicate (queued or working) always refuses**, as before. There is no file to look for yet.
+3. **Unverifiable counts as present.** With the organiser off there is no library to look in; a song the
+   organiser never filed (gave up, or filed before the organiser existed) has no path to test. In both
+   cases the 409 stands, exactly the no-duplicates behaviour of 07-10 on the owner's laptop. Flip: in
+   `DownloadService.filesMissing`, return `true` when `!organiser.isEnabled()` and/or count SUCCEEDED
+   songs with a NULL `library_path` as missing; then finished items can always be re-requested where the
+   server cannot see the disk (live ones still refuse).
+4. **Any missing file lets the request through**, not all. Flip: `allMatch` in `anyMissing`; then a
+   half-deleted album needs the deliberate override.
+5. **No DDL, no new query.** The paths come from the existing `playlistEntries` query; the check is a stat
+   over an existing column.
+
+**Consequences.**
+
+- A file moved elsewhere inside the library is "gone" at its recorded path; the re-download files a
+  second copy at the canonical path. Only a library scan would know better; not built.
+- The old row keeps its stale `library_path`s. They hurt nothing: every use of filed copies is followed by
+  an `inLibrary` test. For a playlist, the old row's playlist file keeps its stale lines until the new
+  row's own playlist file is written, which has the same title and so replaces it.
+- If the library volume is not mounted at all, every path is "gone" and every finished download becomes
+  re-requestable; refusing to start in that state is the install's job (required-volumes work, same date).
+- Cost: one stat per filed song of the existing download, per click. `anyMatch` stops at the first
+  missing file.

@@ -89,10 +89,23 @@ public class DownloadController {
      * queued, running, downloaded or partly downloaded (the body cancel and retry use, so the client
      * applies it as a row), else the fast ack -- 202 with the inserted row, nothing else on the
      * request thread. A FAILED or cancelled download is not "existing": nothing was fetched, so asking
-     * again is a new row. See {@link ActiveDownloadRepository#findCurrent}.
+     * again is a new row. See {@link ActiveDownloadRepository#findCurrent}. Nor is a finished one
+     * whose files have since gone from the library (09-10-2026): people delete and move files, and a
+     * refusal then leaves no way to get the song back. See {@link DownloadService#filesMissing}.
      */
     private Mono<ResponseEntity<?>> request(String id, DownloadType type) {
         return activeDownloadRepository.findCurrent(type, id)
+                // A live duplicate always refuses. A finished one refuses only while its files are still
+                // in the library; with any of them gone the request goes through, and admission fetches
+                // just the missing songs. With the organiser off nothing is known to be missing.
+                .filterWhen(existing -> isLive(existing.stage()) ? Mono.just(true)
+                        : downloadService.filesMissing(existing.downloadId()).map(missing -> {
+                            if (missing) {
+                                log.info("Download {} ({} {}) has files missing from the library; "
+                                        + "a new request is allowed", existing.downloadId(), type, id);
+                            }
+                            return !missing;
+                        }))
                 .<ResponseEntity<?>>map(existing -> ResponseEntity.status(HttpStatus.CONFLICT).body(existing))
                 // Deferred, so the insert is not even built unless the lookup came back empty.
                 .switchIfEmpty(Mono.defer(() -> downloadService.requestDownload(id, type)
@@ -101,6 +114,14 @@ public class DownloadController {
                 .doOnError(error -> log.warn("Download request for {} {} failed", type, id, error))
                 .onErrorResume(error -> Mono.just(
                         ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));
+    }
+
+    /** Queued or working: a duplicate of one of these refuses whatever the disk says. */
+    private static boolean isLive(DownloadStage stage) {
+        return switch (stage) {
+            case SUCCEEDED, FAILED, PARTIAL_SUCCESS -> false;
+            default -> true;
+        };
     }
 
     /**

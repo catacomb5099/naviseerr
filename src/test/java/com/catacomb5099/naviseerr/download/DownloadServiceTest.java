@@ -42,6 +42,28 @@ class DownloadServiceTest {
     }
 
     @Test
+    void filesMissing_isFalseWithoutAskingTheDatabase_whenTheOrganiserIsOff() {
+        when(organiser.isEnabled()).thenReturn(false);
+
+        assertFalse(service.filesMissing(id).block());
+
+        verify(repository, never()).playlistEntries(any());
+        verify(organiser, never()).anyMissing(any());
+    }
+
+    @Test
+    void filesMissing_handsEveryFiledPathToTheOrganiser() {
+        when(organiser.isEnabled()).thenReturn(true);
+        when(repository.playlistEntries(id)).thenReturn(Flux.just(
+                new LibraryOrganiser.Entry("/library/Oasis/Definitely Maybe/01 - Rock n Roll Star.flac", "Rock 'n' Roll Star", List.of("Oasis"), 324),
+                new LibraryOrganiser.Entry("/library/Oasis/Definitely Maybe/02 - Shakermaker.flac", "Shakermaker", List.of("Oasis"), 309)));
+        when(organiser.anyMissing(List.of("/library/Oasis/Definitely Maybe/01 - Rock n Roll Star.flac",
+                "/library/Oasis/Definitely Maybe/02 - Shakermaker.flac"))).thenReturn(Mono.just(true));
+
+        assertTrue(service.filesMissing(id).block(), "the organiser's verdict over the filed paths is the answer");
+    }
+
+    @Test
     void cancel_ofAQueuedDownload_failsItUnadmitted_andNeverTouchesTasks() {
         when(repository.failUnadmitted(id, DownloadFailureCode.CANCELLED, NOW)).thenReturn(Mono.just(1L));
 
