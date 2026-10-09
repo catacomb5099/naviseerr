@@ -365,6 +365,11 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   an adapter image older than that field (28-09-2026) leaves them `""`, no error. Because YouTube
   supplies one for every related artist, `ArtistController` logs a WARN when all of them are blank,
   naming the stale adapter as the cause. Rebuild the adapter image (`docker compose up -d --build`).
+- Top songs' play counts (`Track.plays` on `/artists/{id}`) are filled by the adapter from each
+  song's album (adapter PR #8, 30-09-2026); an older adapter sends none. YouTube has a count for
+  nearly every song, so `ArtistController` logs the same kind of WARN when every top song arrives
+  without one (one or two missing is an upload-id mismatch and stays quiet). Same fix: rebuild the
+  adapter image, then check the page.
 - Top songs on the artist page use YouTube's predictable per-video thumbnail because the adapter's
   `TrackDto` carries no artwork; same picture the collection view uses for playlist tracks.
 - On All, songs that only the mixed page returned carry `Track.albumId` `""` (the mixed page gives

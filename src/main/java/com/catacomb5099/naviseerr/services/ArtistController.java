@@ -73,6 +73,9 @@ public class ArtistController {
                     if (!view.similarArtists().isEmpty() && view.similarArtists().stream().allMatch(similar -> similar.getIconUrl().isEmpty())) {
                         log.warn(STALE_ADAPTER_WARNING, view.name(), channelId, view.similarArtists().size());
                     }
+                    if (!view.topSongs().isEmpty() && view.topSongs().stream().allMatch(song -> song.getPlays() == null)) {
+                        log.warn(STALE_ADAPTER_NO_PLAYS_WARNING, view.name(), channelId, view.topSongs().size());
+                    }
                 });
     }
 
@@ -84,6 +87,18 @@ public class ArtistController {
      */
     static final String STALE_ADAPTER_WARNING = "Artist '{}' ({}): all {} similar artists arrived without a picture. "
             + "The ytmusic-adapter is probably out of date (older than 28-09-2026); rebuild it with "
+            + "`docker compose up -d --build ytmusic-adapter` (all-in-one) or restart the dev compose stack";
+
+    /**
+     * The twin for play counts: the adapter fills a top song's count from its album (adapter PR #8,
+     * 30-09-2026), and YouTube has one for nearly every song, so five top songs all without one
+     * means the adapter answering predates that change. That exact loss went unnoticed for nine
+     * days (the #8 commit was merged into its parent branch, never into the integration branch);
+     * one WARN per artist page is what would have shown it on day one. One or two missing counts
+     * among the five is YouTube's business (an upload-id mismatch) and stays quiet.
+     */
+    static final String STALE_ADAPTER_NO_PLAYS_WARNING = "Artist '{}' ({}): all {} top songs arrived without a play count. "
+            + "The ytmusic-adapter is probably out of date (older than 30-09-2026); rebuild it with "
             + "`docker compose up -d --build ytmusic-adapter` (all-in-one) or restart the dev compose stack";
 
     private Mono<List<Playlist>> featuredOn(YtMusicDetailResponse.Artist artist) {
