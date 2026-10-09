@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services;
 
+import com.catacomb5099.naviseerr.download.LibraryOrganiser;
 import com.catacomb5099.naviseerr.schema.slskd.SlskdOptions;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,7 +14,9 @@ import java.util.Optional;
  * {@code GET /status}: is this install's Soulseek client logged in? The one newcomer question the app
  * could not answer before -- a wrong or taken username left the web app silent until a download
  * failed two minutes later. The web app polls it with the downloads feed and shows a strip while
- * {@code loggedIn} is false.
+ * {@code loggedIn} is false. Since 09-10-2026 it also says whether the music library can be written
+ * to ({@code library}): a wrong or unmounted folder used to show only as WARN lines in the log while
+ * the web app said "Downloaded".
  */
 @RestController
 public class StatusController {
@@ -23,9 +26,11 @@ public class StatusController {
     private static final Duration SLSKD_BUDGET = Duration.ofSeconds(3);
 
     private final SlskdService slskdService;
+    private final LibraryOrganiser organiser;
 
-    public StatusController(SlskdService slskdService) {
+    public StatusController(SlskdService slskdService, LibraryOrganiser organiser) {
         this.slskdService = slskdService;
+        this.organiser = organiser;
     }
 
     /** Always 200: a down slskd is an answer, not an error, so the strip never has to guess. */
@@ -43,10 +48,17 @@ public class StatusController {
                         t.getT2().orElse(null)))
                 .onErrorResume(e -> Mono.just(new SoulseekStatus(false, false, UNREACHABLE,
                         e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(), null)))
-                .map(StatusView::new);
+                .map(soulseek -> new StatusView(soulseek,
+                        new LibraryStatus(organiser.isEnabled(), organiser.libraryRoot(), organiser.libraryProblem())));
     }
 
-    public record StatusView(SoulseekStatus soulseek) {}
+    public record StatusView(SoulseekStatus soulseek, LibraryStatus library) {}
+
+    /**
+     * {@code enabled} false when no library is configured (then {@code root} and {@code problem} are
+     * null); {@code problem} one plain sentence while the folder is missing or cannot be written to.
+     */
+    public record LibraryStatus(boolean enabled, String root, String problem) {}
 
     /**
      * {@code state} is slskd's own word: "None" before it has ever tried to connect, "Disconnected",

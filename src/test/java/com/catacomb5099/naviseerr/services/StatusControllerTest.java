@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.services;
 
+import com.catacomb5099.naviseerr.download.LibraryOrganiser;
 import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.SlskdOptions;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
@@ -13,7 +14,8 @@ import static org.mockito.Mockito.when;
 class StatusControllerTest {
 
     private final SlskdService slskdService = mock(SlskdService.class);
-    private final WebTestClient http = WebTestClient.bindToController(new StatusController(slskdService)).build();
+    private final LibraryOrganiser organiser = mock(LibraryOrganiser.class);
+    private final WebTestClient http = WebTestClient.bindToController(new StatusController(slskdService, organiser)).build();
 
     private static ServerState state(String state, boolean connected, boolean loggedIn) {
         return new ServerState("vps.slsknet.org:2271", "1.2.3.4:2271", state, connected, false, loggedIn, false, false);
@@ -98,6 +100,50 @@ class StatusControllerTest {
                 .jsonPath("$.soulseek.state").isEqualTo("Connected, LoggedIn")
                 .jsonPath("$.soulseek.detail").isEmpty()
                 .jsonPath("$.soulseek.username").isEmpty();
+    }
+
+    @Test
+    void libraryOff_isReported_withNoRootAndNoProblem() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.library.enabled").isEqualTo(false)
+                .jsonPath("$.library.root").isEmpty()
+                .jsonPath("$.library.problem").isEmpty();
+    }
+
+    @Test
+    void libraryFine_isReported_withItsRoot() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.libraryRoot()).thenReturn("/library");
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.library.enabled").isEqualTo(true)
+                .jsonPath("$.library.root").isEqualTo("/library")
+                .jsonPath("$.library.problem").isEmpty();
+    }
+
+    @Test
+    void libraryProblem_isReported_besideTheSoulseekStatus_evenWhenSlskdIsDown() {
+        when(slskdService.getServerState()).thenReturn(Mono.error(new RuntimeException("Connection refused")));
+        when(slskdService.getOptions()).thenReturn(Mono.error(new RuntimeException("Connection refused")));
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.libraryRoot()).thenReturn("/library");
+        when(organiser.libraryProblem()).thenReturn("naviseerr cannot write into the library folder /library.");
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.soulseek.state").isEqualTo(StatusController.UNREACHABLE)
+                .jsonPath("$.library.enabled").isEqualTo(true)
+                .jsonPath("$.library.problem").isEqualTo("naviseerr cannot write into the library folder /library.");
     }
 
     @Test
