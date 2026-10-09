@@ -55,8 +55,8 @@ public class StatusController {
     public record StatusView(SoulseekStatus soulseek, LibraryStatus library) {}
 
     /**
-     * {@code enabled} false when no library is configured (then {@code root} and {@code problem} are
-     * null); {@code problem} one plain sentence while the folder is missing or cannot be written to.
+     * {@code enabled} false when no library is configured or its paths overlap slskd's folders (then
+     * {@code root} and {@code problem} are null; the log says why); {@code problem} one plain sentence while the folder is missing or cannot be written to.
      */
     public record LibraryStatus(boolean enabled, String root, String problem) {}
 

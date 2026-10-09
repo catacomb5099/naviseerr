@@ -156,9 +156,9 @@ public class LibraryOrganiser {
         return enabled;
     }
 
-    /** The library folder as this process sees it; null when the organiser is off. */
+    /** The library folder as this process sees it; null when the organiser is off (unset, or refused for overlapping slskd's folders). */
     public String libraryRoot() {
-        return root == null ? null : root.toString();
+        return enabled ? root.toString() : null;
     }
 
     /**

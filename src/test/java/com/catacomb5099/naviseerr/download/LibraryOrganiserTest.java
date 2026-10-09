@@ -68,6 +68,8 @@ class LibraryOrganiserTest {
                 .isEnabled(), "downloads inside library");
         assertFalse(new LibraryOrganiser(downloads.toString(), tmp.toString(), root.toString(), LOOP, TAGGER)
                 .isEnabled(), "library inside incomplete");
+        assertNull(new LibraryOrganiser(downloads.toString(), "", downloads.resolve("music").toString(), LOOP, TAGGER)
+                .libraryRoot(), "GET /status reports no root for an organiser that refused its paths");
     }
 
     // ---- can the library be written to? (GET /status) -------------------------------------------
