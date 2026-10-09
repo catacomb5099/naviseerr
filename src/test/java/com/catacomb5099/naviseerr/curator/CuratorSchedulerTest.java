@@ -26,14 +26,15 @@ class CuratorSchedulerTest {
     @BeforeEach
     void setUp() {
         client = mock(CuratorClient.class);
-        scheduler = new CuratorScheduler(client, "http://curator", "token", "0 0 3 * * MON", POLL, BUDGET);
+        scheduler = new CuratorScheduler(client, "http://curator", "token", "0 0 3 * * MON", POLL, BUDGET, true);
+        scheduler.firstRunGrace = Duration.ZERO;
         when(client.triggerRun()).thenReturn(Mono.just(run("queued")));
     }
 
     @Test
     void offWhenTokenMissing() {
-        assertTrue(!new CuratorScheduler(client, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET).isEnabled());
-        assertTrue(!new CuratorScheduler(client, "", "token", "0 0 3 * * MON", POLL, BUDGET).isEnabled());
+        assertTrue(!new CuratorScheduler(client, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET, true).isEnabled());
+        assertTrue(!new CuratorScheduler(client, "", "token", "0 0 3 * * MON", POLL, BUDGET, true).isEnabled());
         assertTrue(scheduler.isEnabled());
     }
 
@@ -172,6 +173,55 @@ class CuratorSchedulerTest {
         StepVerifier.create(scheduler.refreshNow()).expectError(CuratorException.class).verify();
 
         verify(client, never()).getRun(any());
+    }
+
+    @Test
+    void firstRun_withNoEditions_triggersARefresh() {
+        when(client.getEditions()).thenReturn(Mono.just(List.of()));
+        when(client.getRun("r1")).thenReturn(Mono.just(run("succeeded")));
+
+        StepVerifier.create(scheduler.firstRun()).verifyComplete();
+
+        verify(client).triggerRun();
+        verify(client).getRun("r1");
+    }
+
+    @Test
+    void firstRun_withEditions_doesNothing() {
+        when(client.getEditions()).thenReturn(Mono.just(List.of(
+                new CuratorEditionSummary("80s-indie-pop", "80s indie pop", "1980-1989", "2026-10-05", 40))));
+
+        StepVerifier.create(scheduler.firstRun()).verifyComplete();
+
+        verify(client, never()).triggerRun();
+    }
+
+    @Test
+    void firstRun_whenTheCuratorIsDown_isLoggedNotThrown() {
+        when(client.getEditions()).thenReturn(
+                Mono.error(new CuratorException("curator list of editions failed: Connection refused", true)));
+
+        StepVerifier.create(scheduler.firstRun()).verifyComplete();
+
+        verify(client, never()).triggerRun();
+    }
+
+    @Test
+    void onStart_asksForEditions_onlyWhenOnAndConfigured() {
+        when(client.getEditions()).thenReturn(Mono.just(List.of(
+                new CuratorEditionSummary("80s-indie-pop", "80s indie pop", "1980-1989", "2026-10-05", 40))));
+
+        CuratorScheduler off = new CuratorScheduler(client, "http://curator", "token", "0 0 3 * * MON", POLL, BUDGET, false);
+        off.firstRunGrace = Duration.ZERO;
+        off.onStart();
+        CuratorScheduler noToken = new CuratorScheduler(client, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET, true);
+        noToken.firstRunGrace = Duration.ZERO;
+        noToken.onStart();
+        verify(client, after(POLL.toMillis() * 5).never()).getEditions();
+
+        scheduler.onStart();
+        verify(client, timeout(BUDGET.toMillis() * 3)).getEditions();
+        verify(client, never()).triggerRun();
     }
 
     private static CuratorRun run(String status) {

@@ -67,3 +67,18 @@ naviseerr button, not a curator one.
   method away.
 - Storing run history in naviseerr's database. The curator keeps its own history in `runs/`; the logs
   are enough for now.
+
+## Addendum 09-10-2026: a first run on start, and a 2-hour budget
+
+A fresh install had no suggested playlists until the first Monday 03:00 unless somebody pressed "Make
+this week's playlists now". Now, when the scheduler is on, naviseerr waits two minutes after start (the
+curator is up by then and the first `docker compose up` is over), asks the curator for its editions and,
+if there are none at all, runs one refresh at once: the same trigger, polling and per-category log lines
+as a cron tick. Editions present means nothing happens; a curator that cannot be reached means one WARN
+line and the weekly cron still stands (a 90-minute job must not start on a guess). `curator.first-run-on-start`
+(env `CURATOR_FIRST_RUN_ON_START`, default `true`) turns it off. A restart loop cannot start two runs: the
+curator hands the active run back to a second trigger.
+
+The poll budget went from 30 minutes to 2 hours (`curator.run-budget-ms`): a full run over 49 categories
+takes about 80-90 minutes, so every real run used to end with a misleading "still running after PT30M"
+warning while the curator was still working.
