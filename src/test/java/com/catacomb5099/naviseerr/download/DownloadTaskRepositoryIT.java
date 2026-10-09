@@ -1268,6 +1268,11 @@ class DownloadTaskRepositoryIT {
 
     private static final Instant HOLD = NOW.plusSeconds(240);
 
+    /** A retry with the hold a fresh album's songs get, as {@code DownloadService.retry} passes it. */
+    private Long retry(UUID downloadId, UUID taskId, Instant now) {
+        return repository.retry(downloadId, taskId, now, now.plusSeconds(240)).block();
+    }
+
     /** An album download admitted the way the runner admits one: its search row, its songs held. */
     private UUID admitAlbum(String... songNames) {
         UUID id = insertDownload("PENDING", "ALBUM");
@@ -1435,7 +1440,7 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
-    void cancellingTheWholeAlbum_endsItsSearch_soItCanNoLongerHandOutFiles_butCancellingOneSongDoesNot() {
+    void cancellingTheWholeAlbum_endsItsSearch_aRetryRestartsIt_andOnlyAFreshClaimHandsOutFiles_butCancellingOneSongDoesNot() {
         UUID id = admitAlbum("1 a", "2 b");
         repository.claimDueAlbumSearches(10, "me", NOW, Duration.ofSeconds(60), 2).blockFirst();
 
@@ -1445,12 +1450,26 @@ class DownloadTaskRepositoryIT {
         repository.cancelTasks(id, null, NOW).blockLast();
         assertEquals("DONE", albumField(id, "phase"));
         assertEquals("CANCELLED", albumField(id, "outcome"));
-        // A retry reopens the songs; the album search must not hand them files: they search on their own.
+
+        // A whole retry reopens the songs and restarts the search (09-10-2026). The step that was out
+        // under the old lease lost it, so it cannot hand the reopened songs its files: the guard is the
+        // lease, not the DONE phase.
         repository.concludeDownloads().block();
-        repository.retry(id, null, NOW.plusSeconds(1)).block();
-        assertEquals(0L, repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.WHOLE_FOLDER,
-                java.util.Map.of(taskIdsOf(id).getFirst(), DownloadTaskFixtures.albumFolderCandidates("x")), NOW.plusSeconds(2)).block());
+        retry(id, null, NOW.plusSeconds(1));
+        assertEquals("SEARCH_INIT", albumField(id, "phase"));
+        assertNull(albumField(id, "lease_owner"));
+        java.util.Map<UUID, List<DownloadCandidate>> files =
+                java.util.Map.of(taskIdsOf(id).getFirst(), DownloadTaskFixtures.albumFolderCandidates("x"));
+        assertEquals(0L, repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.WHOLE_FOLDER, files, NOW.plusSeconds(2)).block(),
+                "the stale step releases nothing");
+        assertEquals("SEARCH_INIT", albumField(id, "phase"));
         assertEquals(List.of("SEARCH_INIT", "SEARCH_INIT"), phasesOf(id));
+
+        // Claimed afresh, the restarted search hands them out as a first search would.
+        repository.claimDueAlbumSearches(10, "me", NOW.plusSeconds(3), Duration.ofSeconds(60), 2).blockFirst();
+        assertEquals(2L, repository.releaseAlbumSongs(id, "me", AlbumSearch.Outcome.WHOLE_FOLDER, files, NOW.plusSeconds(4)).block());
+        assertEquals("WHOLE_FOLDER", albumField(id, "outcome"));
+        assertEquals(List.of("DOWNLOAD_INIT", "SEARCH_INIT"), phasesOf(id));
     }
 
     @Test
@@ -1509,7 +1528,7 @@ class DownloadTaskRepositoryIT {
         repository.setOrganisedAt(id, NOW).block();
         assertEquals("PARTIAL_SUCCESS", statusOf(id));
 
-        Long rows = repository.retry(id, null, NOW.plusSeconds(60)).block();
+        Long rows = retry(id, null, NOW.plusSeconds(60));
 
         assertEquals(2L, rows, "the failed song and the cancelled one");
         assertEquals("IN_PROGRESS", statusOf(id));
@@ -1525,21 +1544,21 @@ class DownloadTaskRepositoryIT {
     @Test
     void retry_twice_theSecondIsANoOp() {
         UUID id = failedSong();
-        assertEquals(1L, repository.retry(id, null, NOW).block());
-        assertEquals(0L, repository.retry(id, null, NOW).block(), "the second click finds no failed song left");
+        assertEquals(1L, retry(id, null, NOW));
+        assertEquals(0L, retry(id, null, NOW), "the second click finds no failed song left");
     }
 
     @Test
     void retry_twoConcurrentCalls_exactlyOneWins() {
         UUID id = failedSong();
-        Tuple2<Long, Long> both = Mono.zip(repository.retry(id, null, NOW), repository.retry(id, null, NOW)).block();
+        Tuple2<Long, Long> both = Mono.zip(repository.retry(id, null, NOW, HOLD), repository.retry(id, null, NOW, HOLD)).block();
         assertEquals(1L, both.getT1() + both.getT2());
     }
 
     @Test
     void retry_whileInProgress_isANoOp() {
         UUID id = admitOneSong("PENDING");
-        assertEquals(0L, repository.retry(id, null, NOW).block());
+        assertEquals(0L, retry(id, null, NOW));
         assertEquals("SEARCH_INIT", taskField(taskIdsOf(id).getFirst(), "phase"));
     }
 
@@ -1548,7 +1567,7 @@ class DownloadTaskRepositoryIT {
         UUID id = admitOneSong("PENDING");
         finish(template, downloadService, taskIdsOf(id).getFirst(), DownloadStatus.SUCCEEDED, null, NOW);
         repository.concludeDownloads().block();
-        assertEquals(0L, repository.retry(id, null, NOW).block());
+        assertEquals(0L, retry(id, null, NOW));
         assertEquals(0L, repository.readmit(id).block(), "songs exist, so this is not an unadmitted failure either");
     }
 
@@ -1566,7 +1585,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void setOrganisedAt_afterARetry_updatesNothing() {
         UUID id = failedSong();
-        repository.retry(id, null, NOW).block();
+        retry(id, null, NOW);
         assertEquals(0L, repository.setOrganisedAt(id, NOW).block(), "a stamp in flight when the user clicked Retry must not land");
     }
 
@@ -1630,7 +1649,7 @@ class DownloadTaskRepositoryIT {
         UUID id = livePlaylistWithOneFailedSong();
         List<UUID> tasks = taskIdsOf(id);
 
-        Long rows = repository.retry(id, tasks.get(1), NOW.plusSeconds(60)).block();
+        Long rows = retry(id, tasks.get(1), NOW.plusSeconds(60));
 
         assertEquals(1L, rows);
         assertEquals("IN_PROGRESS", statusOf(id), "a live parent is left as it is");
@@ -1648,15 +1667,15 @@ class DownloadTaskRepositoryIT {
     void retry_ofOneSong_twice_theSecondIsANoOp() {
         UUID id = livePlaylistWithOneFailedSong();
         UUID failed = taskIdsOf(id).get(1);
-        assertEquals(1L, repository.retry(id, failed, NOW).block());
-        assertEquals(0L, repository.retry(id, failed, NOW).block(), "the second click finds the song no longer FAILED");
+        assertEquals(1L, retry(id, failed, NOW));
+        assertEquals(0L, retry(id, failed, NOW), "the second click finds the song no longer FAILED");
     }
 
     @Test
     void retry_ofOneSong_twoConcurrentCalls_exactlyOneWins() {
         UUID id = livePlaylistWithOneFailedSong();
         UUID failed = taskIdsOf(id).get(1);
-        Tuple2<Long, Long> both = Mono.zip(repository.retry(id, failed, NOW), repository.retry(id, failed, NOW)).block();
+        Tuple2<Long, Long> both = Mono.zip(repository.retry(id, failed, NOW, HOLD), repository.retry(id, failed, NOW, HOLD)).block();
         assertEquals(1L, both.getT1() + both.getT2());
     }
 
@@ -1672,7 +1691,7 @@ class DownloadTaskRepositoryIT {
         repository.setOrganisedAt(id, NOW).block();
         assertEquals("PARTIAL_SUCCESS", statusOf(id));
 
-        assertEquals(1L, repository.retry(id, tasks.get(1), NOW.plusSeconds(60)).block());
+        assertEquals(1L, retry(id, tasks.get(1), NOW.plusSeconds(60)));
 
         assertEquals("IN_PROGRESS", statusOf(id), "the finished download is live again, as a whole retry would make it");
         assertNull(organisedAtOf(id), "the playlist file is rewritten once the retried song lands");
@@ -1684,7 +1703,7 @@ class DownloadTaskRepositoryIT {
     @Test
     void retry_ofTheWholeDownload_whileItRuns_isStillANoOp() {
         UUID id = livePlaylistWithOneFailedSong();
-        assertEquals(0L, repository.retry(id, null, NOW).block(), "the 28-09 rule: never retry a running download whole");
+        assertEquals(0L, retry(id, null, NOW), "the 28-09 rule: never retry a running download whole");
         assertEquals("FAILED", taskField(taskIdsOf(id).get(1), "phase"));
     }
 
@@ -1692,7 +1711,7 @@ class DownloadTaskRepositoryIT {
     void retry_ofASongOfAnotherDownload_isANoOp() {
         UUID id = livePlaylistWithOneFailedSong();
         UUID other = failedSong();
-        assertEquals(0L, repository.retry(id, taskIdOf(other), NOW).block(), "the task is not this download's");
+        assertEquals(0L, retry(id, taskIdOf(other), NOW), "the task is not this download's");
         assertEquals("FAILED", taskField(taskIdOf(other), "phase"));
         assertEquals("FAILED", statusOf(other));
         assertEquals("FAILED", taskField(taskIdsOf(id).get(1), "phase"), "and nothing of this download moved either");
@@ -1702,8 +1721,8 @@ class DownloadTaskRepositoryIT {
     void retry_ofASongThatIsNotFailed_isANoOp() {
         UUID id = livePlaylistWithOneFailedSong();
         List<UUID> tasks = taskIdsOf(id);
-        assertEquals(0L, repository.retry(id, tasks.get(0), NOW).block(), "a song with a file");
-        assertEquals(0L, repository.retry(id, tasks.get(2), NOW).block(), "a song still running");
+        assertEquals(0L, retry(id, tasks.get(0), NOW), "a song with a file");
+        assertEquals(0L, retry(id, tasks.get(2), NOW), "a song still running");
         assertEquals("SUCCEEDED", taskField(tasks.get(0), "phase"));
         assertEquals("SEARCH_INIT", taskField(tasks.get(2), "phase"));
     }
@@ -1714,7 +1733,7 @@ class DownloadTaskRepositoryIT {
         admit(id, "1 a", "2 b");
         DownloadTask claimed = repository.claimDueTasks(10, "owner-a", NOW, Duration.ofMinutes(1), true, 2).blockFirst();
         repository.cancelTasks(id, claimed.taskId(), NOW).blockLast();
-        repository.retry(id, claimed.taskId(), NOW.plusSeconds(2)).block();   // same pass: the old step is still out
+        retry(id, claimed.taskId(), NOW.plusSeconds(2));   // same pass: the old step is still out
 
         Long rows = downloadService.finishTask(claimed.taskId(), DownloadStatus.SUCCEEDED, null, NOW.plusSeconds(3), "owner-a").block();
 
@@ -1733,7 +1752,7 @@ class DownloadTaskRepositoryIT {
         assertEquals("DONE", albumField(id, "phase"));
         finish(template, downloadService, songs.get(1), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
 
-        assertEquals(1L, repository.retry(id, songs.get(1), NOW.plusSeconds(1)).block());
+        assertEquals(1L, retry(id, songs.get(1), NOW.plusSeconds(1)));
 
         assertEquals("SEARCH_INIT", taskField(songs.get(1), "phase"));
         assertEquals("[]", taskField(songs.get(1), "candidates"), "a solo search from the first wording");
@@ -1820,7 +1839,7 @@ class DownloadTaskRepositoryIT {
         DownloadTask claimed = repository.claimDueTasks(10, "owner-a", NOW, Duration.ofMinutes(1), true, 2).blockFirst();
         repository.cancelTasks(id, null, NOW).blockLast();
         repository.concludeDownloads().block();
-        repository.retry(id, null, NOW.plusSeconds(2)).block();
+        retry(id, null, NOW.plusSeconds(2));
 
         Long rows = downloadService.finishTask(claimed.taskId(), DownloadStatus.SUCCEEDED, null, NOW.plusSeconds(3), "owner-a").block();
 
@@ -2093,7 +2112,7 @@ class DownloadTaskRepositoryIT {
         UUID task = taskIdOf(id);
         repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice"), NOW).block();
 
-        assertEquals(1L, repository.retry(id, null, NOW.plusSeconds(1)).block());
+        assertEquals(1L, retry(id, null, NOW.plusSeconds(1)));
 
         DownloadTaskRepository.CachedSearch cached = repository.cachedSearch(id, task).block();
         assertEquals(1, cached.files().size(), "the picker still has something to show while the new search runs");

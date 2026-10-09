@@ -157,6 +157,13 @@ list could never fill after it. Now:
   per-song retry; the step overwrites them when it finds any. Flip: clear `folders`/`folders_at` in the
   `album` CTE so the pop-up says "still searching" at once.
 - **One track's retry is unchanged**: the search stays done, the track searches on its own.
+- **Cancel, then retry.** A whole cancel ends the search (`CANCELLED`); the retry restarts it. So the
+  04-10 guarantee "a search still running cannot hand files to songs a later retry reopens" now rests
+  on the lease, not on the `DONE` phase: the retry clears `lease_owner`, and the save and release
+  statements match only `lease_owner = :owner`, so a step still out under the old lease saves and
+  releases nothing (`cancellingTheWholeAlbum_endsItsSearch_aRetryRestartsIt_...` pins it). The same
+  lease guard songs already rely on after a per-song cancel and retry; the window where one instance
+  re-claims the row while its own old step is mid-release is the narrow one the song path has too.
 - **Visible change for every whole-album retry**: the card reads "Searching" and the songs wait for the
   folder search (typically 10-30 s; up to the hold if slskd leaves the search "InProgress") instead of
   starting solo at once. A fresh album behaves the same; "retry the album" now means what it says.

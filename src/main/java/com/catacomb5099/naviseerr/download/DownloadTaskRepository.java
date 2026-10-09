@@ -1120,18 +1120,15 @@ public class DownloadTaskRepository {
                 .all();
     }
 
-    /** The number of songs reset: every FAILED one, or the one {@code taskId} names; 0 when there was nothing to retry. See RETRY_SQL. Reset songs are due now; {@link DownloadService#retry} passes the album hold. */
-    public Mono<Long> retry(UUID downloadId, UUID taskId, Instant now) {
-        return retry(downloadId, taskId, now, null);
-    }
-
     /**
-     * {@link #retry(UUID, UUID, Instant)}, with the reset songs of a whole album retry held until
-     * {@code holdUntil} (null: due now) while its restarted folder search runs. See RETRY_SQL.
+     * The number of songs reset: every FAILED one, or the one {@code taskId} names; 0 when there was
+     * nothing to retry. A whole album's reset songs are held until {@code holdUntil} (after {@code now},
+     * {@link AlbumSearchStep#holdUntil}) while its restarted folder search runs; any other reset song is
+     * due now. See RETRY_SQL.
      */
     public Mono<Long> retry(UUID downloadId, UUID taskId, Instant now, Instant holdUntil) {
         DatabaseClient.GenericExecuteSpec spec = client.sql(RETRY_SQL).bind("id", downloadId).bind("now", now)
-                .bind("holdUntil", holdUntil == null ? now : holdUntil);
+                .bind("holdUntil", holdUntil);
         spec = taskId == null ? spec.bindNull("taskId", UUID.class) : spec.bind("taskId", taskId);
         return spec.map((row, meta) -> row.get("reset", Long.class)).one();
     }
