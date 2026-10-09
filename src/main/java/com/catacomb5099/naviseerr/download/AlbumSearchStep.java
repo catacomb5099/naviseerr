@@ -82,6 +82,8 @@ public class AlbumSearchStep {
      */
     private Mono<Void> start(AlbumSearch album, Instant now, String owner) {
         if (album.title() == null) {
+            log.warn("Album search of download {} not started: the album has no title; its songs will search "
+                    + "on their own", album.downloadId());
             return finish(album, AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), now, owner);
         }
         return repository.waitingAlbumSongs(album.downloadId(), now).hasElements()
@@ -90,10 +92,15 @@ public class AlbumSearchStep {
                         : slskdService.searchResults(album.searchQuery())
                                 .flatMap(started -> {
                                     if (started.getId() == null || started.getId().isBlank()) {
+                                        log.warn("Album search of download {} not started: slskd answered without a "
+                                                + "search id; its songs will search on their own", album.downloadId());
                                         return finish(album, AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), now, owner);
                                     }
-                                    log.info("Album '{}' of download {}: looking for one sharer with every song ('{}')",
-                                            album.title(), album.downloadId(), album.searchQuery());
+                                    // slskd's id is what a person pastes into slskd's own Searches page to see
+                                    // the search was made and what it got (the owner's question of 09-10-2026).
+                                    log.info("Album '{}' of download {}: looking for one sharer with every song ('{}'), "
+                                            + "slskd search {}", album.title(), album.downloadId(),
+                                            album.searchQuery(), started.getId());
                                     return repository.saveAlbumSearch(album.toBuilder()
                                             .phase(DownloadPhase.SEARCH_POLL).searchId(started.getId())
                                             .phaseEnteredAt(now).nextAttemptAt(now).build(), owner, now, holdUntil(now))
@@ -197,11 +204,18 @@ public class AlbumSearchStep {
                 picks, now, owner);
     }
 
+    /**
+     * An album search that never reached slskd ends at INFO, so the log answers "was it searched?" without
+     * DEBUG on; the ways that did search already log their verdict in {@link #settle}.
+     */
     private Mono<Void> finish(AlbumSearch album, AlbumSearch.Outcome outcome,
                               Map<UUID, List<DownloadCandidate>> picks, Instant now, String owner) {
+        boolean neverSearched = outcome == AlbumSearch.Outcome.SEARCH_FAILED
+                || outcome == AlbumSearch.Outcome.NOTHING_TO_SEARCH;
         return repository.releaseAlbumSongs(album.downloadId(), owner, outcome, picks, now)
-                .doOnNext(released -> log.debug("Album search of download {} ended {}; {} song(s) released",
-                        album.downloadId(), outcome, released))
+                .doOnNext(released -> log.atLevel(neverSearched ? org.slf4j.event.Level.INFO : org.slf4j.event.Level.DEBUG)
+                        .log("Album search of download {} ended {}; {} song(s) released",
+                                album.downloadId(), outcome, released))
                 .then();
     }
 }
