@@ -2,7 +2,7 @@
 # naviseerr's setup step. compose runs it (the `setup` service, as root) on every `docker compose up`,
 # before slskd and naviseerr, which only start once it exits 0. It:
 #   1. gives the shared folders to PUID:PGID, the one user slskd and naviseerr both run as;
-#   2. checks the Soulseek username from .env (the one thing you must choose);
+#   2. takes the Soulseek username from .env, or makes one up on the first start and keeps it;
 #   3. generates the other secrets once and keeps them in /config/secrets.env;
 #   4. writes slskd's config (/slskd/slskd.yml) from .env and those secrets, sharing the library
 #      unless SHARE_LIBRARY=false;
@@ -25,12 +25,23 @@ done
 # its owner, and nothing inside it is ever re-owned.
 if [ "$(stat -c %u /library)" = 0 ]; then chown "$PUID:$PGID" /library; fi
 
-# 2. Soulseek's rules: 1-30 printable ASCII characters, no space at either end.
-name=${SOULSEEK_USERNAME:-}
+# Generated values live in secrets.env: made once, reused on every later start.
+secrets=/config/secrets.env
+random() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
+stored() { if [ -f "$secrets" ]; then sed -n "s/^$1=//p" "$secrets"; fi; }
+
+# 2. The Soulseek username: SOULSEEK_USERNAME from .env, else the one made up on an earlier start, else
+# a new one, kept in secrets.env so the account stays the same across restarts (.env wins, as for the
+# password). The server's own rules on the name: 1-30 printable ASCII characters, no space at either end.
+generated_name=$(stored SOULSEEK_USERNAME)
+new_name=false
+if [ -z "${SOULSEEK_USERNAME:-}" ] && [ -z "$generated_name" ]; then
+  generated_name="naviseerr-$(random 6)"
+  new_name=true
+fi
+name=${SOULSEEK_USERNAME:-$generated_name}
 problem=
-if [ -z "$name" ]; then
-  problem="SOULSEEK_USERNAME is not set."
-elif [ "$(printf '%s' "$name" | tr -d ' -~' | wc -c)" -ne 0 ]; then
+if [ "$(printf '%s' "$name" | tr -d ' -~' | wc -c)" -ne 0 ]; then
   problem="SOULSEEK_USERNAME has a character Soulseek does not accept (accents, emoji, tabs...)."
 elif [ "${#name}" -gt 30 ]; then
   problem="SOULSEEK_USERNAME is longer than 30 characters."
@@ -44,16 +55,12 @@ if [ -n "$problem" ]; then
 
 naviseerr setup: $problem
 
-Choose a Soulseek username and put it in the .env file next to compose.yaml, for example:
-
-    SOULSEEK_USERNAME=choose-your-own-name
-
-then run \`docker compose up -d\` again.
+Fix SOULSEEK_USERNAME in the .env file next to compose.yaml, or leave it empty and a name is made up
+for you, then run \`docker compose up -d\` again.
 
 - 1 to 30 characters: plain letters, digits and punctuation, no space at the start or end.
 - Pick something unique. The account is created the first time slskd logs in with it; if someone
   else already has the name, slskd's log says "invalid username or password": choose another.
-- It cannot be made up for you: Soulseek's rules forbid automatically generated usernames.
 
 EOF
   exit 1
@@ -70,9 +77,6 @@ case ${SHARE_LIBRARY:-true} in
 esac
 
 # 3. Letters and digits only: slskd has been seen to reject passwords with some punctuation.
-secrets=/config/secrets.env
-random() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
-stored() { if [ -f "$secrets" ]; then sed -n "s/^$1=//p" "$secrets"; fi; }
 soulseek_password=$(stored SOULSEEK_PASSWORD)
 api_key=$(stored SLSKD_API_KEY)
 web_password=$(stored SLSKD_WEB_PASSWORD)
@@ -93,7 +97,9 @@ write() {
 
 write "$secrets" <<EOF
 # Generated once by naviseerr's setup. Deleting this file makes new ones on the next start, and the
-# Soulseek account then no longer logs in (a Soulseek password cannot be reset).
+# Soulseek account then no longer logs in (a Soulseek password cannot be reset). SOULSEEK_USERNAME is
+# the name made up for you; empty when you set your own in .env from the start.
+SOULSEEK_USERNAME=$generated_name
 SOULSEEK_PASSWORD=$soulseek_password
 SLSKD_API_KEY=$api_key
 SLSKD_WEB_PASSWORD=$web_password
@@ -145,15 +151,24 @@ write /config/naviseerr.properties <<EOF
 SLSKD_API_KEY=$api_key
 EOF
 
-if [ "$new_password" = true ] && [ -z "${SOULSEEK_PASSWORD:-}" ]; then
+# The account box: whenever something was made up this run that you must know. The password line
+# only when it was generated (one you set in .env is yours already and stays out of the log).
+if [ "$new_name" = true ] || { [ "$new_password" = true ] && [ -z "${SOULSEEK_PASSWORD:-}" ]; }; then
+  echo
+  echo "Your Soulseek account:"
+  echo "    username: $name"
+  if [ -z "${SOULSEEK_PASSWORD:-}" ]; then echo "    password: $soulseek_password"; fi
   cat <<EOF
-
-Your Soulseek account:
-    username: $name
-    password: $soulseek_password
 Keep this somewhere: Soulseek passwords cannot be reset. It is also stored in naviseerr's config
 volume (secrets.env) and in slskd's config: docker compose exec slskd cat /app/slskd.yml
-
 EOF
+  if [ "$new_name" = true ]; then
+    cat <<EOF
+The username was made up for you. To use a name of your own, set SOULSEEK_USERNAME in .env, run
+\`docker compose up -d\` and then \`docker compose restart slskd\`.
+EOF
+  fi
+  echo
 fi
-echo "naviseerr setup: done."
+# A username is not a secret: every run says which account this install uses.
+echo "naviseerr setup: done. Soulseek username: $name"

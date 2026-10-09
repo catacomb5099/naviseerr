@@ -30,34 +30,32 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    git clone -b move-fast-break-things https://github.com/catacomb5099/naviseerr.git
    cd naviseerr
    ```
-2. Choose a Soulseek username. It is the only setting you must choose; one line makes the settings
-   file:
+2. Optional: choose your settings. Without a `.env` file everything is made up or defaulted, including
+   the Soulseek username (`naviseerr-xxxxxx`) and its password. To pick your own name, make the
+   settings file and fill in `SOULSEEK_USERNAME=` in a text editor:
    ```sh
-   echo SOULSEEK_USERNAME=choose-your-own-name > .env
+   cp .env.example .env
    ```
-   (Windows PowerShell: `>` writes a file Docker cannot read; run `cp .env.example .env` instead and
-   fill in `SOULSEEK_USERNAME=` in a text editor.)
-   The Soulseek account is created the first time naviseerr logs in, so pick a name nobody else is
-   likely to have (1 to 30 characters, no accents or emoji). It cannot be made up for you: Soulseek's
-   rules forbid automatically generated usernames. The password is generated for you.
-   Want the other settings? `cp .env.example .env` instead and fill in `SOULSEEK_USERNAME=` there: every
-   setting is optional and explained in that file, for example `LIBRARY_DIR`, the folder your music goes
-   in (by default `library/`, inside this folder), and `SHARE_LIBRARY`: your music folder is shared on
-   Soulseek unless you set it to `false`. If you change `SHARE_LIBRARY` after the first start, run
-   `docker compose up -d` and then `docker compose restart slskd`: until that restart, slskd keeps
-   sharing what it shared before.
+   A name of your own is friendlier on the network than a generated one. The Soulseek account is
+   created the first time naviseerr logs in, so pick a name nobody else is likely to have (1 to 30
+   characters, no accents or emoji). Every other setting is optional and explained in that file, for
+   example `LIBRARY_DIR`, the folder your music goes in (by default `library/`, inside this folder), and
+   `SHARE_LIBRARY`: your music folder is shared on Soulseek unless you set it to `false`. If you change
+   `SHARE_LIBRARY` after the first start, run `docker compose up -d` and then
+   `docker compose restart slskd`: until that restart, slskd keeps sharing what it shared before.
 3. Start it:
    ```sh
    docker compose up -d
    ```
    The first start builds everything from source and takes several minutes. Later starts take seconds.
    `docker compose ps` shows what is running.
-4. Save your Soulseek password. The first start prints it once:
+4. Save your Soulseek account. The first start prints the username and the password once:
    ```sh
    docker compose logs setup
    ```
-   Later you can read it with `docker compose exec slskd cat /app/slskd.yml` (the `password:` under
-   `soulseek:`). Keep it somewhere safe: **Soulseek passwords cannot be reset.**
+   Later runs print the username only; both are in `docker compose exec slskd cat /app/slskd.yml` (the
+   `username:` and `password:` under `soulseek:`). Keep them somewhere safe: **Soulseek passwords
+   cannot be reset.**
 5. Open the web app at `http://<this computer's address>:5056`, or http://localhost:5056 on the same
    computer. Is it working? `docker compose ps` shows every part running, the web app has no amber
    "Not connected to Soulseek" strip across its top (it stays until the Soulseek login works), and
@@ -90,25 +88,25 @@ the pictures of similar artists, quietly stays off. The server then prints a war
 
 - **Stop:** `docker compose stop`, or `docker compose down`, which also removes the containers. Both
   keep your settings, passwords, download history and music; `docker compose up -d` starts it again.
-- **Remove everything:** `docker compose down -v`. **This deletes your generated Soulseek password
-  for good, and your download history. Soulseek passwords cannot be reset: without a copy, that
-  Soulseek account is lost.** Back up first. Your music folder (`LIBRARY_DIR`) is an ordinary folder
+- **Remove everything:** `docker compose down -v`. **This deletes your generated Soulseek username
+  and password for good, and your download history. Soulseek passwords cannot be reset: without a
+  copy, that Soulseek account is lost.** Back up first. Your music folder (`LIBRARY_DIR`) is an ordinary folder
   and stays; delete it yourself if you want it gone.
 - **Back up** while naviseerr is running or stopped with `docker compose stop` (after
   `docker compose down`, run `docker compose up -d` first: the command below needs its containers):
-  - The generated passwords, the part of naviseerr's config that cannot be made again:
+  - The generated username and passwords, the part of naviseerr's config that cannot be made again:
     ```sh
     docker compose cp setup:/config/secrets.env ./naviseerr-secrets.env
     ```
     Move `naviseerr-secrets.env` somewhere safe. To use the same Soulseek account on a new install,
-    copy its `SOULSEEK_PASSWORD=` line into `.env`.
+    copy its `SOULSEEK_USERNAME=` and `SOULSEEK_PASSWORD=` lines into `.env`.
   - Your music: copy `LIBRARY_DIR` like any other folder, or add it to the backups you already make.
 
 ### Troubleshooting
 
-- **Nothing starts.** If `docker compose up -d` stops at once with "Set SOULSEEK_USERNAME in .env,
-  see README step 2", fill in `SOULSEEK_USERNAME` in `.env` (step 2). Otherwise
-  `docker compose logs setup` says what is wrong.
+- **Nothing starts.** `docker compose logs setup` says what is wrong, for example a
+  `SOULSEEK_USERNAME` in `.env` that breaks Soulseek's rules (leave it empty and a name is made up
+  for you).
 - **"Username taken".** The web app keeps its "Not connected to Soulseek" strip, and
   `docker compose logs slskd` says "invalid username or password": someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,
