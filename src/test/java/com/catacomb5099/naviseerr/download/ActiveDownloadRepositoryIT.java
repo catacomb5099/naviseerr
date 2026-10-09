@@ -170,6 +170,19 @@ class ActiveDownloadRepositoryIT {
     }
 
     @Test
+    void findCurrent_liveOnly_skipsAFinishedRow_findsALiveOne() {
+        // "Download again": the person knows a finished copy exists, so only a live duplicate counts.
+        insertOlderDownload("SUCCEEDED", "ALBUM", "MPREb_1", 30);
+        assertNull(activeDownloadRepository.findCurrent(DownloadType.ALBUM, "MPREb_1", true).block(),
+                "a finished download does not stand in the way of a forced request");
+        assertNotNull(current(DownloadType.ALBUM, "MPREb_1"), "the plain lookup still finds it");
+
+        UUID live = insertDownload(UUID.randomUUID(), "PENDING", "ALBUM", "MPREb_1");
+        assertEquals(live, activeDownloadRepository.findCurrent(DownloadType.ALBUM, "MPREb_1", true).block().downloadId(),
+                "a queued or running duplicate refuses even a forced request");
+    }
+
+    @Test
     void findCurrent_reportsTheAggregatedStage_likeTheFeed() {
         UUID id = insertDownload(UUID.randomUUID(), "PENDING", "SONG", "yt-song");
         admit(id, "song");

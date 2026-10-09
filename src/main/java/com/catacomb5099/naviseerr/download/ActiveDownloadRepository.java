@@ -297,10 +297,18 @@ public class ActiveDownloadRepository {
      * the right answer. See {@link #CURRENT_SQL} for which statuses count.
      */
     public Mono<ActiveDownloadView> findCurrent(DownloadType type, String youtubeId) {
+        return findCurrent(type, youtubeId, false);
+    }
+
+    /**
+     * The same, counting only a queued or running download when {@code liveOnly}: the CURATED rule
+     * applied on demand, for a person who said "download it again" knowing a finished copy exists.
+     */
+    public Mono<ActiveDownloadView> findCurrent(DownloadType type, String youtubeId, boolean liveOnly) {
         return client.sql(CURRENT_SQL)
                 .bind("type", type.name())
                 .bind("id", youtubeId)
-                .bind("statuses", type == DownloadType.CURATED ? CURRENT_LIVE_STATUSES : CURRENT_STATUSES)
+                .bind("statuses", liveOnly || type == DownloadType.CURATED ? CURRENT_LIVE_STATUSES : CURRENT_STATUSES)
                 .map(ActiveDownloadRepository::toView)
                 .one();
     }
