@@ -41,7 +41,7 @@ done
 # Your library: only the folder itself and only while root still owns it: an existing library keeps
 # its owner, and nothing inside it is ever re-owned. A network share may refuse root (root_squash):
 # then the write test below speaks instead of a bare chown error.
-if [ "$(stat -c %u /library)" = 0 ]; then chown "$PUID:$PGID" /library || true; fi
+if [ "$(stat -c %u /library)" = 0 ]; then chown "$PUID:$PGID" /library 2>/dev/null || true; fi
 
 # Can PUID:PGID write into your library? Tested AS that user: root can write where naviseerr and
 # slskd cannot, so a plain test here would lie. busybox has su; the user may not exist in this
