@@ -9,15 +9,22 @@ import java.util.UUID;
  * ({@code GET /downloads/{id}/album-candidates}), each with the file it holds for every song of the
  * album. Read from the album search's remembered folders (V15).
  *
- * @param reason     with {@link PickListStatus#NONE}: {@code NO_WHOLE_FOLDER} (nobody shared enough of the
- *                   album as one folder), {@code BEFORE_CACHE} (searched before lists were kept) or
- *                   {@code NO_ALBUM_SEARCH} (admitted before albums searched as a whole); null otherwise
+ * @param reason     with {@link PickListStatus#NONE}: {@code NO_WHOLE_FOLDER} (the search ran and nobody
+ *                   shared enough of the album as one folder), {@code SEARCH_FAILED} (slskd refused or never
+ *                   answered the album search, so nobody was asked; the songs searched on their own),
+ *                   {@code NOTHING_TO_SEARCH} (every song had already started on its own), {@code CANCELLED}
+ *                   (the download was cancelled while the album search ran), {@code BEFORE_CACHE} (a folder
+ *                   was found, before folder lists were kept) or {@code NO_ALBUM_SEARCH} (admitted before
+ *                   albums searched as a whole); null otherwise. Since 09-10-2026 the outcome is reported as
+ *                   it is, not folded into {@code NO_WHOLE_FOLDER}
  * @param query      the wording the album search used, so the client can show it
- * @param searchedAt when the folders were remembered; null when never
+ * @param searchId   slskd's id for the album search, to find it in slskd's own history; null when slskd
+ *                   never took one
+ * @param searchedAt when the folders were remembered, else when the search ended; null when never
  * @param songCount  how many songs the album has, to read {@code fileCount} against
  */
-public record AlbumCandidatesView(UUID downloadId, PickListStatus status, String reason, String query, Instant searchedAt,
-                                  int songCount, List<Folder> folders) {
+public record AlbumCandidatesView(UUID downloadId, PickListStatus status, String reason, String query, String searchId,
+                                  Instant searchedAt, int songCount, List<Folder> folders) {
 
     /**
      * @param folder       the shared folder's path, verbatim: the pick sends it back unchanged

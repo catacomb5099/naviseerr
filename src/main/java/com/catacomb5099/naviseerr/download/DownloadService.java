@@ -187,7 +187,7 @@ public class DownloadService {
         List<String> wordings = SearchQueryTiers.of(song.songName());
         DownloadCandidate current = song.current();
         return new TaskCandidatesView(song.taskId(), status, reason,
-                wordings.get(Math.clamp(song.searchTier(), 0, wordings.size() - 1)), song.searchedAt(),
+                wordings.get(Math.clamp(song.searchTier(), 0, wordings.size() - 1)), song.searchId(), song.searchedAt(),
                 ActiveDownloadRepository.toSongStage(song.phase()), TaskCandidatesView.Current.of(current),
                 files.stream().map(file -> TaskCandidatesView.Candidate.of(file, current)).toList());
     }
@@ -197,13 +197,39 @@ public class DownloadService {
                 ? PickListStatus.SEARCHING : PickListStatus.NONE;
     }
 
-    /** Why a song past searching has no list; see {@link TaskCandidatesView#reason()}. */
+    /** A search that ended before completing: the row's failure code says so, and no file was ever chosen. */
+    private static final List<String> SEARCH_NEVER_COMPLETED = List.of(
+            DownloadFailureCode.SEARCH_FAILED.name(), DownloadFailureCode.SOULSEEK_OFFLINE.name(),
+            DownloadFailureCode.TIMED_OUT.name(), DownloadFailureCode.CANCELLED.name());
+
+    /** The never-completed codes reported under their own name; the rest read {@code SEARCH_FAILED}. */
+    private static final List<String> OWN_WORD = List.of(
+            DownloadFailureCode.SOULSEEK_OFFLINE.name(), DownloadFailureCode.CANCELLED.name());
+
+    /**
+     * Why a song past searching has no list, from what the row already records; see
+     * {@link TaskCandidatesView#reason()}. A song whose file came from the album search's folder or a
+     * person, with no search id of its own, never searched (a file from its own search with no id is a
+     * pre-V15 row that kept a first wording's files when the next was refused: it did search); a failed
+     * row with no completed search reports the failure code itself ({@code SOULSEEK_OFFLINE} and
+     * {@code CANCELLED} under their own names, so a song cancelled while searching matches the album
+     * view); a stamped row searched and found nothing; anything else searched before lists were kept.
+     */
     private static String reasonOf(DownloadTaskRepository.CachedSearch song) {
         if (statusOf(song) != PickListStatus.NONE) {
             return null;
         }
         if (song.libraryPath() != null && song.slskdFilename() == null) {
             return "ALREADY_IN_LIBRARY";
+        }
+        DownloadCandidate current = song.current();
+        if (song.searchId() == null && current != null && (DownloadCandidate.ALBUM_FOLDER.equals(current.source())
+                || DownloadCandidate.MANUAL.equals(current.source()))) {
+            return "NO_OWN_SEARCH";
+        }
+        if (song.searchedAt() == null && current == null && song.failureReason() != null
+                && SEARCH_NEVER_COMPLETED.contains(song.failureReason())) {
+            return OWN_WORD.contains(song.failureReason()) ? song.failureReason() : "SEARCH_FAILED";
         }
         return song.searchedAt() != null ? "NO_RESULTS" : "BEFORE_CACHE";
     }
@@ -261,11 +287,15 @@ public class DownloadService {
         } else if (!"DONE".equals(album.phase())) {
             status = PickListStatus.SEARCHING;
         } else {
+            // The outcome as it is: a refused search is not "nobody shared enough" (09-10-2026). A folder
+            // found with nothing remembered is a row from before lists were kept.
             status = PickListStatus.NONE;
-            reason = List.of("NO_WHOLE_FOLDER", "NOTHING_TO_SEARCH", "SEARCH_FAILED").contains(album.outcome())
-                    ? "NO_WHOLE_FOLDER" : "BEFORE_CACHE";
+            reason = album.outcome() == null || List.of("WHOLE_FOLDER", "PART_FOLDER").contains(album.outcome())
+                    ? "BEFORE_CACHE" : album.outcome();
         }
-        return new AlbumCandidatesView(downloadId, status, reason, query, album.foldersAt(), songs.size(), folders);
+        Instant searchedAt = album.foldersAt() != null ? album.foldersAt() : album.finishedAt();
+        return new AlbumCandidatesView(downloadId, status, reason, query, album.searchId(), searchedAt, songs.size(),
+                folders);
     }
 
     // ---- manual pick: re-pointing songs at a chosen file ----------------------------------------------

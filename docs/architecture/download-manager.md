@@ -94,7 +94,10 @@ Soulseek offered ([ADR](../decisions/manual-pick-07-10-2026.md)). Three pieces:
 - **The lists** (`DownloadService.candidates` / `albumCandidates`): read whole from the caches, never
   from slskd. A song with no list of its own that got its file from the album search lists the
   remembered folders that hold it. `status` is `READY`, `SEARCHING` (the loop is still searching; the
-  client polls again) or `NONE` with a reason; nothing is searched from the request thread.
+  client polls again) or `NONE` with a reason; nothing is searched from the request thread. Since
+  09-10-2026 the reason is read off the row's own columns (`search_id`, `failure_reason`, the album
+  search's `outcome` and `finished_at`), so an empty list says whether the search was ever made, and
+  both views carry slskd's `searchId` so a person can find the search in slskd's own history.
 - **The pick** (`DownloadService.pick` / `albumPick`, `PICK_SQL`): the song is reset in place to
   `DOWNLOAD_INIT` with the chosen file as its ONLY candidate (grade EXACT, source `MANUAL`), index and
   retries 0, slskd columns and progress cleared, lease cleared, and a `FAILED`/`PARTIAL_SUCCESS` download
