@@ -67,6 +67,25 @@ class AlbumSearchStepTest {
                 "a row left at tier 1 by an older build still searches the title");
     }
 
+    /** Everything the step logs while {@code body} runs, at any level. */
+    private static List<ILoggingEvent> logged(Runnable body) {
+        Logger logger = (Logger) LoggerFactory.getLogger(AlbumSearchStep.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            body.run();
+            return logs.list;
+        } finally {
+            logger.detachAppender(logs);
+        }
+    }
+
+    private static boolean said(List<ILoggingEvent> logs, Level level, String... words) {
+        return logs.stream().anyMatch(e -> e.getLevel() == level
+                && java.util.Arrays.stream(words).allMatch(w -> e.getFormattedMessage().contains(w)));
+    }
+
     private static List<String> wordings(String title, String artist) {
         return album(DownloadPhase.SEARCH_INIT, 0).toBuilder().title(title).artists(List.of(artist)).build().wordings();
     }
@@ -91,30 +110,61 @@ class AlbumSearchStepTest {
         when(slskd.searchResults("Laughing Stock"))
                 .thenReturn(Mono.just(SlskdFixtures.searchState("s1", false, "InProgress")));
 
-        step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0.plusSeconds(5), "me").block();
+        List<ILoggingEvent> logs = logged(() ->
+                step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0.plusSeconds(5), "me").block());
 
         verify(repository).saveAlbumSearch(argThat(a -> a.phase() == DownloadPhase.SEARCH_POLL
                         && "s1".equals(a.searchId()) && a.phaseEnteredAt().equals(T0.plusSeconds(5))),
                 eq("me"), eq(T0.plusSeconds(5)), eq(T0.plusSeconds(5).plus(BUDGET.multipliedBy(2))));
+        assertTrue(said(logs, Level.INFO, "Laughing Stock", "slskd search s1"),
+                () -> "the INFO line names slskd's search, so it can be found in slskd's history: " + logs);
+    }
+
+    @Test
+    void aTitlelessAlbum_logsWhyItWasNotSearched_andReleasesTheSongs() {
+        List<ILoggingEvent> logs = logged(() -> step.step(album(DownloadPhase.SEARCH_INIT, 0).toBuilder()
+                .title(null).build(), Map.of(), T0, "me").block());
+
+        verifyNoInteractions(slskd);
+        verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), T0);
+        assertTrue(said(logs, Level.WARN, "not started", "no title"), () -> "a WARN says why: " + logs);
+        assertTrue(said(logs, Level.INFO, "ended SEARCH_FAILED"), () -> "and the ending is at INFO: " + logs);
+    }
+
+    @Test
+    void slskdAnsweringWithoutASearchId_logsWhy_andReleasesTheSongs() {
+        when(slskd.searchResults(any())).thenReturn(Mono.just(SlskdFixtures.searchState(" ", false, "InProgress")));
+
+        List<ILoggingEvent> logs = logged(() ->
+                step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0, "me").block());
+
+        verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), T0);
+        verify(repository, never()).saveAlbumSearch(any(), any(), any(), any());
+        assertTrue(said(logs, Level.WARN, "not started", "without a search id"), () -> "" + logs);
     }
 
     @Test
     void withEverySongAlreadyStartedOnItsOwn_nothingIsSearched() {
         when(repository.waitingAlbumSongs(any(), any())).thenReturn(Flux.empty());
 
-        step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0, "me").block();
+        List<ILoggingEvent> logs = logged(() ->
+                step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0, "me").block());
 
         verifyNoInteractions(slskd);
         verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.NOTHING_TO_SEARCH, Map.of(), T0);
+        assertTrue(said(logs, Level.INFO, "ended NOTHING_TO_SEARCH"), () -> "an album that never searched says so at INFO: " + logs);
     }
 
     @Test
     void aSearchSlskdWillNotStart_releasesTheSongsToTheirOwnSearches() {
         when(slskd.searchResults(any())).thenReturn(Mono.error(SlskdFixtures.responseFailure(429)));
 
-        step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0, "me").block();
+        List<ILoggingEvent> logs = logged(() ->
+                step.step(album(DownloadPhase.SEARCH_INIT, 0), Map.of(), T0, "me").block());
 
         verify(repository).releaseAlbumSongs(DOWNLOAD, "me", AlbumSearch.Outcome.SEARCH_FAILED, Map.of(), T0);
+        assertTrue(said(logs, Level.WARN, "could not be started"), () -> "" + logs);
+        assertTrue(said(logs, Level.INFO, "ended SEARCH_FAILED"), () -> "" + logs);
     }
 
     @Test
