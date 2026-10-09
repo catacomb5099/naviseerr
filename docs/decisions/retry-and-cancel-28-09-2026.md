@@ -115,7 +115,13 @@ predicted it: it is `RETRY_SQL` with a `task_id` filter.
   the card reports its least advanced song. Existing rule, not a regression.
 - **No library re-check on retry**, as before: a song someone filed in the meantime is searched again.
 
-### Known race, recorded, not closed
+### Known race, recorded 07-10-2026, closed 09-10-2026
+
+Closed on 09-10-2026 with exactly the statement recorded below, `REOPEN_SQL`, run by `concludeDownloads()`
+before `CONCLUDE_SQL` on every pass; it also clears `failure_reason` and `organised_at`, as `RETRY_SQL`'s
+reopen does, so the playlist file is written again once the song lands. Why it mattered for playlists, and
+the rest of the post-processing story: [playlist-post-processing-09-10-2026.md](playlist-post-processing-09-10-2026.md).
+The 07-10 record, as written:
 
 A one-song retry on a live download can commit between the conclusion statement's snapshot (every song
 terminal) and its write. The download then reads failed or partly downloaded while one song is live; the

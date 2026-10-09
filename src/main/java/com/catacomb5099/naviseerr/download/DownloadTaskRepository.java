@@ -314,6 +314,31 @@ public class DownloadTaskRepository {
             """;
 
     /**
+     * The other direction (09-10-2026): a finished download with a song that is live again goes back
+     * to IN_PROGRESS, so CONCLUDE_SQL closes it again once that song settles and the organiser writes
+     * its playlist file again, with the song. RETRY_SQL and PICK_SQL reopen inside the user's own
+     * statement; this is the level-triggered safety net for what they cannot see: a one-song retry
+     * that committed between CONCLUDE_SQL's snapshot and its write (the parent then read finished
+     * with a live song, and the playlist was written short and never again), or any later path that
+     * revives a song without going through them. Clears the same columns as RETRY_SQL's reopened CTE.
+     * Idempotent: a reopened download has a live song, so it stays IN_PROGRESS until that song ends.
+     *
+     * <p>ponytail: one semi-join per pass, from the partial index over live rows (idx_download_tasks_due,
+     * V2) to downloads by primary key; not measured, bounded by the live rows, nothing on a quiet install.
+     */
+    private static final String REOPEN_SQL = """
+            UPDATE downloads d
+               SET status = 'IN_PROGRESS',
+                   finished_at = NULL,
+                   failure_reason = NULL,
+                   organised_at = NULL
+             WHERE d.status IN ('SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED')
+               AND d.download_id IN (SELECT t.download_id
+                                       FROM download_tasks t
+                                      WHERE t.phase NOT IN ('SUCCEEDED', 'FAILED'))
+            """;
+
+    /**
      * Fails a download that has no task rows and never will. Admission is the only place this
      * happens: the metadata call is the one step that can fail before a single task row exists, so
      * it is also the only failure the per-task terminal write cannot record.
@@ -390,10 +415,7 @@ public class DownloadTaskRepository {
      * <p>ponytail: a one-song retry on a LIVE parent can land between CONCLUDE_SQL's snapshot (every
      * song terminal) and its write, leaving a concluded parent with one live song: the song still runs
      * and finishes, but the card keeps its terminal word. Window: one conclude statement every pass.
-     * Upgrade if ever seen: a level-triggered reopen after conclusion, {@code UPDATE downloads SET status =
-     * 'IN_PROGRESS', finished_at = NULL WHERE status IN ('FAILED','PARTIAL_SUCCESS','SUCCEEDED') AND EXISTS
-     * (SELECT 1 FROM download_tasks t WHERE t.download_id = downloads.download_id AND t.phase NOT IN
-     * ('SUCCEEDED','FAILED'))}.
+     * Closed 09-10-2026: REOPEN_SQL, run before CONCLUDE_SQL every pass, is that reopen.
      */
     private static final String RETRY_SQL = """
             WITH reset AS (
@@ -603,12 +625,18 @@ public class DownloadTaskRepository {
              LIMIT :limit
             """;
 
-    /** The filed songs of one download in track order, with what a playlist line shows for each. */
+    /**
+     * The filed songs of one download in track order, with what a playlist line shows for each. Only
+     * SUCCEEDED rows: hardening for any future path that resets a SUCCEEDED row in place while it still
+     * carries its old path (today's retry and pick reset FAILED rows only, which never carry one); such
+     * a song is not listed until it has landed again.
+     */
     private static final String PLAYLIST_ENTRIES_SQL = """
             SELECT t.library_path, s.title, s.artists, s.duration_seconds
               FROM download_tasks t
               LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
              WHERE t.download_id = :id
+               AND t.phase = 'SUCCEEDED'
                AND t.library_path IS NOT NULL
              ORDER BY t.position, t.finished_at
             """;
@@ -984,10 +1012,17 @@ public class DownloadTaskRepository {
                 .rowsUpdated();
     }
 
+    /** Reopens finished downloads with a live song (REOPEN_SQL), then concludes; the count is the concluded ones. */
     public Mono<Long> concludeDownloads() {
-        return client.sql(CONCLUDE_SQL)
+        return client.sql(REOPEN_SQL)
                 .fetch()
                 .rowsUpdated()
+                .doOnNext(reopened -> {
+                    if (reopened > 0) log.info("Reopened {} finished download(s) whose song is live again", reopened);
+                })
+                .then(client.sql(CONCLUDE_SQL)
+                        .fetch()
+                        .rowsUpdated())
                 .doOnError(error -> log.error("Could not conclude finished downloads", error));
     }
 
