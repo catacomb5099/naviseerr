@@ -144,6 +144,41 @@ naviseerr on every `docker compose up`; both wait for it to succeed.
   there when it writes `slskd.yml`.
 - No `global:` or `groups:` keys in `slskd.yml`: slskd 0.25+ refuses to start with them.
 
+### Revisited 09-10-2026: the playlist maker (croissant) is part of the install
+
+Until now the `croissant` service sat behind `profiles: ["curator"]` and needed a `CURATOR_TOKEN`
+the user had to invent and paste into `.env`: the one secret in the install that was not generated,
+because croissant was an optional extra when the install landed. Anyone following the README got a
+downloader and never saw the "Made for you" shelf (naviseerr answers `enabled: false` with no token);
+anyone who set the token but forgot the profile saw "Couldn't load your suggested playlists" for ever.
+
+Now croissant is treated exactly like slskd's API key:
+
+- `setup` generates `CURATOR_TOKEN` (32 letters and digits; croissant wants 16 or more) once into
+  `secrets.env`, hands it to naviseerr as a second line of `/config/naviseerr.properties`, and writes
+  it alone into `/config/curator.token`. Never printed: unlike the Soulseek password it can be
+  regenerated (delete the line, `docker compose up -d`, both sides get the new one).
+- croissant reads `CURATOR_TOKEN_FILE=/config/curator.token` (croissant PR "the curator can read its
+  shared token from a file") from the `config` volume mounted read-only, runs as `PUID:PGID` like
+  naviseerr and slskd so it may read the owner-only file and write its three volumes (which `setup`
+  now re-owns with the others), waits for `setup`, and gets `TZ` (an edition is dated with the day it
+  was made) and an optional `DISCOGS_TOKEN` from `.env`. No `CURATOR_TOKEN` in its environment:
+  croissant refuses to start with both set, so a stale `.env` value can never quietly beat the file.
+- `CURATOR_TOKEN` is gone from naviseerr's environment, for the reason given above for
+  `SLSKD_API_KEY`: an empty environment variable would beat the imported file and switch the shelf
+  off without a word.
+- naviseerr does not `depends_on` croissant: a stopped or crashed croissant must not keep the web app
+  from starting. `CuratorClient` already turns connection refused into a 502 for the shelf
+  ("Couldn't load your suggested playlists" + Try again) and a logged, retried cron trigger.
+- `compose.dev.yaml` is unchanged: developers keep the profile and a hand-set token next to
+  `CURATOR_URL` in the developer block of `.env.example`.
+
+Trade-offs: one more image to build on the first start (about 250 MB on disk), one more process (its
+idle memory is in the README); a down croissant is now a visible message on Home instead of an
+invisible missing shelf, which is honest and `restart: unless-stopped` recovers it. The first editions
+still take a trigger (the shelf's "Make this week's playlists now" button, or Monday 03:00); a first
+run on start is a separate server change.
+
 ### Folders, ownership and one user
 
 Every container that touches music files runs as one user, `PUID:PGID` (default 1000:1000), so

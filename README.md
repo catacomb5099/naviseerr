@@ -7,8 +7,9 @@ This repository is the server. The web app lives in [naviseerr-client](https://g
 This section is for running naviseerr at home, not for working on its code. One command starts
 everything: the naviseerr server, its web app, its own Soulseek client
 ([slskd](https://github.com/slskd/slskd); Soulseek is the file-sharing network naviseerr downloads
-from), a database, and the helper that searches YouTube Music. Every song and playlist you download
-lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
+from), a database, the helper that searches YouTube Music, and the maker of the weekly suggested
+playlists (the "Made for you" shelf on the Home page). Every song and playlist you download lands in
+one music folder, ready for [Navidrome](https://www.navidrome.org/) or
 [Jellyfin](https://jellyfin.org/) to play.
 
 ### What you need
@@ -21,7 +22,8 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
   [add yourself to the `docker` group](https://docs.docker.com/engine/install/linux-postinstall/).
 - `git`, to download this project.
 - About 4 GB of free disk space for naviseerr itself (the first start downloads at least 700 MB), plus
-  room for your music, and about 600 MB of free memory.
+  room for your music, and about 700 MB of free memory (the playlist maker takes about 40 MB of that
+  when idle).
 
 ### Steps
 
@@ -63,7 +65,11 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    computer. Is it working? `docker compose ps` shows every part running, the web app has no amber
    "Not connected to Soulseek" strip across its top (it stays until the Soulseek login works), and
    `docker compose logs slskd` does not keep saying "Failed to reconnect" (slskd cannot reach
-   Soulseek) or "invalid username or password" (see Troubleshooting).
+   Soulseek) or "invalid username or password" (see Troubleshooting). The Home page's "Made for you"
+   shelf is empty at first: press "Make this week's playlists now" there and the playlist maker
+   builds all 49 playlists (about an hour and a half; they appear as each one finishes). After that
+   a new edition is made every Monday at 03:00 (`TZ` in `.env`). It needs the internet (Discogs and
+   YouTube Music); an optional free Discogs token in `.env` (`DISCOGS_TOKEN`) makes the run quicker.
 6. Point your music app at the music folder (`LIBRARY_DIR`). If your music app runs in Docker too, give
    its container the same folder.
    - **Navidrome:** its music folder must be `LIBRARY_DIR` or a folder that contains it. Playlists are
@@ -92,13 +98,19 @@ required. If you never set it, add `LIBRARY_DIR=./library` to `.env` (the folder
 used, inside this one) before `docker compose up`; until then every `docker compose` command,
 `stop` and `logs` included, stops with "required variable LIBRARY_DIR is missing a value".
 
+**Updating from before 09-10-2026, if you started the playlist maker with `--profile curator`:** drop
+the flag, it is part of the plain `docker compose up -d --build` now, and its secret is generated
+for you. The `CURATOR_TOKEN=` line in your `.env` is no longer read by the install; delete it or
+leave it. Your existing playlists stay.
+
 ### Stopping, removing and backing up
 
 - **Stop:** `docker compose stop`, or `docker compose down`, which also removes the containers. Both
   keep your settings, passwords, download history and music; `docker compose up -d` starts it again.
 - **Remove everything:** `docker compose down -v`. **This deletes your generated Soulseek username
   and password for good, and your download history. Soulseek passwords cannot be reset: without a
-  copy, that Soulseek account is lost.** Back up first. Your music folder (`LIBRARY_DIR`) is an ordinary folder
+  copy, that Soulseek account is lost.** It also deletes the suggested playlists (the next run makes
+  new ones). Back up first. Your music folder (`LIBRARY_DIR`) is an ordinary folder
   and stays; delete it yourself if you want it gone.
 - **Back up** while naviseerr is running or stopped with `docker compose stop` (after
   `docker compose down`, run `docker compose up -d` first: the command below needs its containers):
@@ -149,6 +161,13 @@ used, inside this one) before `docker compose up`; until then every `docker comp
 - **Similar artists have no pictures** (grey circles with names on an artist page), and
   `docker compose logs naviseerr` says "similar artists arrived without a picture ... ytmusic-adapter
   is probably out of date". The YouTube Music helper is an old build: run `docker compose up -d --build`.
+- **Suggested playlists missing** ("Couldn't load your suggested playlists" on the Home page, or the
+  shelf stays empty after a run). `docker compose ps` should show `croissant` running and healthy;
+  `docker compose logs croissant` says what its last run did. The playlist maker needs the internet
+  (Discogs and YouTube Music) from this computer. The shelf's "Make this week's playlists now" button
+  runs it again; `docker compose logs naviseerr | grep -i curator` shows what naviseerr saw. "rejected
+  the token (401)" there means the two sides hold different tokens: `docker compose up -d` rewrites
+  both from the one in the config volume.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.
