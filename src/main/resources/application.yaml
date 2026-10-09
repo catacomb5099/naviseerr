@@ -200,12 +200,18 @@ curator:
   cron: ${CURATOR_CRON:0 0 3 * * MON}
   # How often to ask "is the run done yet?" while it works.
   poll-interval-ms: 30000
-  # How long to keep asking before giving up on following the run (30 min). The curator carries on
-  # regardless; this only bounds how long naviseerr watches and logs.
-  run-budget-ms: 1800000
+  # How long to keep asking before giving up on following the run (2 h: 49 categories at about 2 min
+  # each). The curator carries on regardless; this only bounds how long naviseerr watches and logs.
+  run-budget-ms: 7200000
   # Per-request timeout. The curator answers instantly; anything slower than this is a network problem.
   timeout-ms: 15000
   # The trigger is retried on a timeout, a connection refused or a 5xx -- never on a 4xx (a wrong
   # token, an unknown category). Retrying is safe: the curator ignores a second trigger while one runs.
   trigger-retry-count: 3
   trigger-first-back-off-ms: 10000
+  # A fresh install has no suggested playlists and would wait for the first Monday 03:00. When on,
+  # naviseerr checks two minutes after start and, if the curator holds no editions at all, runs one
+  # refresh right away. Off here on purpose: compose.yaml passes CURATOR_FIRST_RUN_ON_START=true to
+  # the Docker install, while a jar started by hand (IntelliJ, `./gradlew test` with a dev .env that
+  # holds a CURATOR_TOKEN) must never start a 90-minute Discogs/YouTube run on its own. Empty = off.
+  first-run-on-start: ${CURATOR_FIRST_RUN_ON_START:false}

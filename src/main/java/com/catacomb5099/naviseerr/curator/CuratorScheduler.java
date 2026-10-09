@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.curator;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -10,6 +11,7 @@ import reactor.core.publisher.Mono;
 import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,6 +26,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>OFF unless {@code curator.url} and {@code curator.token} are both set -- the same
  * "off unless configured" rule as the library organiser.
+ *
+ * <p>A fresh install has no editions and would otherwise wait for the first Monday 03:00: when
+ * {@code curator.first-run-on-start} is on, {@link #onStart()} asks the curator for its editions two
+ * minutes after boot and runs one refresh if there are none at all. compose.yaml turns it on for the
+ * Docker install; the jar's own default is off, so an IntelliJ start or the test suite (both read the
+ * dev .env, which may hold a CURATOR_TOKEN) never calls a curator on their own.
  */
 @Slf4j
 @Component
@@ -37,19 +45,25 @@ public class CuratorScheduler {
     private final Duration pollInterval;
     private final Duration runBudget;
     private final boolean enabled;
+    private final boolean firstRunOnStart;
     private final DayOfWeek refreshDay;
     private final AtomicBoolean running = new AtomicBoolean();
+    /** Package-private so the test can shorten it; two minutes lets croissant come up after `compose up`. */
+    Duration firstRunGrace = Duration.ofMinutes(2);
 
     public CuratorScheduler(CuratorClient client,
                             @Value("${curator.url:}") String url,
                             @Value("${curator.token:}") String token,
                             @Value("${curator.cron:}") String cron,
                             @Value("${curator.poll-interval-ms}") Duration pollInterval,
-                            @Value("${curator.run-budget-ms}") Duration runBudget) {
+                            @Value("${curator.run-budget-ms}") Duration runBudget,
+                            @Value("${curator.first-run-on-start:false}") Boolean firstRunOnStart) {
         this.client = client;
         this.pollInterval = pollInterval;
         this.runBudget = runBudget;
         this.enabled = !url.isBlank() && !token.isBlank();
+        // Boxed: an empty CURATOR_FIRST_RUN_ON_START= line in a copied .env.example is null, not a start-up crash.
+        this.firstRunOnStart = Boolean.TRUE.equals(firstRunOnStart);
         this.refreshDay = refreshDay(cron);
         if (!enabled) {
             log.info("Weekly curator refresh OFF: suggested playlists are not refreshed. Set CURATOR_URL "
@@ -59,6 +73,10 @@ public class CuratorScheduler {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    public boolean isFirstRunOnStart() {
+        return firstRunOnStart;
     }
 
     /**
@@ -81,6 +99,32 @@ public class CuratorScheduler {
             return n == 0 || n == 7 ? DayOfWeek.SUNDAY : DayOfWeek.of(n);
         }
         return CRON_DAYS.get(day);
+    }
+
+    /** On boot: one refresh when the curator holds no editions at all, so a new install does not wait for Monday. */
+    @PostConstruct
+    void onStart() {
+        if (enabled && firstRunOnStart) {
+            firstRun().subscribe();
+        }
+    }
+
+    /**
+     * Wait the grace period, list the curator's editions, and refresh only when the list is empty (same
+     * trigger, polling and log lines as a cron tick). An error while asking is one WARN line, not a run:
+     * a 90-minute job must not start on a guess, and the weekly cron still stands.
+     */
+    Mono<Void> firstRun() {
+        return Mono.delay(firstRunGrace)
+                .then(Mono.defer(client::getEditions))
+                .filter(List::isEmpty)
+                .doOnNext(none -> log.info("No suggested playlists yet: asking the curator for a first edition"))
+                .flatMap(none -> refresh())
+                .onErrorResume(error -> {
+                    log.warn("Could not check for suggested playlists at start; the weekly refresh still stands: {}",
+                            error.getMessage());
+                    return Mono.empty();
+                });
     }
 
     /** The cron entry point. Never throws: refresh() swallows its own errors into a log line. */

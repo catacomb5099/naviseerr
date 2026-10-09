@@ -129,6 +129,9 @@ services:
       SPRING_CONFIG_IMPORT: optional:file:/config/naviseerr.properties
       CURATOR_URL: http://croissant:8010
       CURATOR_TOKEN: ${CURATOR_TOKEN:-}
+      # A fresh install asks for its first suggested playlists two minutes after start. The jar's own
+      # default is off (a developer's start must not do that); this line turns it on for the install.
+      CURATOR_FIRST_RUN_ON_START: ${CURATOR_FIRST_RUN_ON_START:-true}
       # Download logs at the normal level here; application.yaml's DEBUG (every 2-second pass) is for
       # developers. LOG_LEVEL=DEBUG in .env brings that detail back.
       LOGGING_LEVEL_COM_CATACOMB5099_NAVISEERR_DOWNLOAD: ${LOG_LEVEL:-INFO}
