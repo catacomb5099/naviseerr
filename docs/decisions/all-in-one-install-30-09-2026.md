@@ -31,6 +31,8 @@ import it.
 
 ### The user picks the Soulseek username; everything else is generated
 
+(Reversed 09-10-2026: the username is made up unless you set one. See the addendum below.)
+
 Soulseek's rules forbid randomly generated usernames (automated scripting). So `SOULSEEK_USERNAME` is
 the only required setting. It is checked against Soulseek's rules (1 to 30 printable ASCII
 characters, no space at either end) before anything starts, and a friendly message explains the rule
@@ -39,6 +41,46 @@ when it is missing. Logging in with an unused name creates the account; there is
 Generated once: the Soulseek password (24 letters and digits: slskd has rejected passwords with some
 punctuation), slskd's API key (32) and slskd's web password (24, replacing the default slskd/slskd).
 `SOULSEEK_PASSWORD` in `.env` brings an existing account and wins over the generated one.
+
+### Revisited 09-10-2026: the username is made up unless you set one
+
+The owner asked for the username to be randomised at setup. The install now needs no `.env` at all:
+when `SOULSEEK_USERNAME` is empty, `setup.sh` makes up `naviseerr-` plus six letters and digits on
+the first start, keeps it in `secrets.env` next to the password, and reuses it on every later start.
+A name set in `.env` wins and the made-up one stays stored, the same rule as the password. Every
+setup run prints the username in use (a username is not a secret); the password is still printed
+once. The `:?` guard in `compose.yaml` went with it, and so did the README's PowerShell `>` caveat.
+
+What the rules actually say, checked on 09-10-2026. The official Soulseek rules page
+(http://www.slsknet.org/news/node/681) says nothing about usernames. Its one sentence on automation
+is: "Spammers, automated clients (robot/bot), combinations of such, or scripts otherwise failing to
+implement the full range of Soulseek® features are not allowed to connect to the Soulseek®
+service." It also says access "may be revoked at any time, for any reason" and that administrators
+"can kill any connections without prior notice for any reason". The sentence the 30-09 decision
+rested on is Nicotine+'s protocol document, not the rules: "It is unacceptable to use randomly
+generated usernames, as such automated scripting is disallowed by the official server rules." That
+is the Nicotine+ authors' reading of the automation rule.
+
+The risk, plainly: the rule is about automated clients, and naviseerr's install is already a headless
+client (slskd, driven by naviseerr, no chat or wishlist use), so its standing under that rule does not
+change with the name. A generated name does remove the "a human chose this" signal, and a shared
+`naviseerr-` prefix across installs is a one-grep target if an admin ever decides the project is
+unwelcome; admins may cut any connection for any reason, and nothing makes an account unbannable.
+Mitigations: the README and `.env.example` still nudge people to choose their own name, and the prefix
+is one line in `setup.sh` (`generated_name="naviseerr-$(random 6)"`; a neutral `$(random 10)` hides
+that it is an automated client, which some will read as safer and others as less honest). A taken
+generated name (62^6 names, so about one chance in 57 billion) looks exactly like a taken hand-picked
+one: slskd logs "invalid username or password" and the fix is a name of your own in `.env`.
+`docker compose down -v` now deletes the generated username as well as the password; the README's
+backup section covers both. Installs made before this change have `SOULSEEK_USERNAME` in `.env` and
+behave exactly as before.
+
+Checked: `docker/setup-check.sh` runs `setup.sh` in `alpine:3.20` four times (a name is made up and
+printed; the same name on the second run; `.env` wins while the made-up name stays stored; a 31
+character `.env` name still stops setup), and the sealed e2e stack came up with a made-up name, slskd
+reading it from `slskd.yml`. The first real login that registers such a name on the network, and
+whether Soulseek's administrators react to the prefix, cannot be checked from the machine this was
+built on (its network blocks Soulseek, and a login would create a real account).
 
 ### A secrets file, and slskd's config rewritten on every start
 
@@ -167,8 +209,11 @@ network this was built on forbids it, and it would have registered an account.
 
 ## Evidence
 
-- Soulseek rules against generated usernames; username rules; passwords cannot be reset:
+- Nicotine+'s reading that generated usernames are unacceptable; the server's username checks;
+  passwords cannot be reset:
   https://github.com/nicotine-plus/nicotine-plus/blob/c33032b8f18f80e0d9f5e93d01d452f47726a71f/doc/SLSKPROTOCOL.md
+- The official Soulseek rules (automation sentence; nothing about usernames; access revocable at
+  any time): http://www.slsknet.org/news/node/681 (the https address answers 403 to scripts)
 - slskd `user:` vs `PUID`/`PGID`, default health check (60 minute start period):
   https://github.com/slskd/slskd/blob/0.26.0/Dockerfile, https://github.com/slskd/slskd/blob/0.26.0/docs/docker.md
 - slskd config precedence, hot reload, custom download folders must exist, shares and cache retention:

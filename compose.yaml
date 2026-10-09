@@ -1,7 +1,7 @@
 # The all-in-one install: everything naviseerr needs, its own slskd included, in one
-# `docker compose up -d`. Settings come from .env next to this file (copy .env.example;
-# SOULSEEK_USERNAME is the only one you must fill in). Developers running the server from an IDE use
-# compose.dev.yaml instead.
+# `docker compose up -d`. Settings come from .env next to this file (copy .env.example); none is
+# required: a Soulseek username is made up on the first start unless you set one. Developers running
+# the server from an IDE use compose.dev.yaml instead.
 #
 # No container_name anywhere and no fixed volume names: everything is scoped to the project name
 # below (the developer stack in compose.dev.yaml is `naviseerr`), so this stack never touches the
@@ -36,9 +36,9 @@ services:
       YTM_TIMEOUT_SECONDS: ${YTM_TIMEOUT_SECONDS:-10}
 
   # Runs once on every `docker compose up`, as root, then exits: gives the folders below to PUID:PGID,
-  # checks SOULSEEK_USERNAME, generates the passwords and slskd's API key once, and writes slskd's
-  # config. slskd and naviseerr wait for it to succeed; if it fails, `docker compose logs setup` says
-  # why. See docker/setup.sh.
+  # checks or makes up the Soulseek username, generates the passwords and slskd's API key once, and
+  # writes slskd's config. slskd and naviseerr wait for it to succeed; if it fails,
+  # `docker compose logs setup` says why. See docker/setup.sh.
   setup:
     image: alpine:3.20
     restart: "no"
@@ -46,9 +46,9 @@ services:
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
-      # No name in .env: `up`, `build` and `config` stop at once with this sentence, before the long
-      # first build (stop, down, logs and ps still work). setup.sh checks the rest (length, characters).
-      SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:?Set SOULSEEK_USERNAME in .env, see README step 2}
+      # Empty: setup.sh makes a name up on the first start and keeps it in the config volume (see
+      # docker/setup.sh). A name you set here wins, after setup.sh checks it (length, characters).
+      SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
       SOULSEEK_PASSWORD: ${SOULSEEK_PASSWORD:-}
       SHARE_LIBRARY: ${SHARE_LIBRARY:-true}
     volumes:
