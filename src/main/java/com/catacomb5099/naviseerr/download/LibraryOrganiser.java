@@ -226,6 +226,21 @@ public class LibraryOrganiser {
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
+    /**
+     * True when any of these filed paths is no longer a regular file inside the library, so the
+     * song can be asked for again. False with the organiser off: there is no library to look in, so
+     * nothing is known to be missing.
+     */
+    // ponytail: one stat per filed song of one download, on a user click; anyMatch stops at the first
+    // missing file. A library scan would be the upgrade if a network-mounted library makes this slow.
+    public Mono<Boolean> anyMissing(List<String> libraryPaths) {
+        if (!enabled || libraryPaths.isEmpty()) {
+            return Mono.just(false);
+        }
+        return Mono.fromCallable(() -> libraryPaths.stream().anyMatch(path -> !inLibrary(path)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
     // ---- blocking I/O ----------------------------------------------------------------------------
 
     Path writePlaylistBlocking(String title, List<Entry> entries) throws IOException {

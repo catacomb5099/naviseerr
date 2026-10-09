@@ -252,6 +252,27 @@ class LibraryOrganiserTest {
     }
 
     @Test
+    void anyMissing_isTrueWhenAnyFiledFileIsGone_falseWhenAllAreThere_andFalseForAnEmptyList() throws IOException {
+        Path kept = put(root.resolve("A/B"), "kept.flac");
+        Path alsoKept = put(root.resolve("A/B"), "also kept.flac");
+        Path outside = put(tmp.resolve("elsewhere"), "outside.flac");
+
+        assertFalse(organiser.anyMissing(List.of(kept.toString(), alsoKept.toString())).block(), "every file is there");
+        assertTrue(organiser.anyMissing(List.of(kept.toString(), root.resolve("A/B/deleted.flac").toString())).block(),
+                "one deleted file is enough: that song can be asked for again");
+        assertTrue(organiser.anyMissing(List.of(outside.toString())).block(), "a file outside the library does not count as there");
+        assertFalse(organiser.anyMissing(List.of()).block(), "nothing filed, nothing missing");
+    }
+
+    @Test
+    void anyMissing_isFalseWithTheOrganiserOff() {
+        LibraryOrganiser off = new LibraryOrganiser("", "", root.toString(), LOOP, TAGGER);
+
+        assertFalse(off.anyMissing(List.of(root.resolve("A/B/deleted.flac").toString())).block(),
+                "no library to look in: nothing is known to be missing, so the 409 stands");
+    }
+
+    @Test
     void anAlbumDownloadsTrack_staysInTheAlbumTheUserAskedFor_evenWithASongAlbumOnTheJob() throws IOException {
         put(downloads.resolve("c"), "01 - Rock n Roll Star.flac");
         LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,

@@ -80,6 +80,23 @@ public class DownloadService {
     }
 
     /**
+     * Whether any of a finished download's filed files has since gone from the library, so
+     * {@link DownloadController} lets a new request through instead of answering 409. Admission
+     * then fetches only the missing songs ({@link DownloadTaskRunner} and {@code stillFiled}). False
+     * with the organiser off -- there is no disk to look at, so a finished download keeps refusing --
+     * and a song that was never filed (no {@code library_path}) counts as present for the same reason.
+     */
+    public Mono<Boolean> filesMissing(UUID downloadId) {
+        if (!organiser.isEnabled()) {
+            return Mono.just(false);
+        }
+        return repository.playlistEntries(downloadId)
+                .map(LibraryOrganiser.Entry::libraryPath)
+                .collectList()
+                .flatMap(organiser::anyMissing);
+    }
+
+    /**
      * Marks one song's task row terminal. Idempotent, and owner-checked: a call for an
      * already-terminal task, or from a caller that does not hold the row's lease, updates nothing
      * and returns 0. The download's own status follows from
