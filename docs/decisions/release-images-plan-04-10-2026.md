@@ -220,7 +220,6 @@ build stage would make it build once instead of once per processor, since its ou
 +    image: ghcr.io/catacomb5099/naviseerr-client:${NAVISEERR_VERSION:-0.1.0}
 @@
    croissant:
-     profiles: ["curator"]
 -    build: https://github.com/catacomb5099/croissant.git#main
 +    image: ghcr.io/catacomb5099/croissant:${NAVISEERR_VERSION:-0.1.0}
 ```

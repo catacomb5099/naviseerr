@@ -4,10 +4,12 @@
 #   1. gives the shared folders to PUID:PGID, the one user slskd and naviseerr both run as, and checks
 #      that user can write into your library and that the library is still the one it saw last time;
 #   2. takes the Soulseek username from .env, or makes one up on the first start and keeps it;
-#   3. generates the other secrets once and keeps them in /config/secrets.env;
+#   3. generates the other secrets once (slskd's API key, the playlist maker's token...) and keeps
+#      them in /config/secrets.env;
 #   4. writes slskd's config (/slskd/slskd.yml) from .env and those secrets, sharing the library
 #      unless SHARE_LIBRARY=false;
-#   5. hands naviseerr slskd's API key (/config/naviseerr.properties).
+#   5. hands naviseerr slskd's API key and the playlist maker's token (/config/naviseerr.properties),
+#      and the playlist maker (croissant) its token (/config/curator.token).
 set -eu
 
 PUID=${PUID:-1000}
@@ -35,7 +37,7 @@ esac
 # (not root) could not write into it.
 # naviseerr's own volumes: re-owned with everything in them whenever they are not PUID:PGID's, so a
 # changed PUID/PGID in .env takes effect (slskd will not start in a folder it cannot write).
-for d in /config /slskd /downloads /incomplete; do
+for d in /config /slskd /downloads /incomplete /curator/output /curator/history /curator/runs; do
   if [ "$(stat -c %u:%g "$d")" != "$PUID:$PGID" ]; then chown -R "$PUID:$PGID" "$d"; fi
 done
 # Your library: only the folder itself and only while root still owns it: an existing library keeps
@@ -128,10 +130,13 @@ esac
 soulseek_password=$(stored SOULSEEK_PASSWORD)
 api_key=$(stored SLSKD_API_KEY)
 web_password=$(stored SLSKD_WEB_PASSWORD)
+# The secret naviseerr and the playlist maker (croissant) share; croissant wants 16 characters or more.
+curator_token=$(stored CURATOR_TOKEN)
 new_password=false
 if [ -z "$soulseek_password" ]; then soulseek_password=$(random 24); new_password=true; fi
 if [ -z "$api_key" ]; then api_key=$(random 32); fi
 if [ -z "$web_password" ]; then web_password=$(random 24); fi
+if [ -z "$curator_token" ]; then curator_token=$(random 32); fi
 
 # Written to a temporary name first, so an interrupted run never leaves half a file behind. slskd can
 # write into /slskd, so nothing already there is trusted: a leftover .tmp is deleted, the new one is
@@ -151,6 +156,7 @@ SOULSEEK_USERNAME=$generated_name
 SOULSEEK_PASSWORD=$soulseek_password
 SLSKD_API_KEY=$api_key
 SLSKD_WEB_PASSWORD=$web_password
+CURATOR_TOKEN=$curator_token
 EOF
 
 # Bringing an existing account: SOULSEEK_PASSWORD in .env wins; the generated one stays stored.
@@ -198,7 +204,10 @@ EOF
 # 5. Read by naviseerr through SPRING_CONFIG_IMPORT.
 write /config/naviseerr.properties <<EOF
 SLSKD_API_KEY=$api_key
+CURATOR_TOKEN=$curator_token
 EOF
+# The same token for croissant (CURATOR_TOKEN_FILE in compose.yaml), which reads the one line.
+printf '%s\n' "$curator_token" | write /config/curator.token
 # Where the library was on this good start (see the marker check above).
 printf '%s\n' "$LIBRARY_DIR" | write "$record"
 

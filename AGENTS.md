@@ -222,7 +222,9 @@ The current authoritative design lives in `docs/superpowers/specs/2026-08-13-dur
 `com.catacomb5099.naviseerr.curator` is the only cron job in the project. Once a week it triggers the
 separate croissant service (`POST /v1/runs`; repo catacomb5099/croissant), polls the run until it finishes or a 2-hour budget
 runs out, and logs the outcome per category. It is off unless `CURATOR_URL` and `CURATOR_TOKEN` are both
-set and touches no table. On boot, when the curator holds no editions at all, it runs one refresh two minutes
+set and touches no table (the all-in-one install sets both: `compose.yaml` passes the URL and `docker/setup.sh`
+generates the token into `/config/naviseerr.properties`, with the same value in `/config/curator.token` for
+croissant; nothing to put in `.env`). On boot, when the curator holds no editions at all, it runs one refresh two minutes
 after start (`curator.first-run-on-start`, env `CURATOR_FIRST_RUN_ON_START`: compose.yaml passes `true` to the
 Docker install; the jar's own default is `false`, so an IntelliJ start or `./gradlew test` with a dev `.env` never
 calls a curator), so a fresh install does not wait for Monday. The outbound client (`CuratorClient`) follows the `YtMusicService` pattern
