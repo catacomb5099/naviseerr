@@ -10,7 +10,7 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - `src/main/resources/` - [application.yaml](../../src/main/resources/application.yaml) (config) and `db/migration/` (Flyway-versioned DB schema, applied at boot over a blocking JDBC connection used only for that; see [persistence.md](persistence.md)).
 - `src/test/java/com/catacomb5099/naviseerr/` - tests (see [testing.md](testing.md)).
 - [build.gradle](../../build.gradle) - Gradle build (Java 21, Spring Boot 4, R2DBC, fuzzywuzzy, Lombok, Testcontainers).
-- [compose.dev.yaml](../../compose.dev.yaml) - Postgres 16 and the adapter for development. [compose.yaml](../../compose.yaml) is the all-in-one install (the server itself in Docker, from the [Dockerfile](../../Dockerfile), plus slskd, the web app and [docker/setup.sh](../../docker/setup.sh)); see [the ADR](../decisions/all-in-one-install-30-09-2026.md).
+- [compose.dev.yaml](../../compose.dev.yaml) - Postgres 16 and the adapter for development. [compose.yaml](../../compose.yaml) is the all-in-one install (the server itself in Docker, from the [Dockerfile](../../Dockerfile), plus slskd, the web app, the playlist maker (croissant) and [docker/setup.sh](../../docker/setup.sh); `LIBRARY_DIR` in `.env` is required); see [the ADR](../decisions/all-in-one-install-30-09-2026.md).
 - `docs/` - `architecture/` (this folder), `decisions/` (ADRs), `conversations/` (session logs).
 
 ## Package map (`com.catacomb5099.naviseerr`)

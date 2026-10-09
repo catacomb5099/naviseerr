@@ -8,18 +8,19 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 S=$(mktemp -d)
-mkdir -p "$S/config" "$S/slskd" "$S/downloads" "$S/incomplete" "$S/library"
+mkdir -p "$S/config" "$S/slskd" "$S/downloads" "$S/incomplete" "$S/library" "$S/curator/output" "$S/curator/history" "$S/curator/runs"
 run() {
   docker run --rm -e PUID=1000 -e PGID=1000 "$@" -v "$here/setup.sh:/setup.sh:ro" -v "$S/config:/config" \
     -v "$S/slskd:/slskd" -v "$S/downloads:/downloads" -v "$S/incomplete:/incomplete" -v "$S/library:/library" \
-    alpine:3.20 sh /setup.sh 2>&1
+    -v "$S/curator:/curator" alpine:3.20 sh /setup.sh 2>&1
 }
 # setup writes its files as root, mode 600, owned by PUID: read them through a container, not the host.
 peek() { docker run --rm -v "$S/config:/config:ro" -v "$S/slskd:/slskd:ro" alpine:3.20 sed -n "$@"; }
 check() { if [ "$1" = "$2" ]; then echo "ok   $3"; else echo "FAIL $3: got '$1', wanted '$2'" >&2; exit 1; fi; }
 username() { printf '%s\n' "$1" | sed -n 's/^naviseerr setup: done. Soulseek username: //p'; }
 
-out=$(run)
+# A failing first run is the harness (a folder setup.sh expects is not mounted here), so say so.
+out=$(run) || { printf '%s\nFAIL the first setup run itself failed\n' "$out" >&2; exit 1; }
 name=$(username "$out")
 check "$(printf '%s' "$name" | grep -cE '^naviseerr-[A-Za-z0-9]{6}$')" 1 "first run makes up naviseerr-xxxxxx ($name)"
 check "$(printf '%s\n' "$out" | grep -c 'The username was made up for you')" 1 "first run prints the account box"
@@ -46,7 +47,7 @@ docker run --rm -v "$S:/s" alpine:3.20 find /s -mindepth 1 -delete && rmdir "$S"
 inside() {
   script=$1; shift
   docker run --rm -e PUID=1000 -e PGID=1000 -e LIBRARY_DIR=/srv/music "$@" -v "$here/setup.sh:/setup.sh:ro" \
-    alpine:3.20 sh -c "mkdir -p /config /slskd /downloads /incomplete /library; $script" 2>&1
+    alpine:3.20 sh -c "mkdir -p /config /slskd /downloads /incomplete /library /curator/output /curator/history /curator/runs; $script" 2>&1
 }
 rc=0; out=$(inside 'chown 1001:1001 /library; chmod 755 /library; sh /setup.sh') || rc=$?
 check "$rc" 1 "a library folder user 1000:1000 cannot write stops setup"
