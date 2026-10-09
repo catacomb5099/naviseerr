@@ -76,7 +76,10 @@ Three gaps, none of them a missing step:
    `REOPEN_SQL`; the retry and pick statements keep reopening on their own and the race stays open.
 2. **A rewritten playlist lists every filed song, even one whose file was moved or deleted since.**
    Navidrome and Jellyfin skip such lines. Flip: a file-exists check in
-   `LibraryOrganiser.writePlaylistBlocking` (three lines, one unit test).
+   `LibraryOrganiser.writePlaylistBlocking` (three lines, one unit test). Fetching the missing files again
+   ([no-duplicate-downloads-07-10-2026.md](no-duplicate-downloads-07-10-2026.md), 09-10-2026 addendum) is a
+   new download row, not a reset of this one; its own playlist file has the same title and replaces this
+   one when it is written.
 3. **Tags are written once, at filing; a late album answer is never applied.**
 4. **A succeeded song whose file has not appeared within 10 minutes is left out for good**
    (`LibraryOrganiser.GIVE_UP_AFTER`).

@@ -47,7 +47,7 @@ echo "slskd: $(jq -r .state <<<"$state"); GET /status: $(jq -c .soulseek <<<"$st
 say "3. stage a partly downloaded 4-song playlist: 3 done (files into slskd's downloads volume), 1 failed (rows into the database)"
 song() { ffmpeg -v error -y -f lavfi -i "sine=frequency=$((400 + $1 * 100)):duration=2" \
   -metadata title="$3" -metadata artist="$2" -metadata track="$1" -b:a 128k \
-  "${STAGE:-$WORK/stage/E2E Folder}/0$1 - $2 - $3.mp3"; }
+  "${4:-$WORK/stage/E2E Folder}/0$1 - $2 - $3.mp3"; }   # $4: another folder to stage into
 song 1 'Alpha Artist' 'Alpha Song'; song 2 'Beta Band' 'Beta Tune'; song 3 'Gamma Group' 'Gamma Track'
 # As PUID:PGID: `docker cp` would leave them root's and the tagger could not write them.
 docker run --rm -v "${P}_downloads:/downloads" -v "$WORK/stage:/stage:ro" alpine:3.20 \
@@ -78,7 +78,7 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://localhost:$PORT/a
 echo "retry: 202; download IN_PROGRESS, organised_at cleared; song 4 SEARCH_INIT"
 # Soulseek is sealed off, so the loop holds the song's clocks and never claims it. The landing is the one thing a
 # sealed network cannot do: the file goes where slskd would put it and the row is finished the way the loop finishes one.
-mkdir -p "$WORK/stage2/E2E Folder 2"; STAGE="$WORK/stage2/E2E Folder 2" song 4 'Delta Duo' 'Delta Dance'
+mkdir -p "$WORK/stage2/E2E Folder 2"; song 4 'Delta Duo' 'Delta Dance' "$WORK/stage2/E2E Folder 2"
 docker run --rm -v "${P}_downloads:/downloads" -v "$WORK/stage2:/stage:ro" alpine:3.20 \
   sh -c "cp -r /stage/. /downloads/ && chown -R $PUID:$PGID /downloads"
 psql_ -c "UPDATE download_tasks SET phase = 'SUCCEEDED', phase_entered_at = now(), finished_at = now(), progress_percent = 100,
