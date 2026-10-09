@@ -1058,6 +1058,22 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
+    void playlistEntries_listsOnlySucceededSongs() {
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        UUID filed = succeededSong(playlist, "s1", "x\\a.flac", NOW);
+        UUID fetchedAgain = succeededSong(playlist, "s2", "x\\b.flac", NOW);
+        repository.setLibraryPath(filed, "/music/A/a/a.flac").block();
+        repository.setLibraryPath(fetchedAgain, "/music/B/b/b.flac").block();
+        // Reset in place with its old path still on the row (its file went missing and is fetched again).
+        template.getDatabaseClient().sql("UPDATE download_tasks SET phase = 'SEARCH_INIT' WHERE task_id = :id")
+                .bind("id", fetchedAgain).fetch().rowsUpdated().block();
+
+        List<String> paths = repository.playlistEntries(playlist).map(LibraryOrganiser.Entry::libraryPath).collectList().block();
+
+        assertEquals(List.of("/music/A/a/a.flac"), paths, "a song being fetched again is not listed until it lands");
+    }
+
+    @Test
     void conclude_succeedsADownloadWhoseOnlySongSucceeded() {
         UUID id = admitOneSong("PENDING");
         finish(template, downloadService, taskIdOf(id), DownloadStatus.SUCCEEDED, null, NOW);
@@ -1131,6 +1147,54 @@ class DownloadTaskRepositoryIT {
         assertEquals(2L, repository.concludeDownloads().block());
         assertEquals("SUCCEEDED", statusOf(album));
         assertEquals("FAILED", statusOf(song));
+    }
+
+    // ---- reopen a finished download whose song is live again (09-10-2026) -----------------------
+
+    @Test
+    void concludeDownloads_reopensAFinishedDownloadWhoseSongIsLiveAgain_andClearsItsPlaylistStamp() {
+        UUID id = insertDownload("PENDING", "PLAYLIST");
+        admit(id, "1 ok", "2 ok");
+        List<UUID> tasks = taskIdsOf(id);
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, tasks.get(1), DownloadStatus.SUCCEEDED, null, NOW);
+        repository.concludeDownloads().block();
+        repository.setLibraryPath(tasks.get(0), "/music/A/a/a.flac").block();
+        repository.setOrganisedAt(id, NOW).block();
+        assertEquals("SUCCEEDED", statusOf(id));
+        // What the race leaves behind: a song live again under a parent nobody reopened.
+        template.getDatabaseClient().sql("UPDATE download_tasks SET phase = 'SEARCH_INIT', finished_at = NULL WHERE task_id = :id")
+                .bind("id", tasks.get(1)).fetch().rowsUpdated().block();
+
+        assertEquals(0L, repository.concludeDownloads().block(), "nothing concluded: the reopened download has a live song");
+
+        assertEquals("IN_PROGRESS", statusOf(id));
+        assertNull(organisedAtOf(id), "the playlist file is written again once the song lands");
+        assertNull(template.getDatabaseClient().sql("SELECT finished_at FROM downloads WHERE download_id = :id").bind("id", id)
+                .map((row, meta) -> Optional.ofNullable(row.get("finished_at", Instant.class))).one().block().orElse(null));
+        assertEquals(List.of(), toFinalise(), "a running download is not finalised");
+
+        finish(template, downloadService, tasks.get(1), DownloadStatus.SUCCEEDED, null, NOW.plusSeconds(60));
+        assertEquals(1L, repository.concludeDownloads().block());
+        assertEquals("SUCCEEDED", statusOf(id));
+        repository.setLibraryPath(tasks.get(1), "/music/B/b/b.flac").block();
+        assertEquals(List.of(id), toFinalise(), "finished again, unstamped: the playlist is rewritten");
+    }
+
+    @Test
+    void concludeDownloads_leavesAFinishedDownloadWithNoLiveSongAlone() {
+        UUID stamped = admitOneSong("PENDING");
+        finish(template, downloadService, taskIdOf(stamped), DownloadStatus.SUCCEEDED, null, NOW);
+        repository.concludeDownloads().block();
+        repository.setOrganisedAt(stamped, NOW).block();
+        UUID unadmitted = insertDownload("PENDING");
+        repository.failUnadmitted(unadmitted, DownloadFailureCode.METADATA_UNAVAILABLE, NOW).block();
+
+        assertEquals(0L, repository.concludeDownloads().block());
+
+        assertEquals("SUCCEEDED", statusOf(stamped));
+        assertEquals(NOW, organisedAtOf(stamped), "no live song, nothing to reopen: the stamp stays");
+        assertEquals("FAILED", statusOf(unadmitted), "a download that never had songs has no live song either");
     }
 
     @Test
