@@ -1,0 +1,11 @@
+{
+  "title": "80s indie pop",
+  "category": {"title": "80s indie pop", "year": "1980-1989", "style": "Indie Pop"},
+  "editionDate": "2026-10-09",
+  "seed": 1,
+  "tracks": [
+    {"videoId": "kkxixKRfEnk", "title": "Cico Buff", "artists": ["Cocteau Twins"], "album": "Blue Bell Knoll", "albumYear": 1988, "popularity": 6100000, "tier": "top", "reason": "#23 of 1036 by plays"},
+    {"videoId": "NhGoZLudKyk", "title": "Carolyn's Fingers", "artists": ["Cocteau Twins"], "album": "Blue Bell Knoll", "albumYear": 1988, "popularity": 5700000, "tier": "top", "reason": "#24 of 1036 by plays"},
+    {"videoId": "5SD4lI9GKUE", "title": "Real Gone Kid", "artists": ["Deacon Blue"], "album": "When The World Knows Your Name", "albumYear": 1989, "popularity": 29000000, "tier": "top", "reason": "#10 of 1036 by plays"}
+  ]
+}

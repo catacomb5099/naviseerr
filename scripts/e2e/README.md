@@ -1,8 +1,8 @@
 # Sealed end-to-end check: does a downloaded playlist reach Navidrome?
 
-One command proves, on any machine with Docker, that the all-in-one install files finished songs into the
-library, writes the playlist file, rewrites it when a failed song is retried and lands, and that Navidrome
-imports it with the songs in order:
+One command proves, on any machine with Docker, that the all-in-one install starts its playlist maker with
+the token setup generated, files finished songs into the library, writes the playlist file, rewrites it when a
+failed song is retried and lands, and that Navidrome imports it with the songs in order:
 
 ```sh
 scripts/e2e/playlist-file.sh
@@ -16,10 +16,16 @@ prints `PASS: ...` at the end, or `FAIL: <what>` plus the last 40 log lines of n
 1. Starts the install's own `compose.yaml` under the project name `naviseerr-e2e`, with
    `compose.e2e.yaml` on top: slskd sits alone on an `internal: true` network with no published port,
    so it **cannot reach the Soulseek network** and never registers the throwaway account in `e2e.env`.
+   The playlist maker (croissant) is sealed the same way, so no run could reach Discogs or YouTube.
    The web app answers on port 5096, the library lands under `build/e2e/library`.
 2. Checks the seal first: slskd's own `GET /server` (through the API key setup gave naviseerr) says
    `isConnected: false`, and the product's `GET /api/status` says `connected: false` (the web app shows
    its "Not connected to Soulseek" strip for exactly this). Nothing else runs before that check passes.
+   Then the playlist maker: croissant is healthy, `GET /api/suggested-playlists` says `enabled: true`
+   with no editions (so naviseerr got the generated token from `/config/naviseerr.properties` and
+   croissant accepted it from `/config/curator.token`; a token mismatch would be a 502 here, a missing
+   one `enabled: false`), and after `edition.json` is dropped into croissant's output volume the list
+   shows "80s indie pop" with 3 songs and `GET /api/suggested-playlists/80s-indie-pop` returns them.
 3. Stages a partly downloaded 4-song playlist the way the download loop leaves one: three 2-second mp3s
    made with `ffmpeg` are put in slskd's downloads volume, and `stage-playlist.sql` adds the matching
    `media_items`, `downloads` (`PARTIAL_SUCCESS`), `download_tasks` (three `SUCCEEDED`, one `FAILED`) and
@@ -48,26 +54,27 @@ honoured, so a shell that sourced its own `.env` still curls the port it publish
 
 ## What it proves, and what it cannot
 
-Proves: the compose file, setup's generated secrets and slskd config, the shared volumes and user, the
-organiser's tagging, filing and playlist writing, the playlist file's format, that a retry through the
-API reopens a finished playlist and the file is rewritten whole once the song is filed, and Navidrome's
-import of it, all from a clean start. The colon-to-" -" file name rule is pinned by `expected.m3u8`.
+Proves: the compose file, setup's generated secrets and slskd config, the token hand-over to naviseerr
+and croissant, the shared volumes and user, the organiser's tagging, filing and playlist writing, the
+playlist file's format, that a retry through the API reopens a finished playlist and the file is rewritten
+whole once the song is filed, and Navidrome's import of it, all from a clean start. The colon-to-" -" file name rule is pinned by `expected.m3u8`.
 
 Cannot prove, because slskd is sealed on purpose: the Soulseek login itself (account creation, a taken
 name), a real search and transfer (the retried song's search never starts; its landing is simulated), and
 slskd's real landing path for a downloaded file (the staged path follows slskd 0.26's rule and the
-04-10-2026 check against a real slskd). Those need an install at home,
+04-10-2026 check against a real slskd). Nor a real playlist run (croissant is sealed too; the edition is
+seeded). Those need an install at home,
 off any corporate network: request a short playlist in the web app, and when it says "Downloaded" look
 in `library/Playlists` and in Navidrome.
 
 ## Behind a TLS-intercepting proxy
 
-The web app and the YouTube Music helper are built from GitHub, which such a proxy breaks
-(`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`). Build them from sibling checkouts instead; their gitignored
+The web app, the YouTube Music helper and the playlist maker are built from GitHub, which such a proxy
+breaks (`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`). Build them from sibling checkouts instead; their gitignored
 `certs/*.pem` are picked up:
 
 ```sh
-E2E_CLIENT_CONTEXT=../naviseerr-client E2E_ADAPTER_CONTEXT=../ytmusic-adapter scripts/e2e/playlist-file.sh
+E2E_CLIENT_CONTEXT=../naviseerr-client E2E_ADAPTER_CONTEXT=../ytmusic-adapter E2E_CURATOR_CONTEXT=../croissant scripts/e2e/playlist-file.sh
 ```
 
 If `docker pull` hangs there too, `fetch-image.sh deluan/navidrome:0.64.2` copies the image with skopeo
@@ -82,6 +89,7 @@ If `docker pull` hangs there too, `fetch-image.sh deluan/navidrome:0.64.2` copie
 | `compose.e2e.yaml` | the sealing override and the optional local build contexts |
 | `e2e.env` | the install settings for the run (no secrets: the account never logs in and its password is generated inside the stack) |
 | `stage-playlist.sql` | the partly-downloaded-playlist rows (3 done, 1 failed) |
+| `edition.json` | one suggested-playlist edition (3 songs) in croissant's own file shape, dropped into its output volume |
 | `expected.m3u8` | the playlist file before the retry, byte for byte (UTF-8, no BOM, LF, NFC) |
 | `expected-after-retry.m3u8` | the same file after the retried song landed (four songs) |
 | `fetch-image.sh` | skopeo fallback for laptops where `docker pull` hangs |
