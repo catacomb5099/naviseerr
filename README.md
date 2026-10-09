@@ -119,18 +119,33 @@ used, inside this one) before `docker compose up`; until then every `docker comp
   there, a typo most often. Fix the path in `.env`, or create the folder (`mkdir -p /some/path`), then
   `docker compose up -d`. naviseerr never creates it for you, so a wrong path cannot quietly become a
   new empty library on the wrong disk.
-- **Nothing starts.** `docker compose logs setup` says what is wrong, for example a
-  `SOULSEEK_USERNAME` in `.env` that breaks Soulseek's rules (leave it empty and a name is made up
-  for you).
+- **Nothing starts.** `docker compose logs setup` says what is wrong, in one block naming the setting
+  and the fix, for example a `SOULSEEK_USERNAME` in `.env` that breaks Soulseek's rules (leave it empty
+  and a name is made up for you), a `PUID` that is not a number, or one of the two library problems
+  below.
+- **"cannot be written to by user 1000:1000"** (in `docker compose logs setup`). The containers run as
+  `PUID`:`PGID` from `.env`, and that user may not write into `LIBRARY_DIR`. Linux: give the folder to
+  that user (`sudo chown 1000:1000 /path/to/music`) or set `PUID` and `PGID` to the folder's owner
+  (`ls -ln` shows the numbers). Docker Desktop (macOS, Windows): make the folder writable by your own
+  account; `PUID`/`PGID` play no part there. Then `docker compose up -d`.
+- **"the small marker file naviseerr left there last time is gone".** `LIBRARY_DIR` is empty, but it
+  was your library at the last start: most likely the disk or network share it lives on is not mounted,
+  and starting anyway would fill a new empty folder on the system disk. Mount it (or fix the path in
+  `.env`) and `docker compose up -d`. If you emptied the folder on purpose, say so with
+  `touch /path/to/music/.naviseerr-library`. That hidden file is how naviseerr recognises its library;
+  slskd never shares it, and Navidrome and Jellyfin ignore it. Leave it there. The check only fires
+  when the folder is completely empty: a mount point that still holds something (a `lost+found`
+  folder, say) is not caught.
 - **"Username taken".** The web app keeps its "Not connected to Soulseek" strip, and
   `docker compose logs slskd` says "invalid username or password": someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,
   then `docker compose restart slskd` (slskd tries to log in once and then waits). The strip goes
   within about 30 seconds of the login working, or reload the page.
-- **Linux: permission errors** ("permission denied", "Could not file song"). Every container runs as
-  one user, `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into
-  `LIBRARY_DIR`: set them to the folder's owner (`ls -ln` shows its numbers; `id -u` and `id -g` show
-  yours), then run `docker compose up -d`.
+- **Linux: permission errors** ("permission denied", "Could not file song") on a library that was
+  writable when setup checked it (a folder inside it owned by someone else, say). Every container runs
+  as one user, `PUID`:`PGID` in `.env` (default 1000:1000). They must be allowed to write into
+  `LIBRARY_DIR` and its folders: set them to the folder's owner (`ls -ln` shows its numbers; `id -u`
+  and `id -g` show yours), then run `docker compose up -d`.
 - **Similar artists have no pictures** (grey circles with names on an artist page), and
   `docker compose logs naviseerr` says "similar artists arrived without a picture ... ytmusic-adapter
   is probably out of date". The YouTube Music helper is an old build: run `docker compose up -d --build`.
