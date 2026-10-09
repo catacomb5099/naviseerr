@@ -4,6 +4,7 @@ import com.catacomb5099.naviseerr.schema.slskd.QueueDownloadResponse;
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.ServerState;
+import com.catacomb5099.naviseerr.schema.slskd.SlskdOptions;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.schema.slskd.UserTransfers;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,6 +24,7 @@ public class SlskdService {
     private final static String SEARCHES_ENDPOINT = "/searches";
     private final static String TRANSFERS_ENDPOINT = "/transfers/downloads";
     private final static String SERVER_ENDPOINT = "/server";
+    private final static String OPTIONS_ENDPOINT = "/options";
 
     private final WebClient webClient;
 
@@ -44,6 +46,19 @@ public class SlskdService {
                 .uri(SERVER_ENDPOINT)
                 .retrieve()
                 .bodyToMono(ServerState.class);
+    }
+
+    /**
+     * slskd's running configuration, for the Soulseek username this install logs in with. The
+     * configured name, not slskd's logged-in user ({@code GET /application}): that one is only set
+     * once a login has succeeded, so it is empty exactly when the web app asks.
+     */
+    public Mono<SlskdOptions> getOptions() {
+        return webClient
+                .get()
+                .uri(OPTIONS_ENDPOINT)
+                .retrieve()
+                .bodyToMono(SlskdOptions.class);
     }
 
     public Mono<SearchState> searchResults(String query) {
