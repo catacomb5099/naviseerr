@@ -156,6 +156,23 @@ public class LibraryOrganiser {
         return enabled;
     }
 
+    /** The library folder as this process sees it; null when the organiser is off (unset, or refused for overlapping slskd's folders). */
+    public String libraryRoot() {
+        return enabled ? root.toString() : null;
+    }
+
+    /**
+     * Why finished songs could not be filed right now: one plain sentence, or null when the library
+     * folder can be written to (or the organiser is off). One {@code access(2)} call as the running
+     * user, so it honours ACLs and network shares; {@code GET /status} asks on every poll.
+     */
+    public String libraryProblem() {
+        if (!enabled) return null;
+        if (!Files.isDirectory(root)) return "The library folder " + root + " is missing.";
+        if (!Files.isWritable(root)) return "naviseerr cannot write into the library folder " + root + ".";
+        return null;
+    }
+
     /** Songs that finished before this instant are no longer looked for in the downloads folder. */
     public Instant cutoff(Instant now) {
         return now.minus(GIVE_UP_AFTER);

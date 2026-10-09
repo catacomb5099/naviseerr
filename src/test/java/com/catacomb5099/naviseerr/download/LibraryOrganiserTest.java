@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class LibraryOrganiserTest {
 
@@ -67,6 +68,36 @@ class LibraryOrganiserTest {
                 .isEnabled(), "downloads inside library");
         assertFalse(new LibraryOrganiser(downloads.toString(), tmp.toString(), root.toString(), LOOP, TAGGER)
                 .isEnabled(), "library inside incomplete");
+        assertNull(new LibraryOrganiser(downloads.toString(), "", downloads.resolve("music").toString(), LOOP, TAGGER)
+                .libraryRoot(), "GET /status reports no root for an organiser that refused its paths");
+    }
+
+    // ---- can the library be written to? (GET /status) -------------------------------------------
+
+    @Test
+    void libraryProblem_isNull_whenOff_orWhenTheRootCanBeWrittenTo() throws IOException {
+        assertNull(new LibraryOrganiser("", "", "", LOOP, TAGGER).libraryProblem());
+        assertNull(new LibraryOrganiser("", "", "", LOOP, TAGGER).libraryRoot());
+        Files.createDirectories(root);
+        assertNull(organiser.libraryProblem());
+        assertEquals(root.toString(), organiser.libraryRoot());
+    }
+
+    @Test
+    void libraryProblem_namesAMissingRoot() {
+        assertEquals("The library folder " + root + " is missing.", organiser.libraryProblem());
+    }
+
+    @Test
+    void libraryProblem_namesARootThatCannotBeWrittenTo() throws IOException {
+        assumeFalse("root".equals(System.getProperty("user.name")), "root can write anywhere");
+        Files.createDirectories(root);
+        assertTrue(root.toFile().setWritable(false, false));
+        try {
+            assertEquals("naviseerr cannot write into the library folder " + root + ".", organiser.libraryProblem());
+        } finally {
+            root.toFile().setWritable(true, false);
+        }
     }
 
     // ---- where slskd put the file ----------------------------------------------------------------
