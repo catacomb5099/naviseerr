@@ -319,6 +319,33 @@ class ArtistControllerTest {
         assertTrue(output.getOut().contains("ytmusic-adapter is probably out of date (older than 28-09-2026); rebuild it"), output.getOut());
     }
 
+    /**
+     * Same idea for play counts: the adapter fills them from each song's album since 30-09-2026, so
+     * every top song arriving without one is an old adapter, not YouTube. The Pixies fixture has
+     * three top songs and no counts, as a pre-30-09 adapter answers; one count among them is quiet.
+     */
+    @Test
+    void topSongsAllWithoutPlays_logOneWarnNamingAStaleAdapter(CapturedOutput output) {
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(playlists(0)));
+        YtMusicDetailResponse.Artist oneCounted = pixies();
+        oneCounted.getTopSongs().get(1).setViews("311M plays");
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(oneCounted));
+        client.get().uri("/artists/" + PIXIES).exchange().expectStatus().isOk();
+        assertFalse(output.getOut().contains("arrived without a play count"), "one count among three is not a stale adapter");
+
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
+        client.get().uri("/artists/" + PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.topSongs.length()").isEqualTo(3)
+                .jsonPath("$.topSongs[0].plays").isEmpty()
+                .jsonPath("$.topSongs[2].plays").isEmpty();
+        assertTrue(output.getOut().contains("WARN"), output.getOut());
+        assertTrue(output.getOut().contains("Artist 'Pixies' (" + PIXIES + "): all 3 top songs arrived without a play count"), output.getOut());
+        assertTrue(output.getOut().contains("ytmusic-adapter is probably out of date (older than 30-09-2026); rebuild it"), output.getOut());
+        assertEquals(1, output.getOut().split("arrived without a play count", -1).length - 1, "one WARN, not one per song");
+    }
+
     @Test
     void adapterListsMissing_becomeEmptyLists_neverNull_andNoNameMeansNoPlaylistSearch() {
         when(ytMusicService.getArtistInfo("UCbare")).thenReturn(Mono.just(YtMusicDetailResponse.Artist.builder()
