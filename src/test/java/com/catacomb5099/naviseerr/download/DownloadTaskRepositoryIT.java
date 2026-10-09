@@ -1611,7 +1611,7 @@ class DownloadTaskRepositoryIT {
         assertEquals(2, repository.playlistEntries(id).collectList().block().size());
         assertEquals(1L, repository.setOrganisedAt(id, NOW).block());
 
-        assertEquals(1L, repository.retry(id, tasks.get(2), NOW.plusSeconds(60)).block(), "Retry on the failed song");
+        assertEquals(1L, retry(id, tasks.get(2), NOW.plusSeconds(60)), "Retry on the failed song");
         assertEquals("IN_PROGRESS", statusOf(id));
         assertNull(organisedAtOf(id), "the stamp is cleared by the retry itself");
         assertEquals(List.of(), toFinalise(), "a running download is not finalised");
