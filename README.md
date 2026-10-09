@@ -16,8 +16,9 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
 - A computer that stays switched on: a home server, a NAS or a spare PC.
 - Docker, which runs each part in its own sealed box (a "container"):
   [install Docker](https://docs.docker.com/get-started/get-docker/). Docker Desktop on Windows and macOS,
-  Docker Engine on Linux. Both include `docker compose`. On Linux, run the `docker` commands below
-  with `sudo`, or first [add yourself to the `docker` group](https://docs.docker.com/engine/install/linux-postinstall/).
+  Docker Engine on Linux. Both include `docker compose` (version 2.24 or newer). On Linux, run the
+  `docker` commands below with `sudo`, or first
+  [add yourself to the `docker` group](https://docs.docker.com/engine/install/linux-postinstall/).
 - `git`, to download this project.
 - About 4 GB of free disk space for naviseerr itself (the first start downloads at least 700 MB), plus
   room for your music, and about 600 MB of free memory.
@@ -30,19 +31,21 @@ lands in one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    git clone -b move-fast-break-things https://github.com/catacomb5099/naviseerr.git
    cd naviseerr
    ```
-2. Optional: choose your settings. Without a `.env` file everything is made up or defaulted, including
-   the Soulseek username (`naviseerr-xxxxxx`) and its password. To pick your own name, make the
-   settings file and fill in `SOULSEEK_USERNAME=` in a text editor:
+2. Say where your music goes. Make the settings file and fill in `LIBRARY_DIR=` in a text editor with
+   the folder your music library lives in, for example `/srv/music` or `/Volumes/NAS/Music`:
    ```sh
    cp .env.example .env
    ```
-   A name of your own is friendlier on the network than a generated one. The Soulseek account is
-   created the first time naviseerr logs in, so pick a name nobody else is likely to have (1 to 30
-   characters, no accents or emoji). Every other setting is optional and explained in that file, for
-   example `LIBRARY_DIR`, the folder your music goes in (by default `library/`, inside this folder), and
-   `SHARE_LIBRARY`: your music folder is shared on Soulseek unless you set it to `false`. If you change
-   `SHARE_LIBRARY` after the first start, run `docker compose up -d` and then
-   `docker compose restart slskd`: until that restart, slskd keeps sharing what it shared before.
+   The folder must already exist: naviseerr never invents one for you, so a mistyped path stops the
+   start instead of quietly filling a new empty folder on the wrong disk. `LIBRARY_DIR=./library`
+   keeps the old default, a `library/` folder inside this one (`mkdir library` first). Everything else
+   is optional and made up or defaulted when left empty, including the Soulseek username
+   (`naviseerr-xxxxxx`) and its password. A name of your own (`SOULSEEK_USERNAME=`) is friendlier on
+   the network than a generated one: the account is created the first time naviseerr logs in, so pick
+   one nobody else is likely to have (1 to 30 characters, no accents or emoji). `SHARE_LIBRARY`: your
+   music folder is shared on Soulseek unless you set it to `false`. If you change `SHARE_LIBRARY`
+   after the first start, run `docker compose up -d` and then `docker compose restart slskd`: until
+   that restart, slskd keeps sharing what it shared before.
 3. Start it:
    ```sh
    docker compose up -d
@@ -84,6 +87,11 @@ Keep the `--build`: `docker compose up -d` on its own only restarts what you alr
 rebuilds the YouTube Music helper (`ytmusic-adapter`), so an update that needs a newer helper, such as
 the pictures of similar artists, quietly stays off. The server then prints a warning, see Troubleshooting.
 
+**Updating from before 09-10-2026, when the music folder had a default:** `LIBRARY_DIR` is now
+required. If you never set it, add `LIBRARY_DIR=./library` to `.env` (the folder the old default
+used, inside this one) before `docker compose up`; until then every `docker compose` command,
+`stop` and `logs` included, stops with "required variable LIBRARY_DIR is missing a value".
+
 ### Stopping, removing and backing up
 
 - **Stop:** `docker compose stop`, or `docker compose down`, which also removes the containers. Both
@@ -104,6 +112,13 @@ the pictures of similar artists, quietly stays off. The server then prints a war
 
 ### Troubleshooting
 
+- **"required variable LIBRARY_DIR is missing a value".** `.env` has no `LIBRARY_DIR` (or an empty
+  one). Add `LIBRARY_DIR=/path/to/your/music` (see step 2); `LIBRARY_DIR=./library` is the old
+  default. Nothing runs, not even `docker compose stop`, until it is set.
+- **"bind source path does not exist: /some/path".** `LIBRARY_DIR` points at a folder that is not
+  there, a typo most often. Fix the path in `.env`, or create the folder (`mkdir -p /some/path`), then
+  `docker compose up -d`. naviseerr never creates it for you, so a wrong path cannot quietly become a
+  new empty library on the wrong disk.
 - **Nothing starts.** `docker compose logs setup` says what is wrong, for example a
   `SOULSEEK_USERNAME` in `.env` that breaks Soulseek's rules (leave it empty and a name is made up
   for you).

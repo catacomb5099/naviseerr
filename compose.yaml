@@ -1,12 +1,24 @@
 # The all-in-one install: everything naviseerr needs, its own slskd included, in one
-# `docker compose up -d`. Settings come from .env next to this file (copy .env.example); none is
-# required: a Soulseek username is made up on the first start unless you set one. Developers running
-# the server from an IDE use compose.dev.yaml instead.
+# `docker compose up -d`. Settings come from .env next to this file (copy .env.example). One is
+# required: LIBRARY_DIR, the folder your music goes in (see x-library below). A Soulseek username is
+# made up on the first start unless you set one. Developers running the server from an IDE use
+# compose.dev.yaml instead.
 #
 # No container_name anywhere and no fixed volume names: everything is scoped to the project name
 # below (the developer stack in compose.dev.yaml is `naviseerr`), so this stack never touches the
 # developer stack's containers or its database.
 name: naviseerr-app
+
+# Your music library (LIBRARY_DIR in .env), mounted into setup, slskd and naviseerr below. Required,
+# and the folder must already exist: it is where every song and playlist ends up, so no guess is made
+# for you, and Docker is told not to invent the folder, so a mistyped path stops the start instead of
+# quietly filling a new empty folder on the wrong disk.
+x-library: &library
+  type: bind
+  source: ${LIBRARY_DIR:?Set LIBRARY_DIR in .env to the folder your music goes in (the old default was LIBRARY_DIR=./library), see README step 2}
+  target: /library
+  bind:
+    create_host_path: false
 
 services:
   # Not published: only naviseerr talks to it, and a published 5432 would clash with any Postgres
@@ -51,13 +63,15 @@ services:
       SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
       SOULSEEK_PASSWORD: ${SOULSEEK_PASSWORD:-}
       SHARE_LIBRARY: ${SHARE_LIBRARY:-true}
+      # The host path of the library, so setup.sh can name it in its messages.
+      LIBRARY_DIR: ${LIBRARY_DIR:-}
     volumes:
       - ./docker/setup.sh:/setup.sh:ro
       - config:/config
       - slskd:/slskd
       - downloads:/downloads
       - incomplete:/incomplete
-      - ${LIBRARY_DIR:-./library}:/library
+      - *library
 
   # The Soulseek client. Its settings live in slskd.yml, written by `setup` from .env: change .env,
   # not that file.
@@ -86,7 +100,9 @@ services:
       - downloads:/downloads
       - incomplete:/incomplete
       # What you share on Soulseek (SHARE_LIBRARY in .env). Read-only: slskd only lists and uploads.
-      - ${LIBRARY_DIR:-./library}:/music:ro
+      - <<: *library
+        target: /music
+        read_only: true
     # The image's own check waits 60 minutes before it may report a problem.
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5030/health"]
@@ -142,7 +158,7 @@ services:
       - downloads:/downloads
       - incomplete:/incomplete
       # Your music library: point Navidrome or Jellyfin at the same folder (LIBRARY_DIR in .env).
-      - ${LIBRARY_DIR:-./library}:/library
+      - *library
 
   # The web app, and the address you open: http://<this machine>:5056. It forwards /api to naviseerr.
   # Built from GitHub: needs naviseerr-client's container change (its Dockerfile + Caddyfile) merged
