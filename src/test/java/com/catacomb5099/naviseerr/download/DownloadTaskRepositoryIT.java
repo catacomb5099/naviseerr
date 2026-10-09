@@ -1570,6 +1570,47 @@ class DownloadTaskRepositoryIT {
         assertEquals(0L, repository.setOrganisedAt(id, NOW).block(), "a stamp in flight when the user clicked Retry must not land");
     }
 
+    /**
+     * The whole post-processing chain after a retry, piece by piece as the loop runs it (09-10-2026):
+     * the playlist is written without the failed song; Retry reopens the download and clears the stamp;
+     * the song lands and, while unfiled, holds the playlist back; filed, the download is finalised again
+     * and the playlist entries include it, in track order; the stamp is written once more.
+     */
+    @Test
+    void afterARetriedSongIsFiled_theDownloadIsFinalisedAgain_andThePlaylistEntriesIncludeIt() {
+        UUID id = insertDownload("PENDING", "PLAYLIST");
+        admit(id, "1 first", "2 second", "3 retried");
+        List<UUID> tasks = taskIdsOf(id);
+        finish(template, downloadService, tasks.get(0), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, tasks.get(1), DownloadStatus.SUCCEEDED, null, NOW);
+        finish(template, downloadService, tasks.get(2), DownloadStatus.FAILED, DownloadFailureCode.SOURCES_EXHAUSTED, NOW);
+        repository.setLibraryPath(tasks.get(0), "/music/A/first/first.flac").block();
+        repository.setLibraryPath(tasks.get(1), "/music/B/second/second.flac").block();
+        assertEquals(1L, repository.concludeDownloads().block());
+        assertEquals("PARTIAL_SUCCESS", statusOf(id));
+        assertEquals(List.of(id), toFinalise(), "two filed, one failed: the playlist is written without the failed song");
+        assertEquals(2, repository.playlistEntries(id).collectList().block().size());
+        assertEquals(1L, repository.setOrganisedAt(id, NOW).block());
+
+        assertEquals(1L, repository.retry(id, tasks.get(2), NOW.plusSeconds(60)).block(), "Retry on the failed song");
+        assertEquals("IN_PROGRESS", statusOf(id));
+        assertNull(organisedAtOf(id), "the stamp is cleared by the retry itself");
+        assertEquals(List.of(), toFinalise(), "a running download is not finalised");
+
+        finish(template, downloadService, tasks.get(2), DownloadStatus.SUCCEEDED, null, NOW.plusSeconds(120));
+        assertEquals(1L, repository.concludeDownloads().block());
+        assertEquals("SUCCEEDED", statusOf(id));
+        assertEquals(List.of(), toFinalise(), "a just-finished song still waiting for its file holds the playlist back");
+
+        repository.setLibraryPath(tasks.get(2), "/music/C/retried/retried.flac").block();
+        assertEquals(List.of(id), toFinalise(), "filed: the playlist is written again");
+        assertEquals(List.of("/music/A/first/first.flac", "/music/B/second/second.flac", "/music/C/retried/retried.flac"),
+                repository.playlistEntries(id).map(LibraryOrganiser.Entry::libraryPath).collectList().block(),
+                "the retried song joins the list in track order; the siblings keep their files");
+        assertEquals(1L, repository.setOrganisedAt(id, NOW.plusSeconds(121)).block());
+        assertEquals(List.of(), toFinalise(), "stamped once more");
+    }
+
     // ---- retry of one song ---------------------------------------------------------------------
 
     /** A live three-song playlist: song 1 has its file, song 2 failed, song 3 is still to be searched. */
