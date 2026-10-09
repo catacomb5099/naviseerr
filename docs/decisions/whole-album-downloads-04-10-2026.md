@@ -79,9 +79,12 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 - **Fallback.** A song whose album-folder files all fail (rejected, stalled, errored past retries) goes
   back to its own search at the first wording instead of ending "sources exhausted"; the runner removes
   the partial files of the folder attempts.
-- **Cancel and retry.** Cancelling the whole download ends its album search (`CANCELLED`), so a search
-  still running cannot hand files to songs a later retry reopens. Retry is unchanged: failed songs search
-  on their own (P8).
+- **Cancel and retry.** Cancelling the whole download ends its album search (`CANCELLED`); a step
+  still out under the old lease cannot hand files to songs a later retry reopens, because the retry
+  clears the lease and the release checks it (since 09-10-2026 that lease, not the `DONE` phase, is the
+  guard: the retry restarts the search). Retry of one track: it searches on its own (P8). Retry of the
+  whole album, since 09-10-2026: the album search runs again first, the failed songs held for it
+  (`retry-and-cancel-28-09-2026.md`, addendum 09-10-2026).
 
 ## How part album next works (A3)
 
