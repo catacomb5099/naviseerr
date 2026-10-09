@@ -82,6 +82,45 @@ reading it from `slskd.yml`. The first real login that registers such a name on 
 whether Soulseek's administrators react to the prefix, cannot be checked from the machine this was
 built on (its network blocks Soulseek, and a login would create a real account).
 
+### Revisited 09-10-2026: the library folder is required, must exist, and is checked
+
+The owner asked that every folder a person must provide be required and checked, the library first.
+Only one mount comes from the person, `LIBRARY_DIR`; the others are named volumes setup re-owns. Until
+now `LIBRARY_DIR` defaulted to `./library`, Docker created a missing path as root, and a folder
+naviseerr could not write into was found out only by `WARN Could not file song` lines for ten minutes
+per song, while the web app said "Downloaded". So:
+
+- `LIBRARY_DIR` has no default (`${LIBRARY_DIR:?...}` on one YAML anchor shared by the three mounts).
+  Unset or empty stops every `docker compose` command before anything builds, with a sentence naming
+  the setting and the old default. Measured on Compose 5.0.1: `ps`, `logs` and `down` refuse too
+  while it is unset, so the README's Updating note tells existing installs to add
+  `LIBRARY_DIR=./library` first. This is a breaking change for installs that relied on the default.
+- The folder must pre-exist: the anchor is long syntax with `bind: {create_host_path: false}`, so a
+  mistyped path is Docker's "bind source path does not exist" at container creation (setup is the
+  first container, nothing else starts) instead of a new empty folder on the wrong disk. A relative
+  path without `./` now resolves against the compose folder instead of being read as a named volume.
+- `setup.sh` tests the folder as `PUID:PGID` (busybox `su` after creating the user if needed): root
+  can write where naviseerr cannot, and stat arithmetic lies on ACLs, NFS and Docker Desktop. The
+  test file doubles as a marker, `.naviseerr-library`, and the host path of the last good start is
+  kept in the config volume (`/config/library.path`). Same path, folder empty, marker gone means
+  "the disk is not mounted", and setup stops rather than fill the mount point; a new path with a new
+  empty folder is a library moved on purpose and is accepted. slskd gets a share filter for the
+  marker. An empty library is a note on stdout, never an error: every install starts empty.
+- `PUID`/`PGID` must be numbers, checked before the first `chown`; the library `chown` tolerates a
+  share that refuses root (`root_squash`) and lets the write test speak.
+- Every problem is one plain-words block to stderr (`problem()`), then `exit 1`.
+
+Docker Desktop caveat: a bind mount from macOS or Windows shows as `0:0` with the host's permission
+bits and ignores ownership, so the "belongs to 0:0" numbers in the message are Docker's, and the fix
+there is the host folder's mode, which the message says.
+
+Checked: `docker/setup-check.sh` (24 checks: the username rules plus the marker, the note, the
+remembered path, the slskd filter, a 1001-owned folder refusing 1000, marker gone from an empty
+folder, a moved library, `PUID=abc`), the sealed e2e stack (`scripts/e2e/playlist-file.sh`) after the
+compose change, and on this Mac: unset and empty `LIBRARY_DIR`, a missing path, a `chmod 555`
+folder, the first start's marker and note, the swapped-for-empty folder. Not checked here: Linux
+ownership on a real bind mount, a real NAS unmount with `root_squash`, Windows paths, rootless Docker.
+
 ### A secrets file, and slskd's config rewritten on every start
 
 A one-shot `setup` container (`alpine:3.20` running `docker/setup.sh` as root) runs before slskd and
