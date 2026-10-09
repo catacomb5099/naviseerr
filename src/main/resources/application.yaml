@@ -211,5 +211,7 @@ curator:
   trigger-first-back-off-ms: 10000
   # A fresh install has no suggested playlists and would wait for the first Monday 03:00. When on,
   # naviseerr checks two minutes after start and, if the curator holds no editions at all, runs one
-  # refresh right away. CURATOR_FIRST_RUN_ON_START=false turns it off.
-  first-run-on-start: ${CURATOR_FIRST_RUN_ON_START:true}
+  # refresh right away. Off here on purpose: compose.yaml passes CURATOR_FIRST_RUN_ON_START=true to
+  # the Docker install, while a jar started by hand (IntelliJ, `./gradlew test` with a dev .env that
+  # holds a CURATOR_TOKEN) must never start a 90-minute Discogs/YouTube run on its own. Empty = off.
+  first-run-on-start: ${CURATOR_FIRST_RUN_ON_START:false}

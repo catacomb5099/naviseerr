@@ -28,8 +28,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * "off unless configured" rule as the library organiser.
  *
  * <p>A fresh install has no editions and would otherwise wait for the first Monday 03:00: when
- * {@code curator.first-run-on-start} is on (the default), {@link #onStart()} asks the curator for its
- * editions two minutes after boot and runs one refresh if there are none at all.
+ * {@code curator.first-run-on-start} is on, {@link #onStart()} asks the curator for its editions two
+ * minutes after boot and runs one refresh if there are none at all. compose.yaml turns it on for the
+ * Docker install; the jar's own default is off, so an IntelliJ start or the test suite (both read the
+ * dev .env, which may hold a CURATOR_TOKEN) never calls a curator on their own.
  */
 @Slf4j
 @Component
@@ -55,12 +57,13 @@ public class CuratorScheduler {
                             @Value("${curator.cron:}") String cron,
                             @Value("${curator.poll-interval-ms}") Duration pollInterval,
                             @Value("${curator.run-budget-ms}") Duration runBudget,
-                            @Value("${curator.first-run-on-start:true}") boolean firstRunOnStart) {
+                            @Value("${curator.first-run-on-start:false}") Boolean firstRunOnStart) {
         this.client = client;
         this.pollInterval = pollInterval;
         this.runBudget = runBudget;
         this.enabled = !url.isBlank() && !token.isBlank();
-        this.firstRunOnStart = firstRunOnStart;
+        // Boxed: an empty CURATOR_FIRST_RUN_ON_START= line in a copied .env.example is null, not a start-up crash.
+        this.firstRunOnStart = Boolean.TRUE.equals(firstRunOnStart);
         this.refreshDay = refreshDay(cron);
         if (!enabled) {
             log.info("Weekly curator refresh OFF: suggested playlists are not refreshed. Set CURATOR_URL "
@@ -70,6 +73,10 @@ public class CuratorScheduler {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    public boolean isFirstRunOnStart() {
+        return firstRunOnStart;
     }
 
     /**

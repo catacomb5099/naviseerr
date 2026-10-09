@@ -223,8 +223,9 @@ The current authoritative design lives in `docs/superpowers/specs/2026-08-13-dur
 separate croissant service (`POST /v1/runs`; repo catacomb5099/croissant), polls the run until it finishes or a 2-hour budget
 runs out, and logs the outcome per category. It is off unless `CURATOR_URL` and `CURATOR_TOKEN` are both
 set and touches no table. On boot, when the curator holds no editions at all, it runs one refresh two minutes
-after start (`curator.first-run-on-start`, env `CURATOR_FIRST_RUN_ON_START`, default on), so a fresh install
-does not wait for Monday. The outbound client (`CuratorClient`) follows the `YtMusicService` pattern
+after start (`curator.first-run-on-start`, env `CURATOR_FIRST_RUN_ON_START`: compose.yaml passes `true` to the
+Docker install; the jar's own default is `false`, so an IntelliJ start or `./gradlew test` with a dev `.env` never
+calls a curator), so a fresh install does not wait for Monday. The outbound client (`CuratorClient`) follows the `YtMusicService` pattern
 (timeout, typed error, retry of transient failures only) and also reads the curator's editions for
 `SuggestedPlaylistController` (`GET /suggested-playlists[/{category}]`, and `POST|GET /suggested-playlists/refresh`
 for a manual "make this week's playlists now"), which is how the client shows and requests them.
