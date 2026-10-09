@@ -14,10 +14,11 @@ import java.util.UUID;
  *
  * @param reason     with {@link PickListStatus#NONE}: {@code ALREADY_IN_LIBRARY} (nothing was searched),
  *                   {@code NO_OWN_SEARCH} (the song never searched on its own: its file came from the album
- *                   search's folder or a manual pick), {@code SEARCH_FAILED} / {@code SOULSEEK_OFFLINE} (its
- *                   own search never completed: slskd refused it, Soulseek was offline, or it ran out of
- *                   time), {@code NO_RESULTS} (the search completed and found nothing relevant) or
- *                   {@code BEFORE_CACHE} (it searched before lists were kept); null otherwise
+ *                   search's folder or a manual pick), {@code SEARCH_FAILED} / {@code SOULSEEK_OFFLINE} /
+ *                   {@code CANCELLED} (its own search never completed: slskd refused it, Soulseek was offline,
+ *                   it ran out of time, or the download was cancelled while it searched), {@code NO_RESULTS}
+ *                   (the search completed and found nothing relevant) or {@code BEFORE_CACHE} (it searched
+ *                   before lists were kept); null otherwise
  * @param query      what was asked of Soulseek, so the client can show it
  * @param searchId   slskd's id for the song's own search, to find it in slskd's history; null when it never
  *                   searched on its own or slskd never took the search

@@ -236,6 +236,24 @@ class DownloadServiceTest {
         assertEquals(PickListStatus.NONE, fromFolder.status());
         assertEquals("NO_OWN_SEARCH", fromFolder.reason());
         assertEquals("bob", fromFolder.current().username());
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(
+                song("SUCCEEDED", List.of(candidate("bob").asManual()), List.of(), null, null, null)));
+        assertEquals("NO_OWN_SEARCH", service.candidates(id, taskId).block().reason());
+
+        // a pre-V15 row that kept its first wording's files when slskd refused the second: no id, but the
+        // file came from its own search, so it did search
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(
+                song("SUCCEEDED", candidates("bob"), List.of(), null, null, null)));
+        assertEquals("BEFORE_CACHE", service.candidates(id, taskId).block().reason());
+
+        // cancelled while it searched, held for the album search (no id) or mid-poll (id set): the album
+        // pop-up says CANCELLED for the same download, so must the song's
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(
+                song("FAILED", List.of(), List.of(), null, null, DownloadFailureCode.CANCELLED)));
+        assertEquals("CANCELLED", service.candidates(id, taskId).block().reason());
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(
+                song("FAILED", List.of(), List.of(), null, "s-9", DownloadFailureCode.CANCELLED)));
+        assertEquals("CANCELLED", service.candidates(id, taskId).block().reason());
 
         // a completed search that found nothing relevant is still NO_RESULTS, whatever the code
         when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(

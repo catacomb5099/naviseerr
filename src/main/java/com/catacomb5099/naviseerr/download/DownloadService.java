@@ -197,17 +197,23 @@ public class DownloadService {
                 ? PickListStatus.SEARCHING : PickListStatus.NONE;
     }
 
-    /** A search that gave up before completing: the row's failure code says so, and no file was ever chosen. */
+    /** A search that ended before completing: the row's failure code says so, and no file was ever chosen. */
     private static final List<String> SEARCH_NEVER_COMPLETED = List.of(
             DownloadFailureCode.SEARCH_FAILED.name(), DownloadFailureCode.SOULSEEK_OFFLINE.name(),
-            DownloadFailureCode.TIMED_OUT.name());
+            DownloadFailureCode.TIMED_OUT.name(), DownloadFailureCode.CANCELLED.name());
+
+    /** The never-completed codes reported under their own name; the rest read {@code SEARCH_FAILED}. */
+    private static final List<String> OWN_WORD = List.of(
+            DownloadFailureCode.SOULSEEK_OFFLINE.name(), DownloadFailureCode.CANCELLED.name());
 
     /**
      * Why a song past searching has no list, from what the row already records; see
-     * {@link TaskCandidatesView#reason()}. A song with a file but no search id of its own never searched
-     * (the album search's folder, or a person, gave it the file); a failed row with no completed search
-     * reports the failure code itself ({@code SOULSEEK_OFFLINE} kept apart: the client already words it);
-     * a stamped row searched and found nothing; anything else searched before lists were kept.
+     * {@link TaskCandidatesView#reason()}. A song whose file came from the album search's folder or a
+     * person, with no search id of its own, never searched (a file from its own search with no id is a
+     * pre-V15 row that kept a first wording's files when the next was refused: it did search); a failed
+     * row with no completed search reports the failure code itself ({@code SOULSEEK_OFFLINE} and
+     * {@code CANCELLED} under their own names, so a song cancelled while searching matches the album
+     * view); a stamped row searched and found nothing; anything else searched before lists were kept.
      */
     private static String reasonOf(DownloadTaskRepository.CachedSearch song) {
         if (statusOf(song) != PickListStatus.NONE) {
@@ -216,13 +222,14 @@ public class DownloadService {
         if (song.libraryPath() != null && song.slskdFilename() == null) {
             return "ALREADY_IN_LIBRARY";
         }
-        if (song.searchId() == null && song.current() != null) {
+        DownloadCandidate current = song.current();
+        if (song.searchId() == null && current != null && (DownloadCandidate.ALBUM_FOLDER.equals(current.source())
+                || DownloadCandidate.MANUAL.equals(current.source()))) {
             return "NO_OWN_SEARCH";
         }
-        if (song.searchedAt() == null && song.current() == null && song.failureReason() != null
+        if (song.searchedAt() == null && current == null && song.failureReason() != null
                 && SEARCH_NEVER_COMPLETED.contains(song.failureReason())) {
-            return DownloadFailureCode.SOULSEEK_OFFLINE.name().equals(song.failureReason())
-                    ? "SOULSEEK_OFFLINE" : "SEARCH_FAILED";
+            return OWN_WORD.contains(song.failureReason()) ? song.failureReason() : "SEARCH_FAILED";
         }
         return song.searchedAt() != null ? "NO_RESULTS" : "BEFORE_CACHE";
     }

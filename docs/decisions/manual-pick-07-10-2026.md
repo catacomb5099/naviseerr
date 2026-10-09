@@ -114,10 +114,12 @@ Decisions, server side (the client words them):
 
 1. **The reason is read off the columns the rows already have**, no new table, no migration.
    `download_tasks.search_id` and `failure_reason`, `album_searches.search_id`, `outcome` and
-   `finished_at` join the two cache reads. Song: `ALREADY_IN_LIBRARY`; then `NO_OWN_SEARCH` (a file but
-   no search id of its own: the album folder or a person gave it the file; it was never searched for by
-   itself); then `SEARCH_FAILED` / `SOULSEEK_OFFLINE` (no list, no file, and a failure code that means
-   the search never completed: `SEARCH_FAILED`, `TIMED_OUT`, `SOULSEEK_OFFLINE`); then `NO_RESULTS`
+   `finished_at` join the two cache reads. Song: `ALREADY_IN_LIBRARY`; then `NO_OWN_SEARCH` (a file the
+   album folder or a person gave it, by the candidate's `source`, and no search id of its own: it was
+   never searched for by itself); then `SEARCH_FAILED` / `SOULSEEK_OFFLINE` / `CANCELLED` (no list, no
+   file, and a failure code that means the search never completed: `SEARCH_FAILED`, `TIMED_OUT`,
+   `SOULSEEK_OFFLINE`, `CANCELLED`; the last two under their own name, since the client already words
+   those codes and a song cancelled while searching must match the album view); then `NO_RESULTS`
    (completed, nothing relevant); else `BEFORE_CACHE`. Album: the outcome as it is (`NO_WHOLE_FOLDER`,
    `SEARCH_FAILED`, `NOTHING_TO_SEARCH`, `CANCELLED`), `BEFORE_CACHE` only for a folder found with nothing
    remembered. `SOULSEEK_OFFLINE` stays its own reason because the card already words that code;
