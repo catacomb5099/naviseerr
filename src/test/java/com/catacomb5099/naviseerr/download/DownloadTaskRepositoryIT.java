@@ -1064,7 +1064,7 @@ class DownloadTaskRepositoryIT {
         UUID fetchedAgain = succeededSong(playlist, "s2", "x\\b.flac", NOW);
         repository.setLibraryPath(filed, "/music/A/a/a.flac").block();
         repository.setLibraryPath(fetchedAgain, "/music/B/b/b.flac").block();
-        // Reset in place with its old path still on the row (its file went missing and is fetched again).
+        // Reset in place with its old path still on the row (no path does this today; hardening).
         template.getDatabaseClient().sql("UPDATE download_tasks SET phase = 'SEARCH_INIT' WHERE task_id = :id")
                 .bind("id", fetchedAgain).fetch().rowsUpdated().block();
 

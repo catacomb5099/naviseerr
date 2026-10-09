@@ -117,6 +117,12 @@ predicted it: it is `RETRY_SQL` with a `task_id` filter.
 
 ### Known race, recorded 07-10-2026, closed 09-10-2026
 
+Closed on 09-10-2026 with exactly the statement recorded below, `REOPEN_SQL`, run by `concludeDownloads()`
+before `CONCLUDE_SQL` on every pass; it also clears `failure_reason` and `organised_at`, as `RETRY_SQL`'s
+reopen does, so the playlist file is written again once the song lands. Why it mattered for playlists, and
+the rest of the post-processing story: [playlist-post-processing-09-10-2026.md](playlist-post-processing-09-10-2026.md).
+The 07-10 record, as written:
+
 A one-song retry on a live download can commit between the conclusion statement's snapshot (every song
 terminal) and its write. The download then reads failed or partly downloaded while one song is live; the
 song still runs and finishes, but the download is never re-concluded, so the card keeps a terminal word
@@ -126,7 +132,5 @@ time. The recorded fix, the loop's own level-triggered style: one idempotent sta
 conclusion, `UPDATE downloads SET status = 'IN_PROGRESS', finished_at = NULL WHERE status IN ('FAILED',
 'PARTIAL_SUCCESS', 'SUCCEEDED') AND EXISTS (SELECT 1 FROM download_tasks t WHERE t.download_id =
 downloads.download_id AND t.phase NOT IN ('SUCCEEDED', 'FAILED'))`, driven by `idx_download_tasks_due`.
-Shipped without it on 07-10-2026. Closed on 09-10-2026 with exactly that statement, `REOPEN_SQL`, run by
-`concludeDownloads()` before `CONCLUDE_SQL` on every pass; it also clears `failure_reason` and `organised_at`,
-as `RETRY_SQL`'s reopen does, so the playlist file is written again once the song lands. Why it mattered for
-playlists, and the rest of the post-processing story: [playlist-post-processing-09-10-2026.md](playlist-post-processing-09-10-2026.md).
+Shipped without it (a `ponytail:` note on `RETRY_SQL` names the window and this statement); add it the
+first time a stuck card is seen.

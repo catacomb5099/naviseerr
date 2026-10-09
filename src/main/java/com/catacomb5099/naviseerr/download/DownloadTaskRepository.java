@@ -412,9 +412,10 @@ public class DownloadTaskRepository {
      * its songs', so a stale one would outrank the fresh rows. {@code organised_at = NULL}: the playlist
      * file is rewritten whole once the retried songs are filed; songs already filed keep library_path.
      *
-     * <p>A one-song retry on a LIVE parent can land between CONCLUDE_SQL's snapshot (every song
-     * terminal) and its write, leaving a concluded parent with one live song. REOPEN_SQL, run before
-     * CONCLUDE_SQL every pass, puts such a parent back to IN_PROGRESS (09-10-2026).
+     * <p>ponytail: a one-song retry on a LIVE parent can land between CONCLUDE_SQL's snapshot (every
+     * song terminal) and its write, leaving a concluded parent with one live song: the song still runs
+     * and finishes, but the card keeps its terminal word. Window: one conclude statement every pass.
+     * Closed 09-10-2026: REOPEN_SQL, run before CONCLUDE_SQL every pass, is that reopen.
      */
     private static final String RETRY_SQL = """
             WITH reset AS (
@@ -626,8 +627,9 @@ public class DownloadTaskRepository {
 
     /**
      * The filed songs of one download in track order, with what a playlist line shows for each. Only
-     * SUCCEEDED rows: a song reset in place while it still carries its old path (a file that went
-     * missing and is fetched again) is not listed until it has landed again.
+     * SUCCEEDED rows: hardening for any future path that resets a SUCCEEDED row in place while it still
+     * carries its old path (today's retry and pick reset FAILED rows only, which never carry one); such
+     * a song is not listed until it has landed again.
      */
     private static final String PLAYLIST_ENTRIES_SQL = """
             SELECT t.library_path, s.title, s.artists, s.duration_seconds
