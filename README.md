@@ -133,7 +133,9 @@ used, inside this one) before `docker compose up`; until then every `docker comp
   and starting anyway would fill a new empty folder on the system disk. Mount it (or fix the path in
   `.env`) and `docker compose up -d`. If you emptied the folder on purpose, say so with
   `touch /path/to/music/.naviseerr-library`. That hidden file is how naviseerr recognises its library;
-  slskd never shares it, and Navidrome and Jellyfin ignore it. Leave it there.
+  slskd never shares it, and Navidrome and Jellyfin ignore it. Leave it there. The check only fires
+  when the folder is completely empty: a mount point that still holds something (a `lost+found`
+  folder, say) is not caught.
 - **"Username taken".** The web app keeps its "Not connected to Soulseek" strip, and
   `docker compose logs slskd` says "invalid username or password": someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,

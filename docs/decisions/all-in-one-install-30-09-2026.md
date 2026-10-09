@@ -101,11 +101,17 @@ per song, while the web app said "Downloaded". So:
   path without `./` now resolves against the compose folder instead of being read as a named volume.
 - `setup.sh` tests the folder as `PUID:PGID` (busybox `su` after creating the user if needed): root
   can write where naviseerr cannot, and stat arithmetic lies on ACLs, NFS and Docker Desktop. The
-  test file doubles as a marker, `.naviseerr-library`, and the host path of the last good start is
-  kept in the config volume (`/config/library.path`). Same path, folder empty, marker gone means
-  "the disk is not mounted", and setup stops rather than fill the mount point; a new path with a new
-  empty folder is a library moved on purpose and is accepted. slskd gets a share filter for the
-  marker. An empty library is a note on stdout, never an error: every install starts empty.
+  test writes and removes a fresh file, never an existing one: touching a file you already own says
+  nothing about the folder, and (found in review) the owner-only marker left by an earlier `PUID`
+  refused a folder the new user could write to, with a fix that was already done. A hidden marker,
+  `.naviseerr-library`, is left in the folder, and the host path of the last good start is kept in
+  the config volume (`/config/library.path`). Same path, folder empty, marker gone means "the disk
+  is not mounted", and setup stops rather than fill the mount point; a new path with a new empty
+  folder is a library moved on purpose and is accepted. slskd gets a share filter for the marker.
+  Known limits of that detector: it fires only on a completely empty folder (a mount point holding
+  `lost+found` or `.DS_Store` passes), and an install whose first start ran before the disk was
+  mounted leaves a marker under the mount point, so a later unmount is not caught there. An empty
+  library is a note on stdout, never an error: every install starts empty.
 - `PUID`/`PGID` must be numbers, checked before the first `chown`; the library `chown` tolerates a
   share that refuses root (`root_squash`) and lets the write test speak.
 - Every problem is one plain-words block to stderr (`problem()`), then `exit 1`.
@@ -114,9 +120,10 @@ Docker Desktop caveat: a bind mount from macOS or Windows shows as `0:0` with th
 bits and ignores ownership, so the "belongs to 0:0" numbers in the message are Docker's, and the fix
 there is the host folder's mode, which the message says.
 
-Checked: `docker/setup-check.sh` (24 checks: the username rules plus the marker, the note, the
+Checked: `docker/setup-check.sh` (26 checks: the username rules plus the marker, the note, the
 remembered path, the slskd filter, a 1001-owned folder refusing 1000, marker gone from an empty
-folder, a moved library, `PUID=abc`), the sealed e2e stack (`scripts/e2e/playlist-file.sh`) after the
+folder, a moved library, a changed `PUID`/`PGID` after a first start, a folder made read-only after
+a first start, `PUID=abc`), the sealed e2e stack (`scripts/e2e/playlist-file.sh`) after the
 compose change, and on this Mac: unset and empty `LIBRARY_DIR`, a missing path, a `chmod 555`
 folder, the first start's marker and note, the swapped-for-empty folder. Not checked here: Linux
 ownership on a real bind mount, a real NAS unmount with `root_squash`, Windows paths, rootless Docker.

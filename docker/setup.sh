@@ -45,12 +45,12 @@ if [ "$(stat -c %u /library)" = 0 ]; then chown "$PUID:$PGID" /library 2>/dev/nu
 
 # Can PUID:PGID write into your library? Tested AS that user: root can write where naviseerr and
 # slskd cannot, so a plain test here would lie. busybox has su; the user may not exist in this
-# container yet.
+# container yet (named after the id, so a new PUID/PGID in a reused container gets its own).
 if [ "$PUID" = 0 ]; then usr=root; else
   grp=$(awk -F: -v g="$PGID" '$3==g{print $1;exit}' /etc/group)
-  [ -n "$grp" ] || { addgroup -g "$PGID" nvs; grp=nvs; }
+  [ -n "$grp" ] || { addgroup -g "$PGID" "nvs$PGID"; grp=nvs$PGID; }
   usr=$(awk -F: -v u="$PUID" '$3==u{print $1;exit}' /etc/passwd)
-  [ -n "$usr" ] || { adduser -D -H -u "$PUID" -G "$grp" -s /bin/sh nvs; usr=nvs; }
+  [ -n "$usr" ] || { adduser -D -H -u "$PUID" -G "$grp" -s /bin/sh "nvs$PUID"; usr=nvs$PUID; }
 fi
 as_user() { su "$usr" -s /bin/sh -c "$*"; }
 # A hidden marker file in the library, plus the path it had on the last good start (/config), tells
@@ -64,11 +64,14 @@ if [ -f "$record" ] && [ "$(cat "$record")" = "$LIBRARY_DIR" ] && [ ! -e "$marke
 "Is the disk or network share mounted? Mount it, or fix LIBRARY_DIR in .env.
 If you emptied the folder on purpose:    touch '$LIBRARY_DIR/.naviseerr-library'"
 fi
-as_user "touch $marker" 2>/dev/null || problem \
+# A fresh file, never the marker: touching a file you already own says nothing about the folder, and
+# a marker left by an earlier PUID (owner-only) would refuse a folder the new user can write to.
+as_user "touch $marker.$$ && rm $marker.$$" 2>/dev/null || problem \
   "LIBRARY_DIR=$LIBRARY_DIR cannot be written to by user $PUID:$PGID (PUID:PGID in .env), the user naviseerr and slskd run as. It belongs to $(stat -c %u:%g /library), mode $(stat -c %a /library)." \
 "Linux: give the folder to that user:    sudo chown $PUID:$PGID '$LIBRARY_DIR'
 or set PUID and PGID in .env to the folder's owner (ls -ln '$LIBRARY_DIR' shows the numbers).
 Docker Desktop (macOS, Windows): make the folder writable by your own account; PUID and PGID play no part there."
+[ -e "$marker" ] || as_user "touch $marker"
 
 # Generated values live in secrets.env: made once, reused on every later start.
 secrets=/config/secrets.env

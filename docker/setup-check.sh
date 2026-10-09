@@ -2,7 +2,8 @@
 # Runs setup.sh in alpine:3.20 against throwaway folders and checks the username rule (a name is made
 # up once, kept across runs, a name from .env wins and the made-up one stays stored, a bad .env name
 # still stops setup) and the library checks (marker file, "empty" note, a folder PUID:PGID cannot
-# write, the marker gone from an empty folder, a moved library, PUID not a number). Needs only Docker.
+# write, the marker gone from an empty folder, a moved library, a changed PUID/PGID after a first start,
+# a folder made read-only after a first start, PUID not a number). Needs only Docker.
 # Usage: docker/setup-check.sh  (prints OK, or stops at the first failing check).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -59,6 +60,10 @@ check "$rc" 0 "a new empty folder at another LIBRARY_DIR is accepted (moved on p
 rc=0; out=$(inside 'sh /setup.sh >/dev/null; sh /setup.sh') || rc=$?
 check "$rc" 0 "a second start on a library holding only the marker is fine"
 check "$(printf '%s\n' "$out" | grep -c 'is empty')" 1 "and still says the library is empty"
+rc=0; out=$(inside 'sh /setup.sh >/dev/null; chown 1001:1001 /library; PUID=1001 PGID=1001 sh /setup.sh') || rc=$?
+check "$rc" 0 "a changed PUID/PGID is accepted once the folder is theirs (the old owner's marker does not count)"
+rc=0; out=$(inside 'sh /setup.sh >/dev/null; chmod 555 /library; sh /setup.sh') || rc=$?
+check "$rc" 1 "a folder made read-only after a first start still stops setup (the marker you own is not the test)"
 rc=0; out=$(inside 'sh /setup.sh' -e PUID=abc) || rc=$?
 check "$rc" 1 "PUID=abc stops setup"
 check "$(printf '%s\n' "$out" | grep -c 'not a number')" 1 "and says so"
