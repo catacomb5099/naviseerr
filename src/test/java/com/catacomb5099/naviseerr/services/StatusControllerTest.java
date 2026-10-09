@@ -84,6 +84,22 @@ class StatusControllerTest {
                 .jsonPath("$.soulseek.username").isEmpty();
     }
 
+    /** Found in review: a stalled (not failing) /options used to time the whole answer out into UNREACHABLE. */
+    @Test
+    void optionsCallStallingAlone_keepsTheStatus_withoutAName() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.never());
+
+        http.mutate().responseTimeout(java.time.Duration.ofSeconds(10)).build()
+                .get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.soulseek.loggedIn").isEqualTo(true)
+                .jsonPath("$.soulseek.state").isEqualTo("Connected, LoggedIn")
+                .jsonPath("$.soulseek.detail").isEmpty()
+                .jsonPath("$.soulseek.username").isEmpty();
+    }
+
     @Test
     void blankOrMissingUsername_isNull() {
         when(slskdService.getServerState()).thenReturn(Mono.just(state("Disconnected", false, false)));

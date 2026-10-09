@@ -32,12 +32,13 @@ public class StatusController {
     @GetMapping("/status")
     Mono<StatusView> status() {
         // The configured name from slskd's options: known before any login, which is when the strip
-        // shows it. Not knowing it (an error on that call alone) is null, never a failed status.
+        // shows it. Not knowing it (an error or a stall on that call alone) is null, never a failed
+        // status: each call has its own budget, so only /server can make slskd UNREACHABLE.
         Mono<Optional<String>> username = slskdService.getOptions()
+                .timeout(SLSKD_BUDGET)
                 .map(o -> Optional.ofNullable(o.soulseek()).map(SlskdOptions.Soulseek::username).filter(u -> !u.isBlank()))
                 .onErrorReturn(Optional.empty());
-        return Mono.zip(slskdService.getServerState(), username)
-                .timeout(SLSKD_BUDGET)
+        return Mono.zip(slskdService.getServerState().timeout(SLSKD_BUDGET), username)
                 .map(t -> new SoulseekStatus(t.getT1().isConnected(), t.getT1().isLoggedIn(), t.getT1().getState(), null,
                         t.getT2().orElse(null)))
                 .onErrorResume(e -> Mono.just(new SoulseekStatus(false, false, UNREACHABLE,
