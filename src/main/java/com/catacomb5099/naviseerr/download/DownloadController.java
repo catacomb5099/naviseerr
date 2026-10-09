@@ -55,13 +55,17 @@ public class DownloadController {
      * ytmusic-adapter what the id is at admission time, instead of the client gluing a title and an
      * artist together into a string the matcher then had to take apart again. It also makes a track
      * whose title contains a {@code /} requestable, which it was not while the title was the path.
+     *
+     * <p>{@code force}: a person said "download it again" knowing a finished copy exists (the file is
+     * gone and the server cannot tell, or they want it anyway); only a live duplicate refuses then.
      */
     @PostMapping("/download/song/{songId}")
-    Mono<ResponseEntity<?>> downloadSong(@PathVariable String songId) {
+    Mono<ResponseEntity<?>> downloadSong(@PathVariable String songId,
+                                         @RequestParam(defaultValue = "false") boolean force) {
         if (songId == null || songId.isBlank()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return request(songId, DownloadType.SONG);
+        return request(songId, DownloadType.SONG, force);
     }
 
     /**
@@ -73,15 +77,16 @@ public class DownloadController {
      * different ytmusic-adapter endpoints, and guessing from an id prefix would be a heuristic that
      * silently picks the wrong one the first time YouTube changes a prefix. An unparseable value is
      * rejected by Spring before this method runs; {@code SONG} is rejected here, since a single
-     * track has its own route.
+     * track has its own route. {@code force} as on the song route.
      */
     @PostMapping("/download/collection/{collectionId}")
     Mono<ResponseEntity<?>> downloadCollection(@PathVariable String collectionId,
-                                               @RequestParam DownloadType type) {
+                                               @RequestParam DownloadType type,
+                                               @RequestParam(defaultValue = "false") boolean force) {
         if (collectionId == null || collectionId.isBlank() || !type.isCollection()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return request(collectionId, type);
+        return request(collectionId, type, force);
     }
 
     /**
@@ -91,10 +96,11 @@ public class DownloadController {
      * request thread. A FAILED or cancelled download is not "existing": nothing was fetched, so asking
      * again is a new row. See {@link ActiveDownloadRepository#findCurrent}. Nor is a finished one
      * whose files have since gone from the library (09-10-2026): people delete and move files, and a
-     * refusal then leaves no way to get the song back. See {@link DownloadService#filesMissing}.
+     * refusal then leaves no way to get the song back. See {@link DownloadService#filesMissing}. With
+     * {@code force}, a finished one is not "existing" either: the person knows, and asked anyway.
      */
-    private Mono<ResponseEntity<?>> request(String id, DownloadType type) {
-        return activeDownloadRepository.findCurrent(type, id)
+    private Mono<ResponseEntity<?>> request(String id, DownloadType type, boolean force) {
+        return activeDownloadRepository.findCurrent(type, id, force)
                 // A live duplicate always refuses. A finished one refuses only while its files are still
                 // in the library; with any of them gone the request goes through, and admission fetches
                 // just the missing songs. With the organiser off nothing is known to be missing.

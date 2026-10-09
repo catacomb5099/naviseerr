@@ -77,6 +77,14 @@ never let a second row reach it.
    half-deleted album needs the deliberate override.
 5. **No DDL, no new query.** The paths come from the existing `playlistEntries` query; the check is a stat
    over an existing column.
+6. **A deliberate override for what the server cannot verify: `?force=true`.** Where the organiser is off
+   (the owner's laptop, a remote slskd) or a song was never filed, decision 3 keeps the 409, so the web
+   client's Downloads page offers "Download again" on a finished row. The request then carries
+   `force=true`, and `findCurrent(type, id, liveOnly=true)` counts only a queued or running duplicate
+   (the CURATED rule applied on demand): a finished one no longer stands in the way, a live one still
+   does. The new row goes through admission as usual, so with the organiser on the songs still in the
+   library are created SUCCEEDED and not fetched twice. Flip: hide the button (client) or ignore the
+   parameter (server) to go back to "merge only decision 1".
 
 **Consequences.**
 
