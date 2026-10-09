@@ -17,3 +17,9 @@ services:
     build: ${E2E_CLIENT_CONTEXT:-https://github.com/catacomb5099/naviseerr-client.git#move-fast-break-things}
   ytmusic-adapter:
     build: ${E2E_ADAPTER_CONTEXT:-https://github.com/catacomb5099/ytmusicapi.git#move-fast-break-things}
+  # The playlist maker, sealed like slskd: no run is started here, and a sealed curator proves that its
+  # health check and the token hand-over from setup need no internet. naviseerr reaches it over the
+  # sealed network. Behind a proxy: E2E_CURATOR_CONTEXT=../croissant (its certs/*.pem are picked up).
+  croissant:
+    build: ${E2E_CURATOR_CONTEXT:-https://github.com/catacomb5099/croissant.git#main}
+    networks: [sealed]

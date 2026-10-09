@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Sealed end-to-end check of the all-in-one install: the stack comes up with slskd cut off from the
-# internet (compose.e2e.yaml), a partly downloaded 4-song playlist (3 done, 1 failed) is staged the way
-# the download loop leaves one, the organiser files the songs and writes the .m3u8, the failed song is
-# retried through the API and its landing simulated, the .m3u8 is rewritten with it, and a throwaway
-# Navidrome imports it with the 4 songs in order. Never touches the real install (project naviseerr-e2e, its own volumes, port
+# Sealed end-to-end check of the all-in-one install: the stack comes up with slskd and the playlist
+# maker (croissant) cut off from the internet (compose.e2e.yaml), croissant answers naviseerr with the
+# token setup generated and lists a seeded edition, a partly downloaded 4-song playlist (3 done, 1 failed)
+# is staged the way the download loop leaves one, the organiser files the songs and writes the .m3u8, the
+# failed song is retried through the API and its landing simulated, the .m3u8 is rewritten with it, and a
+# throwaway Navidrome imports it with the 4 songs in order. Never touches the real install (project naviseerr-e2e, its own volumes, port
 # 5096, library under build/e2e/). `playlist-file.sh down` removes everything it made; KEEP=1 leaves
 # the stack up to look at. See README.md next to this file.
 set -euo pipefail
@@ -24,7 +25,7 @@ psql_() { compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -tA -U naviseerr -
 sub() { curl -fsS "http://localhost:$ND_PORT/rest/$1?u=admin&p=$ND_PASS&v=1.16.1&c=e2e&f=json${2:-}"; }
 scan_done() { sub getScanStatus | jq -e '.["subsonic-response"].scanStatus.scanning == false'; }
 say() { printf '\n== %s\n' "$*"; }
-fail() { printf 'FAIL: %s\n' "$*" >&2; compose logs --tail 40 naviseerr slskd >&2 || true; exit 1; }
+fail() { printf 'FAIL: %s\n' "$*" >&2; compose logs --tail 40 naviseerr slskd croissant >&2 || true; exit 1; }
 wait_for() { local n=$1; shift; for _ in $(seq 1 "$n"); do "$@" >/dev/null 2>&1 && return 0; sleep 2; done; return 1; }
 down() { compose down -v >/dev/null 2>&1 || true; docker rm -f "$ND" >/dev/null 2>&1 || true; }
 [ "${1:-}" = down ] && { down; exit 0; }
@@ -43,6 +44,24 @@ grep -q '"isConnected":false' <<<"$state" || fail "slskd reached Soulseek: $stat
 status=$(curl -fsS "http://localhost:$PORT/api/status")
 grep -q '"connected":false' <<<"$status" || fail "GET /status does not say disconnected: $status"
 echo "slskd: $(jq -r .state <<<"$state"); GET /status: $(jq -c .soulseek <<<"$status")"
+
+say "2b. the playlist maker is up, naviseerr reaches it with the token setup generated, and a seeded edition shows"
+# No curl in croissant's image; python is. Its own HEALTHCHECK runs the same line.
+curator_up() { compose exec -T croissant python -c "import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=3)"; }
+wait_for 30 curator_up || fail "croissant not healthy after 60 s"
+# enabled:true needs CURATOR_TOKEN on naviseerr's side (from /config/naviseerr.properties, not its environment);
+# a 502 body here means the two sides hold different tokens; enabled:false means naviseerr has none.
+sp=$(curl -sS "http://localhost:$PORT/api/suggested-playlists")
+[ "$(jq -r .enabled <<<"$sp")" = true ] || fail "GET /suggested-playlists is not enabled:true: $sp"
+[ "$(jq -r '.playlists | length' <<<"$sp")" = 0 ] || fail "expected no editions on a fresh install: $sp"
+# One edition dropped where croissant keeps them (output/<category>/<date>.json), as PUID:PGID like its own.
+docker run --rm -v "${P}_curator-output:/out" -v "$E2E:/e2e:ro" alpine:3.20 \
+  sh -c "mkdir -p /out/80s-indie-pop && cp /e2e/edition.json /out/80s-indie-pop/$(date +%F).json && chown -R $PUID:$PGID /out"
+sp=$(curl -sS "http://localhost:$PORT/api/suggested-playlists")
+[ "$(jq -r '.playlists[] | select(.category == "80s-indie-pop") | .trackCount' <<<"$sp")" = 3 ] || fail "seeded edition not listed: $sp"
+ed=$(curl -sS "http://localhost:$PORT/api/suggested-playlists/80s-indie-pop")
+[ "$(jq -r '.tracks | length' <<<"$ed")" = 3 ] || fail "seeded edition has no songs: $ed"
+echo "suggested playlists: enabled; '$(jq -r .title <<<"$ed")' ($(jq -r .editionDate <<<"$ed")) listed with 3 songs"
 
 say "3. stage a partly downloaded 4-song playlist: 3 done (files into slskd's downloads volume), 1 failed (rows into the database)"
 song() { ffmpeg -v error -y -f lavfi -i "sine=frequency=$((400 + $1 * 100)):duration=2" \
@@ -105,5 +124,5 @@ pl=$(sub getPlaylists | jq -c --arg t "$TITLE" '.["subsonic-response"].playlists
 titles=$(sub getPlaylist "&id=$(jq -r .id <<<"$pl")" | jq -r '.["subsonic-response"].playlist.entry[].title' | paste -sd, -)
 [ "$titles" = 'Alpha Song,Beta Tune,Gamma Track,Delta Dance' ] || fail "titles/order: $titles"
 
-say "PASS: slskd sealed, 3 songs filed then a 4th after a retry through the API, .m3u8 byte-exact both times, Navidrome shows '$TITLE' with 4 songs in order"
+say "PASS: slskd sealed, curator up with the generated token and a seeded edition listed, 3 songs filed then a 4th after a retry through the API, .m3u8 byte-exact both times, Navidrome shows '$TITLE' with 4 songs in order"
 [ "${KEEP:-}" = 1 ] && echo "KEEP=1: stack left up (web app http://localhost:$PORT, Navidrome http://localhost:$ND_PORT admin/$ND_PASS); '$0 down' removes it" || down
