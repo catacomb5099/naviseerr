@@ -14,7 +14,10 @@ import java.util.Objects;
 /**
  * An artist as the client browses it: header plus the shelves YouTube Music shows on the artist
  * page, expressed in the same {@code schema.response} DTOs the search routes already emit so the
- * client reuses its search cards unchanged. Every list is non-null and capped at {@value #MAX}.
+ * client reuses its search cards unchanged. Every list is non-null and capped at {@value #MAX},
+ * except {@code albums}, capped at {@value #MAX_ALBUMS}: since adapter 12-10-2026 it is the artist's
+ * whole discography ordered by YouTube's popularity (Black Sabbath: 46, 'Paranoid' first) rather
+ * than the page's ten newest releases, and a cap of ten would cut it back to the reissues.
  *
  * @param id             the id the client REQUESTED (the adapter echoes it back verbatim anyway).
  * @param iconURL        capital {@code URL}, like {@code Track}/{@code Album}; {@code ""} when none.
@@ -28,7 +31,9 @@ import java.util.Objects;
  *                       sends none.
  * @param albums         {@code artists} is {@code [this artist's name]} and {@code artistIds} is
  *                       {@code [the requested id]}: the shelf lists only the artist's own releases
- *                       and the adapter gives no per-album artists.
+ *                       and the adapter gives no per-album artists. In the adapter's order, which is
+ *                       YouTube's popularity ranking (or the page's newest-first shelf from an older
+ *                       adapter, or when the discography lookup failed).
  * @param playlists      YouTube Music's own featured playlists that its search links to this artist,
  *                       minus those titled after the artist or a related artist, kept only when the
  *                       playlist's track list (its first 100 tracks) credits the artist by name.
@@ -42,6 +47,8 @@ public record ArtistView(String id, String name, String iconURL, String descript
                          List<Playlist> playlists, List<Artist> similarArtists) {
 
     static final int MAX = 10;
+    /** The adapter sends at most 100 (its own page size for the discography). */
+    static final int MAX_ALBUMS = 100;
 
     static ArtistView from(YtMusicDetailResponse.Artist artist, List<Playlist> playlists, String requestedId) {
         List<String> ownName = artist.getName() == null ? List.of() : List.of(artist.getName());
@@ -62,14 +69,14 @@ public record ArtistView(String id, String name, String iconURL, String descript
                 .toList();
         return new ArtistView(requestedId, orEmpty(artist.getName()), orEmpty(artist.getThumbnailUrl()),
                 artist.getDescription(), artist.getSubscribers(), topSongs,
-                albums(artist.getAlbums(), ownName, ownId), albums(artist.getSingles(), ownName, ownId),
+                albums(artist.getAlbums(), ownName, ownId, MAX_ALBUMS), albums(artist.getSingles(), ownName, ownId, MAX),
                 orEmpty(playlists).stream().limit(MAX).toList(), similar);
     }
 
-    private static List<Album> albums(List<YtMusicDetailResponse.AlbumStub> stubs, List<String> ownName, List<String> ownId) {
+    private static List<Album> albums(List<YtMusicDetailResponse.AlbumStub> stubs, List<String> ownName, List<String> ownId, int max) {
         return orEmpty(stubs).stream()
                 .filter(stub -> stub.getBrowseId() != null)
-                .limit(MAX)
+                .limit(max)
                 .map(stub -> new Album(stub.getBrowseId(), orEmpty(stub.getThumbnailUrl()), orEmpty(stub.getTitle()),
                         ownName, ownId, stub.getYear() == null ? 0 : stub.getYear()))
                 .toList();

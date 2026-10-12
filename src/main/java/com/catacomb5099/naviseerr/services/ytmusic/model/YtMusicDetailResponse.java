@@ -199,7 +199,12 @@ public final class YtMusicDetailResponse {
         private List<RelatedArtist> related;
     }
 
-    /** One entry of an artist's {@code albums[]} or {@code singles[]}. Carries no artists of its own. */
+    /**
+     * One entry of an artist's {@code albums[]} or {@code singles[]}. Carries no artists of its own.
+     * {@code albums[]} is the whole discography by YouTube's popularity (up to 100) from adapter
+     * 12-10-2026 on, the page's ten newest releases from an older one; {@code singles[]} is always
+     * the page shelf.
+     */
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
