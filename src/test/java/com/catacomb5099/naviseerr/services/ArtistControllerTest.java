@@ -82,6 +82,29 @@ class ArtistControllerTest {
                 .thenAnswer(call -> Mono.just(tracksBy(call.getArgument(0), "Someone Else", artist)));
     }
 
+    /**
+     * The adapter's albums list is the whole discography by popularity (Black Sabbath: 46), so the
+     * shelf cap of ten does not apply to it; singles keep the cap.
+     */
+    @Test
+    void albums_passThroughBeyondTen_singlesStayCappedAtTen() {
+        YtMusicDetailResponse.Artist sabbath = pixies();
+        sabbath.setAlbums(IntStream.range(0, 46).mapToObj(i -> YtMusicDetailResponse.AlbumStub.builder()
+                .browseId("MPREb_album" + i).title("Album " + i).year(1970 + i).build()).toList());
+        sabbath.setSingles(IntStream.range(0, 12).mapToObj(i -> YtMusicDetailResponse.AlbumStub.builder()
+                .browseId("MPREb_single" + i).title("Single " + i).build()).toList());
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(sabbath));
+        when(ytMusicService.getResults(anyString(), eq(YtMusicSearchType.FEATURED_PLAYLISTS), anyInt())).thenReturn(Mono.just(playlists(0)));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.albums.length()").isEqualTo(46)
+                .jsonPath("$.albums[0].id").isEqualTo("MPREb_album0")
+                .jsonPath("$.albums[45].id").isEqualTo("MPREb_album45")
+                .jsonPath("$.singles.length()").isEqualTo(10);
+    }
+
     @Test
     void realAdapterShape_mapsOntoTheSearchDtos_withTheContractsKeyNames() {
         when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(pixies()));
