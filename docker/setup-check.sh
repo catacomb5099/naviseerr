@@ -68,4 +68,7 @@ check "$rc" 1 "a folder made read-only after a first start still stops setup (th
 rc=0; out=$(inside 'sh /setup.sh' -e PUID=abc) || rc=$?
 check "$rc" 1 "PUID=abc stops setup"
 check "$(printf '%s\n' "$out" | grep -c 'not a number')" 1 "and says so"
+rc=0; out=$(inside 'chown 1002:1003 /library; sh /setup.sh; stat -c %u:%g /config' -e RUN_AS=1002:1003) || rc=$?
+check "$rc" 0 "RUN_AS=1002:1003 (the copy-paste install's one setting) is accepted"
+check "$(printf '%s\n' "$out" | tail -1)" 1002:1003 "and wins over PUID/PGID"
 echo "OK"
