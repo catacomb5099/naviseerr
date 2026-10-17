@@ -57,6 +57,9 @@ public class TrackMatchingService {
             + " remastered remaster version ft feat featuring from the at with topic vevo closed captioned stereo dir bonus"
             + " track show colors movie ver clip full");
     private static final Pattern BRACKETED = Pattern.compile("[\\(\\[]([^\\)\\]]*)[\\)\\]]");
+    /** A trailing dash segment that tags the file rather than naming the song: "Remastered 2021", "2011 Remaster", "320 kbps", "Mono". */
+    private static final Pattern TAG_SEGMENT = Pattern.compile(
+            "(?i)^(?:\\d{4}\\s+)?(?:remaster(?:ed)?|mono|stereo|explicit|\\d{2,3}\\s*kbps|flac|mp3)(?:\\s+\\d{4})?$");
     private static final Pattern CREDIT_BRACKET = Pattern.compile("\\s*(feat|ft|with|dir|prod)\\b", Pattern.CASE_INSENSITIVE);
 
     /**
@@ -168,7 +171,8 @@ public class TrackMatchingService {
                 .count();
         boolean containsBothParts = partsPresent >= 2;
 
-        if (tokenScore < MIN_TOKEN_SCORE && partialScore < MIN_PARTIAL_SCORE && !containsBothParts) {
+        if (tokenScore < MIN_TOKEN_SCORE && partialScore < MIN_PARTIAL_SCORE && !containsBothParts
+                && !sameTitleOnceNumbersAreKept(cleanTitle, filename)) {
             return Match.NONE;
         }
         boolean requestedVersion = !hasUnrequestedVersionWord(cleanTitle, filename)
@@ -276,7 +280,8 @@ public class TrackMatchingService {
         String[] segments = stem.split("\\s+-\\s+");
         String last = null;
         for (int i = segments.length - 1; i >= 0 && last == null; i--) {
-            if (!segments[i].isBlank()) last = segments[i];
+            // "01 - Smells Like Teen Spirit - Remastered 2021": the tag after the title is not the title's segment.
+            if (!segments[i].isBlank() && !TAG_SEGMENT.matcher(segments[i].strip()).matches()) last = segments[i];
         }
         if (last == null) {
             return false;
@@ -293,6 +298,19 @@ public class TrackMatchingService {
             }
         }
         return false;
+    }
+
+    /**
+     * normalize() drops a leading "NN - " as a track number and every 4-digit number as a year, which erases a
+     * title that is nothing but a number ("1979", "22") on both sides and fails the scores above. The file's own
+     * title (after its track number, brackets off), letters and digits only, against the request's settles it.
+     */
+    private static boolean sameTitleOnceNumbersAreKept(String request, String filename) {
+        String title = squash(requestTitle(request).split("\\(")[0]);
+        String own = squash(filename.replaceFirst("(?i)\\.[a-z0-9]+$", "")
+                .replaceFirst("^(?:\\d[-.](?=\\d\\d))?\\d{1,3}[\\s._-]+", "")
+                .replaceAll("[\\(\\[][^\\)\\]]*[\\)\\]]", ""));
+        return !title.isEmpty() && own.equals(title);
     }
 
     /** The request is "title - artist"; the artist is what follows the last " - ". */
