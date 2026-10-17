@@ -41,7 +41,7 @@ services:
   # Wraps ytmusicapi and backs search. Built straight from GitHub (that repo is named ytmusicapi), so
   # no second checkout is needed. Health check comes from the image's own HEALTHCHECK.
   ytmusic-adapter:
-    build: https://github.com/catacomb5099/ytmusicapi.git#move-fast-break-things
+    build: https://github.com/catacomb5099/ytmusicapi.git#master
     restart: unless-stopped
     environment:
       YTM_LOG_LEVEL: ${YTM_LOG_LEVEL:-INFO}
@@ -164,10 +164,9 @@ services:
       - *library
 
   # The web app, and the address you open: http://<this machine>:5056. It forwards /api to naviseerr.
-  # Built from GitHub: needs naviseerr-client's container change (its Dockerfile + Caddyfile) merged
-  # into move-fast-break-things first.
+  # Built from GitHub, from the client's only branch, main.
   client:
-    build: https://github.com/catacomb5099/naviseerr-client.git#move-fast-break-things
+    build: https://github.com/catacomb5099/naviseerr-client.git#main
     restart: unless-stopped
     depends_on:
       naviseerr:
