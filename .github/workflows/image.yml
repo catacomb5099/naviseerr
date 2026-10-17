@@ -1,4 +1,6 @@
-# Publishes this repo's Docker image to GitHub Packages: ghcr.io/${{ github.repository }}.
+# Publishes this repo's two Docker images to GitHub Packages: ghcr.io/catacomb5099/naviseerr (the app)
+# and ghcr.io/catacomb5099/naviseerr-setup (docker/setup.sh, run once before the app starts).
+# Both get the same tags:
 #   push to move-fast-break-things -> :develop and :<next version>-develop.<run number>
 #                                     (the test channel: built on every change, may break)
 #   push of a tag like v1.2.3       -> :1.2.3, :1.2, :1 and :latest (stable)
@@ -24,6 +26,15 @@ concurrency:
 jobs:
   image:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: naviseerr
+            context: .
+            file: Dockerfile
+          - image: naviseerr-setup
+            context: docker
+            file: docker/setup.Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +58,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/catacomb5099/${{ matrix.image }}
           flavor: latest=false
           tags: |
             type=raw,value=develop,enable=${{ github.ref == 'refs/heads/move-fast-break-things' }}
@@ -60,10 +71,11 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           platforms: ${{ github.event_name == 'push' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
