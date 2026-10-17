@@ -16,7 +16,8 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*.*.*']
-  pull_request:
+  # No pull_request here: master has no Dockerfile until move-fast-break-things is merged into it,
+  # and that merge brings the full copy of this file, check included.
 
 permissions:
   contents: read
