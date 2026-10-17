@@ -26,6 +26,7 @@ RUN --mount=type=cache,target=/root/.gradle sh ./gradlew --no-daemon bootJar
 
 FROM eclipse-temurin:21-jre
 LABEL org.opencontainers.image.source=https://github.com/catacomb5099/naviseerr
+LABEL org.opencontainers.image.licenses=AGPL-3.0-only
 WORKDIR /app
 COPY --from=build /src/build/libs/*.jar app.jar
 # Default user; compose's `user: ${PUID}:${PGID}` overrides it. Numeric, so no passwd entry needed.
