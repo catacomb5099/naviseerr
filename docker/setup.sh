@@ -12,6 +12,9 @@
 #      and the playlist maker (croissant) its token (/config/curator.token).
 set -eu
 
+# The copy-paste install (deploy/compose.yaml) sets both at once as RUN_AS=uid:gid, the same value
+# its containers' `user:` lines use.
+if [ -n "${RUN_AS:-}" ]; then PUID=${RUN_AS%%:*}; PGID=${RUN_AS#*:}; fi
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 # The library's path on the host (compose passes LIBRARY_DIR through), for the messages below.
