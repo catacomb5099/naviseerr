@@ -1,0 +1,74 @@
+# Makes a stable naviseerr release, only when you ask: Actions → release → Run workflow, type the
+# version (e.g. 1.0.0). Terminal: gh workflow run release --repo catacomb5099/naviseerr -f version=1.0.0
+# It releases what is on master, so merge move-fast-break-things into master first. Steps:
+#   1. checks the version (looks like 1.2.3, is new, matches `version` in build.gradle);
+#   2. writes the copy-paste install file for it (scripts/release-compose.sh);
+#   3. tags master as v<version> and runs the image workflow on that tag, which publishes
+#      naviseerr and naviseerr-setup as <version>, <major>.<minor>, <major> and latest;
+#   4. creates the GitHub Release: generated notes, the "tested with" line, compose.yaml attached.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, like 1.0.0
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Check the version
+        run: |
+          if ! printf '%s\n' "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::'$VERSION' is not a version like 1.0.0 (no v in front)"; exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION was already released"; exit 1
+          fi
+          gradle=$(sed -n "s/^version = '\(.*\)'$/\1/p" build.gradle | sed 's/-SNAPSHOT$//')
+          if [ "$gradle" != "$VERSION" ]; then
+            echo "::error::build.gradle on master says $gradle, not $VERSION. Change version there first (or release $gradle)."; exit 1
+          fi
+
+      - name: Write the install file
+        run: scripts/release-compose.sh "$VERSION" > compose.yaml 2> tested-with.txt && cat tested-with.txt
+
+      - name: Tag master
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+      # A tag pushed with this workflow's token starts no other workflow, so the image build is started
+      # by hand here (that kind of start is allowed) and waited for: no release without its images.
+      - name: Publish the images
+        run: |
+          gh workflow run image --ref "v$VERSION"
+          for i in $(seq 1 30); do
+            id=$(gh run list --workflow image --event workflow_dispatch --branch "v$VERSION" --limit 1 --json databaseId -q '.[0].databaseId')
+            [ -n "$id" ] && break
+            sleep 5
+          done
+          [ -n "$id" ] || { echo "::error::the image build did not start"; exit 1; }
+          gh run watch "$id" --exit-status
+
+      - name: Create the GitHub Release
+        run: |
+          gh release create "v$VERSION" compose.yaml --title "naviseerr $VERSION" --generate-notes \
+            --notes "$(printf 'Install: download compose.yaml below and follow its first lines (TrueNAS: Apps → Discover Apps → ⋮ → Install via YAML).\n\n%s' "$(cat tested-with.txt)")"
