@@ -46,6 +46,10 @@ x-library: &library
     # A mistyped path stops the start instead of quietly filling a new empty folder.
     create_host_path: false
 
+# Three folders in all: your music (above), `data` (settings, the database, slskd's own files and the
+# suggested playlists) and `downloads` (songs on their way in, before they are filed into your music).
+# Each container sees only its own part of them.
+
 services:
   # Only naviseerr talks to it; not published.
   postgres:
@@ -55,8 +59,11 @@ services:
       POSTGRES_USER: naviseerr
       POSTGRES_PASSWORD: naviseerr
       POSTGRES_DB: naviseerr
+    depends_on:
+      setup:
+        condition: service_completed_successfully
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - {type: volume, source: data, target: /var/lib/postgresql/data, volume: {subpath: postgres}}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U naviseerr -d naviseerr"]
       interval: 5s
@@ -80,15 +87,11 @@ services:
       SOULSEEK_PASSWORD: *soulseek-password
       SHARE_LIBRARY: *share-library
       LIBRARY_DIR: *library-path
+    # The whole of both folders: setup makes the parts the other containers use.
     volumes:
-      - config:/config
-      - slskd:/slskd
-      - downloads:/downloads
-      - incomplete:/incomplete
+      - data:/data
+      - downloads:/transfers
       - *library
-      - curator-output:/curator/output
-      - curator-history:/curator/history
-      - curator-runs:/curator/runs
 
   # The Soulseek client. Its settings are written by setup on every start.
   slskd:
@@ -101,9 +104,9 @@ services:
     ports:
       - "50300:50300"
     volumes:
-      - slskd:/app
-      - downloads:/downloads
-      - incomplete:/incomplete
+      - {type: volume, source: data, target: /app, volume: {subpath: slskd}}
+      - {type: volume, source: downloads, target: /downloads, volume: {subpath: complete}}
+      - {type: volume, source: downloads, target: /incomplete, volume: {subpath: incomplete}}
       # What you share on Soulseek, read-only.
       - <<: *library
         target: /music
@@ -146,9 +149,9 @@ services:
       CURATOR_FIRST_RUN_ON_START: "true"
       LOGGING_LEVEL_COM_CATACOMB5099_NAVISEERR_DOWNLOAD: INFO
     volumes:
-      - config:/config:ro
-      - downloads:/downloads
-      - incomplete:/incomplete
+      - {type: volume, source: data, target: /config, read_only: true, volume: {subpath: config}}
+      - {type: volume, source: downloads, target: /downloads, volume: {subpath: complete}}
+      - {type: volume, source: downloads, target: /incomplete, volume: {subpath: incomplete}}
       - *library
 
   # Makes the weekly "Made for you" suggested playlists. naviseerr works without it.
@@ -164,10 +167,10 @@ services:
       DISCOGS_TOKEN: *discogs-token
       TZ: *tz
     volumes:
-      - config:/config:ro
-      - curator-output:/app/output
-      - curator-history:/app/history
-      - curator-runs:/app/runs
+      - {type: volume, source: data, target: /config, read_only: true, volume: {subpath: config}}
+      - {type: volume, source: data, target: /app/output, volume: {subpath: curator/output}}
+      - {type: volume, source: data, target: /app/history, volume: {subpath: curator/history}}
+      - {type: volume, source: data, target: /app/runs, volume: {subpath: curator/runs}}
 
   # The web app: http://<this machine>:5056.
   client:
@@ -181,11 +184,5 @@ services:
       - "5056:80"
 
 volumes:
-  postgres-data:
-  config:
-  slskd:
+  data:
   downloads:
-  incomplete:
-  curator-output:
-  curator-history:
-  curator-runs:

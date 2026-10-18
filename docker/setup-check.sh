@@ -71,4 +71,9 @@ check "$(printf '%s\n' "$out" | grep -c 'not a number')" 1 "and says so"
 rc=0; out=$(inside 'chown 1002:1003 /library; sh /setup.sh; stat -c %u:%g /config' -e RUN_AS=1002:1003) || rc=$?
 check "$rc" 0 "RUN_AS=1002:1003 (the copy-paste install's one setting) is accepted"
 check "$(printf '%s\n' "$out" | tail -1)" 1002:1003 "and wins over PUID/PGID"
+rc=0; out=$(docker run --rm -e PUID=1000 -e PGID=1000 -v "$here/setup.sh:/setup.sh:ro" alpine:3.20 sh -c \
+  'mkdir -p /data /transfers /library; sh /setup.sh >/dev/null && stat -c "%n %u" /data/config /data/slskd /data/curator/runs /transfers/complete /transfers/incomplete && test -f /data/slskd/slskd.yml && test -d /data/postgres && echo files-ok' 2>&1) || rc=$?
+check "$rc" 0 "the copy-paste install's two folders (/data, /transfers) get their parts"
+check "$(printf '%s\n' "$out" | grep -c ' 1000$')" 5 "each part belongs to PUID"
+check "$(printf '%s\n' "$out" | tail -1)" files-ok "and slskd's settings land in /data/slskd"
 echo "OK"
