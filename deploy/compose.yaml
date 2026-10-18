@@ -1,18 +1,20 @@
 # naviseerr, ready to paste: the whole app from ready-made images, nothing to download or build.
 #
 # TrueNAS SCALE 24.10 or newer
-#   1. A folder for your music: Datasets → Add Dataset (e.g. tank/media/music), Dataset Preset "Apps".
-#      Then Edit Permissions and make sure the "apps" user (568) may write to it.
+#   1. Three datasets (Datasets → Add Dataset), three separate folders, none inside another:
+#        your music        e.g. tank/media/music       preset "Apps"; the "apps" user (568) must write to it
+#        naviseerr's data  e.g. tank/apps/naviseerr    preset "Generic" (the database inside needs it)
+#        downloads         e.g. tank/apps/naviseerr-downloads   preset "Generic"
 #   2. Apps → Discover Apps → ⋮ (top right) → Install via YAML. Name it naviseerr, paste this whole
-#      file, and change the music folder line below to your dataset's path (/mnt/<pool>/...).
-#      On TrueNAS that is the only line you must change. Save.
+#      file, and put your three datasets' paths (/mnt/<pool>/...) in the first three lines under
+#      EDIT THESE. On TrueNAS those are the only lines you must change. Save.
 #   3. Wait until the app says Running, then open http://<your NAS>:5056.
 #      Your Soulseek account was made up on the first start: Apps → naviseerr → the "setup"
 #      container's logs show its name and password. Keep them; a Soulseek password cannot be reset.
 #   If it does not start, the setup container's logs say why, in plain words.
 #
-# Other Linux / Docker: save this as compose.yaml in an empty folder, change the music folder and the
-# user lines below, then `docker compose up -d`.
+# Other Linux / Docker: make the three folders, save this as compose.yaml, change the three folder
+# lines and the user line below, then `docker compose up -d`.
 #
 # These are develop builds: the newest code, published when the developer chooses. They can break.
 
@@ -20,6 +22,12 @@
 # Your music folder. Must already exist: every song and playlist ends up here. Point Navidrome or
 # Jellyfin at the same folder. TrueNAS: a dataset path such as /mnt/tank/media/music.
 x-library-path: &library-path /mnt/tank/media/music
+# naviseerr's own data: settings, generated passwords, the database, the Soulseek client's files and
+# the suggested playlists. Must already exist and be a different folder from the other two.
+x-data-path: &data-path /mnt/tank/apps/naviseerr
+# Songs on their way in, before they are filed into your music. Must already exist, and must NOT be
+# your music folder or inside it (half-downloaded files would land in your library).
+x-downloads-path: &downloads-path /mnt/tank/apps/naviseerr-downloads
 # The user (uid:gid) every container that touches your music runs as; it must be able to write to the
 # folder above. TrueNAS: "568:568", its built-in apps user (give the dataset to "apps"). Other Linux:
 # the numbers `id -u` and `id -g` print for the folder's owner, often "1000:1000".
@@ -46,9 +54,7 @@ x-library: &library
     # A mistyped path stops the start instead of quietly filling a new empty folder.
     create_host_path: false
 
-# Three folders in all: your music (above), `data` (settings, the database, slskd's own files and the
-# suggested playlists) and `downloads` (songs on their way in, before they are filed into your music).
-# Each container sees only its own part of them.
+# Three folders in all, the three paths above. Each container sees only its own part of them.
 
 services:
   # Only naviseerr talks to it; not published.
@@ -183,6 +189,11 @@ services:
       # To use another port, change the first number only (5055 is taken by Jellyseerr/Overseerr).
       - "5056:80"
 
+# The data and downloads folders above, as Docker volumes, so each container can get just its part.
 volumes:
   data:
+    driver: local
+    driver_opts: {type: none, o: bind, device: *data-path}
   downloads:
+    driver: local
+    driver_opts: {type: none, o: bind, device: *downloads-path}
