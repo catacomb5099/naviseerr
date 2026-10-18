@@ -1,13 +1,20 @@
 # naviseerr, ready to paste: the whole app from ready-made images, nothing to download or build.
 #
-#   TrueNAS SCALE 24.10 or newer: Apps → Discover Apps → ⋮ (top right) → Install via YAML, paste this
-#   file, change the lines under EDIT THESE, Save. Other Linux / Docker: save it as compose.yaml in an
-#   empty folder, change the same lines, then `docker compose up -d`.
+# TrueNAS SCALE 24.10 or newer
+#   1. A folder for your music: Datasets → Add Dataset (e.g. tank/media/music), Dataset Preset "Apps".
+#      Then Edit Permissions and make sure the "apps" user (568) may write to it.
+#   2. Apps → Discover Apps → ⋮ (top right) → Install via YAML. Name it naviseerr, paste this whole
+#      file, and change the music folder line below to your dataset's path (/mnt/<pool>/...).
+#      On TrueNAS that is the only line you must change. Save.
+#   3. Wait until the app says Running, then open http://<your NAS>:5056.
+#      Your Soulseek account was made up on the first start: Apps → naviseerr → the "setup"
+#      container's logs show its name and password. Keep them; a Soulseek password cannot be reset.
+#   If it does not start, the setup container's logs say why, in plain words.
 #
-# Then open http://<this machine>:5056.
+# Other Linux / Docker: save this as compose.yaml in an empty folder, change the music folder and the
+# user lines below, then `docker compose up -d`.
 #
-# DEVELOP CHANNEL: every image below is a :develop build, made from the newest code on every change.
-# It can break. The first stable release will replace these tags with tested version numbers.
+# These are develop builds: the newest code, published when the developer chooses. They can break.
 
 # ───── EDIT THESE ──────────────────────────────────────────────────────────────────────────────────
 # Your music folder. Must already exist: every song and playlist ends up here. Point Navidrome or
