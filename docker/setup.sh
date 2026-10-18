@@ -36,11 +36,27 @@ case $PUID$PGID in
 (Linux only), or leave both empty for the default 1000." ;;
 esac
 
+# The copy-paste install (deploy/compose.yaml) keeps all app data in one volume, /data, and slskd's
+# transfers in another, /transfers, and gives each container only its own sub-folder of them. Docker
+# needs those sub-folders to exist, so they are made here, and the folders this script uses below are
+# pointed at them. The postgres sub-folder is only made: Postgres gives it to its own user.
+if [ -d /data ]; then
+  mkdir -p /data/config /data/slskd /data/curator/output /data/curator/history /data/curator/runs /data/postgres
+  mkdir -p /curator
+  for d in config slskd curator/output curator/history curator/runs; do [ -e "/$d" ] || ln -s "/data/$d" "/$d"; done
+fi
+if [ -d /transfers ]; then
+  mkdir -p /transfers/complete /transfers/incomplete
+  [ -e /downloads ] || ln -s /transfers/complete /downloads
+  [ -e /incomplete ] || ln -s /transfers/incomplete /incomplete
+fi
+
 # 1. A fresh volume, or a library folder Docker had to create, belongs to root, and slskd and naviseerr
 # (not root) could not write into it.
 # naviseerr's own volumes: re-owned with everything in them whenever they are not PUID:PGID's, so a
 # changed PUID/PGID in .env takes effect (slskd will not start in a folder it cannot write).
 for d in /config /slskd /downloads /incomplete /curator/output /curator/history /curator/runs; do
+  d=$(readlink -f "$d")
   if [ "$(stat -c %u:%g "$d")" != "$PUID:$PGID" ]; then chown -R "$PUID:$PGID" "$d"; fi
 done
 # Your library: only the folder itself and only while root still owns it: an existing library keeps
