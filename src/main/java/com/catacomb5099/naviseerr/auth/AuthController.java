@@ -48,13 +48,15 @@ public class AuthController {
 
     private final AuthRepository repository;
     private final AuthFilter filter;
+    private final LoginThrottle throttle;
     private final Clock clock;
     private final Duration sessionLength;
 
-    public AuthController(AuthRepository repository, AuthFilter filter, Clock clock,
+    public AuthController(AuthRepository repository, AuthFilter filter, LoginThrottle throttle, Clock clock,
                           @Value("${auth.session-days:30}") int sessionDays) {
         this.repository = repository;
         this.filter = filter;
+        this.throttle = throttle;
         this.clock = clock;
         this.sessionLength = Duration.ofDays(sessionDays);
     }
@@ -86,19 +88,29 @@ public class AuthController {
                         : Mono.just(ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", ACCOUNT_EXISTS))));
     }
 
-    /** 200 with the session started, 401 {@link #WRONG_LOGIN} otherwise: never says which half was wrong. */
+    /**
+     * 200 with the session started, 401 {@link #WRONG_LOGIN} otherwise: never says which half was wrong.
+     * 429 {@link LoginThrottle#TOO_MANY} once a name has had its five wrong passwords in 20 seconds.
+     */
     @PostMapping("/login")
     Mono<ResponseEntity<?>> login(@RequestBody Credentials body, ServerWebExchange exchange) {
         if (body == null || body.username() == null || body.password() == null) return Mono.just(wrongLogin());
+        String name = body.username().trim();
+        if (throttle.blocked(name)) {
+            return Mono.just(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY)));
+        }
         // Exactly one bcrypt check per attempt, against the dummy hash for an unknown name, so the time
         // taken does not say whether the name exists.
-        return repository.findByUsername(body.username().trim())
+        return repository.findByUsername(name)
                 .map(Optional::of).defaultIfEmpty(Optional.empty())
                 .flatMap(found -> matches(body.password(), found.map(UserRow::passwordHash).orElse(dummyHash))
                         .filter(ok -> ok && found.isPresent())
                         .map(ok -> found.get()))
-                .flatMap(user -> repository.deleteExpired(clock.instant()).then(startSession(user, exchange, HttpStatus.OK)))
-                .defaultIfEmpty(wrongLogin());
+                .flatMap(user -> {
+                    throttle.succeeded(name);
+                    return repository.deleteExpired(clock.instant()).then(startSession(user, exchange, HttpStatus.OK));
+                })
+                .switchIfEmpty(Mono.fromSupplier(() -> { throttle.failed(name); return wrongLogin(); }));
     }
 
     /** Ends this browser's session: the row goes, the cookie is told to expire. 204 either way. */

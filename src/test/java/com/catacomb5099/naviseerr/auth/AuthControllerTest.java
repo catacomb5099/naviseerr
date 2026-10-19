@@ -27,7 +27,7 @@ class AuthControllerTest {
     private final AtomicReference<UserRow> account = new AtomicReference<>();
     private final Map<String, UserRow> sessions = new HashMap<>();
     private final AuthFilter filter = new AuthFilter(repository, CLOCK, true);
-    private final WebTestClient http = WebTestClient.bindToController(new AuthController(repository, filter, CLOCK, 30))
+    private final WebTestClient http = WebTestClient.bindToController(new AuthController(repository, filter, new LoginThrottle(CLOCK), CLOCK, 30))
             .webFilter(filter).build();
 
     AuthControllerTest() {
@@ -140,6 +140,25 @@ class AuthControllerTest {
     }
 
     @Test
+    void sixWrongPasswords_theSixthIs429_andSoIsTheRightOneUntilTheWindowPasses() {
+        setup("alex", "correct horse");
+
+        for (int i = 0; i < 5; i++) {
+            http.post().uri("/auth/login").bodyValue(Map.of("username", "alex", "password", "guess " + i)).exchange()
+                    .expectStatus().isUnauthorized();
+        }
+        http.post().uri("/auth/login").bodyValue(Map.of("username", "Alex", "password", "guess 6")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
+                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY);
+        // The fixed clock never lets the window pass, so even the right password is refused here.
+        http.post().uri("/auth/login").bodyValue(Map.of("username", "alex", "password", "correct horse")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // Another name is untouched.
+        http.post().uri("/auth/login").bodyValue(Map.of("username", "bob", "password", "whatever")).exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
     void logout_dropsTheSession_andExpiresTheCookie() {
         String id = sessionId(setup("alex", "correct horse"));
 
@@ -169,7 +188,7 @@ class AuthControllerTest {
     @Test
     void authOff_sessionSaysSo_andNothingIs401() {
         AuthFilter off = new AuthFilter(repository, CLOCK, false);
-        WebTestClient open = WebTestClient.bindToController(new AuthController(repository, off, CLOCK, 30)).webFilter(off).build();
+        WebTestClient open = WebTestClient.bindToController(new AuthController(repository, off, new LoginThrottle(CLOCK), CLOCK, 30)).webFilter(off).build();
 
         open.get().uri("/auth/session").exchange()
                 .expectStatus().isOk()
