@@ -221,7 +221,7 @@ class CuratorSchedulerTest {
         StepVerifier.create(scheduler.firstRun()).verifyComplete();
 
         verify(client).triggerRun();
-        verify(client).getRun("r1");
+        verify(client, timeout(BUDGET.toMillis() * 3)).getRun("r1");   // the run itself goes on in the background
     }
 
     @Test
@@ -235,12 +235,23 @@ class CuratorSchedulerTest {
     }
 
     @Test
-    void firstRun_whenTheCuratorIsDown_isLoggedNotThrown() {
+    void firstRun_whenTheCuratorIsDown_tellsTheCaller_andStartsNoRun() {
         when(client.getEditions()).thenReturn(
                 Mono.error(new CuratorException("curator list of editions failed: Connection refused", true)));
 
-        StepVerifier.create(scheduler.firstRun()).verifyComplete();
+        StepVerifier.create(scheduler.firstRun()).expectError(CuratorException.class).verify();
 
+        verify(client, never()).triggerRun();
+    }
+
+    @Test
+    void onStart_whenTheCuratorIsDown_isOneWarningNotARun() {
+        when(client.getEditions()).thenReturn(
+                Mono.error(new CuratorException("curator list of editions failed: Connection refused", true)));
+
+        scheduler.onStart();
+
+        verify(client, timeout(BUDGET.toMillis() * 3)).getEditions();
         verify(client, never()).triggerRun();
     }
 

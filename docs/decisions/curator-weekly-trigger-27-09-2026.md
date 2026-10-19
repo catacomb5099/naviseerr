@@ -98,7 +98,10 @@ and its "Make this week's playlists now" button), the other routes 503, as for a
 switch is `GET|PUT /settings/suggested-playlists` (`settings/SuggestedPlaylistsSettingsController`); switching
 on calls `firstRun(Duration.ZERO)`, the boot check without its two-minute grace, so the Home page gets its
 first set without waiting for Monday, and only when the curator holds no editions yet (an install that already
-has playlists starts no 90-minute run on a flip). Home Assistant's analytics screen is the shape: a switch, off
+has playlists starts no 90-minute run on a flip). The switch's sentence waits for that one editions call, not for the
+run (`firstRun` now completes when the curator has answered and follows the run in the background): a curator that
+is down gets "On, but the playlist maker is not answering right now, so no first set was started; the weekly run will
+try again." instead of a promise, and the switch is stored either way. Home Assistant's analytics screen is the shape: a switch, off
 by default, Next means no. Existing installs: V18 seeds the switch TRUE where the database already holds a
 `CURATED` download (the feature was in use), so the owner's weekly run does not stop at the upgrade; fresh
 installs start OFF. `CURATOR_FIRST_RUN_ON_START` keeps its job for the boot case but is now gated by the switch

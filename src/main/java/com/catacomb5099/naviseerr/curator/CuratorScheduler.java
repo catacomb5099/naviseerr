@@ -128,22 +128,21 @@ public class CuratorScheduler {
     }
 
     /**
-     * Wait the grace period, list the curator's editions, and refresh only when the list is empty (same
-     * trigger, polling and log lines as a cron tick). An error while asking is one WARN line, not a run:
-     * a 90-minute job must not start on a guess, and the weekly cron still stands. No grace when the
-     * switch was just turned on in the app: the person is looking at the screen.
+     * Wait the grace period, list the curator's editions, and when the list is empty start one refresh in the
+     * background (same trigger, polling and log lines as a cron tick). Completes once the curator has answered,
+     * not when the run ends, so the switch in Settings can say what happened; an error while asking is the
+     * caller's to word (a WARN at boot, a sentence on the screen), never a run: a 90-minute job must not start
+     * on a guess, and the weekly cron still stands. No grace when the switch was just turned on in the app.
      */
     public Mono<Void> firstRun(Duration grace) {
         return Mono.delay(grace)
                 .then(Mono.defer(client::getEditions))
                 .filter(List::isEmpty)
-                .doOnNext(none -> log.info("No suggested playlists yet: asking the curator for a first edition"))
-                .flatMap(none -> refresh())
-                .onErrorResume(error -> {
-                    log.warn("Could not check for suggested playlists at start; the weekly refresh still stands: {}",
-                            error.getMessage());
-                    return Mono.empty();
-                });
+                .doOnNext(none -> {
+                    log.info("No suggested playlists yet: asking the curator for a first edition");
+                    refresh().subscribe();
+                })
+                .then();
     }
 
     /** The cron entry point. Never throws: refresh() swallows its own errors into a log line. */
@@ -155,11 +154,12 @@ public class CuratorScheduler {
         whenOn(refresh()).subscribe();
     }
 
-    /** {@code work} only while the switch is on; a database that does not answer is one WARN, not a run. */
+    /** {@code work} only while the switch is on; a database or a curator that does not answer is one WARN, not a run. */
     private Mono<Void> whenOn(Mono<Void> work) {
         return isOn().filter(on -> on).flatMap(on -> work)
                 .onErrorResume(error -> {
-                    log.warn("Could not read the suggested-playlists switch; no refresh this time: {}", error.getMessage());
+                    log.warn("No suggested-playlists refresh this time (the switch could not be read, or the playlist maker "
+                            + "did not answer); the weekly refresh still stands: {}", error.getMessage());
                     return Mono.empty();
                 });
     }

@@ -47,11 +47,23 @@ class SuggestedPlaylistsSettingsControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.on").isEqualTo(true)
-                .jsonPath("$.message").isEqualTo("On. If there are no playlists yet the first set is being made now; "
-                        + "the Home page shows it when it is ready (about 90 minutes).");
+                .jsonPath("$.message").isEqualTo(SuggestedPlaylistsSettingsController.ON);
 
         verify(repository).setSuggestedPlaylists(true);
         verify(scheduler).firstRun(Duration.ZERO);
+    }
+
+    @Test
+    void switchingOn_whenThePlaylistMakerDoesNotAnswer_isStillOn_andSaysSoInsteadOfPromising() {
+        when(scheduler.firstRun(any())).thenReturn(Mono.error(new IllegalStateException("curator list of editions failed: HTTP 500")));
+
+        http.put().uri("/settings/suggested-playlists").bodyValue(Map.of("on", true)).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.on").isEqualTo(true)
+                .jsonPath("$.message").isEqualTo(SuggestedPlaylistsSettingsController.ON_NOT_ANSWERING);
+
+        verify(repository).setSuggestedPlaylists(true);
     }
 
     @Test
