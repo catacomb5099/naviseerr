@@ -23,8 +23,6 @@ public class SlskdSearchResultProcessor {
     private final SlskdService slskdService;
     private final TrackMatchingService trackMatchingService;
 
-    @Value("${slskd-service.min-bit-rate}")
-    int minBitRate;
     @Value("${slskd-service.max-files-per-download}")
     int maxFilesPerDownload;
     @Value("${download-task.max-sharer-queue:50}")
@@ -49,9 +47,12 @@ public class SlskdSearchResultProcessor {
     /**
      * The files worth trying, in the order to try them: every file in the requested version before any
      * other version of the song (the candidate list is walked in order, so a live take or remix is only
-     * downloaded once every exact option has failed), then within each grade the length most files share,
-     * then who can serve fastest. Capped at {@code maxFilesPerDownload}: other versions take whatever
-     * places the exact ones leave, which is all of them when none is exact and none when ten are.
+     * downloaded once every exact option has failed), then within each grade the chosen quality tier first
+     * and the nearest tier after it ({@link DownloadQuality#distance}, ties going up), then the length most
+     * files share, then who can serve fastest. A lossy file whose bit rate slskd did not report has no tier
+     * and is not tried (2.7% of files, mostly m4a and opus); it stays on the manual list. Capped at
+     * {@code maxFilesPerDownload}: other versions take whatever places the exact ones leave, which is all
+     * of them when none is exact and none when ten are.
      *
      * <p>A file whose path does not name the artist, found by a wording that did not name it either
      * ({@code UNVERIFIED}, see {@link TrackMatchingService#grade(String, String, String)}), is the song by
@@ -59,32 +60,28 @@ public class SlskdSearchResultProcessor {
      * in no path at all, and a song shared only under a collaborator's folder has no other copy -- but never
      * beside a file that does name the artist.
      *
-     * @param query   the cleaned song name the files are judged against ({@code SearchQueryTiers.pickerName})
-     * @param wording what was actually searched
-     */
-    public Mono<List<Pick>> selectBestFiles(SearchState state, String query, String wording) {
-        return selectBestFiles(state, query, wording, null);
-    }
-
-    /**
-     * The same, for an album's song searching on its own (P6): a file whose length slskd gives and that
-     * is not within {@link #lengthTolerance} of the album track's is dropped before anything else is
-     * judged, whatever its name says. "Live at Town Hall/03 - Mr. Jones.flac" is graded the requested
-     * version (the name carries no "live"), and only its 379 s against the album's 270 s gives it away.
-     * A file with no length (3.5% of them) is no evidence either way and stays.
+     * <p>For an album's song searching on its own (P6): a file whose length slskd gives and that is not
+     * within {@link #lengthTolerance} of the album track's is dropped before anything else is judged,
+     * whatever its name says. "Live at Town Hall/03 - Mr. Jones.flac" is graded the requested version (the
+     * name carries no "live"), and only its 379 s against the album's 270 s gives it away. A file with no
+     * length (3.5% of them) is no evidence either way and stays.
      *
+     * @param query             the cleaned song name the files are judged against ({@code SearchQueryTiers.pickerName})
+     * @param wording           what was actually searched
      * @param albumTrackSeconds the album row's length; null for a song or playlist track, which keeps
      *                          any length
+     * @param chosen            the download quality the install chose ({@code install_settings.download_quality},
+     *                          read once per completed search)
      */
     public Mono<List<Pick>> selectBestFiles(SearchState state, String query, String wording,
-                                            Integer albumTrackSeconds) {
+                                            Integer albumTrackSeconds, DownloadQuality chosen) {
         return Mono.fromCallable(() -> {
             // Null rather than empty when the caller handed us a search fetched without
             // includeResponses. Degrade to "no candidates" instead of an NPE, so the failure reads as
             // what it is in the log below rather than as a generic step error.
             List<SearchResponseItem> responses =
                     state.getResponses() == null ? List.of() : state.getResponses();
-            List<Pick> candidates = graded(state, query, wording, this::isLosslessOrHighBitRate, true);
+            List<Pick> candidates = graded(state, query, wording, file -> DownloadQuality.of(file).isPresent(), true);
             if (albumTrackSeconds != null) {
                 List<Pick> sameLength = candidates.stream()
                         .filter(pick -> pick.file().getLength()
@@ -105,9 +102,13 @@ public class SlskdSearchResultProcessor {
             // Most candidates share the duration of the mainstream release; remixes, live takes and
             // album re-records are the odd lengths out. Prefer the most shared length, then fall back
             // to who can serve the file fastest. Measured 80% -> 93% correct top pick on 718 songs.
-            // Counted within a grade, so the other versions cannot outvote the exact ones.
+            // Counted within a grade, so the other versions cannot outvote the exact ones. The chosen
+            // quality tier sits in front of the duration vote: measured on the same 718 songs, a Lossless
+            // chooser gets lossless 97.8% of the time with the tier first against 95.9% after the vote,
+            // the right version equally often either way (17 songs where the FLAC rip runs a second off
+            // the MP3 majority), so the tier decides before "who is quickest" and never before the grade.
             //
-            // One exception sits in front of the duration vote (but behind the grade): a sharer with
+            // One exception sits in front of both (but behind the grade): a sharer with
             // no free upload slot AND more than max-sharer-queue files already waiting goes to the
             // back of its grade, whatever its file's length. The duration vote protects against the
             // wrong version; this protects against a sharer that will not reach us inside
@@ -117,7 +118,7 @@ public class SlskdSearchResultProcessor {
             // is small: only when EVERY sharer of the majority length is that overloaded does an
             // odd-length file get tried first, and the threshold is set high enough that "busy" alone
             // never triggers it.
-            candidates = rank(candidates);
+            candidates = rank(candidates, chosen);
 
             long exact = candidates.stream().filter(pick -> pick.grade() == TrackMatchingService.Match.EXACT).count();
             log.info("Completed candidate selection for query='{}' (searched '{}') - {} response(s), {} total files, {} relevant candidates ({} in the requested version, {} other versions, {} unverified artist{}); limiting to {} by maxFilesPerDownload",
@@ -132,14 +133,15 @@ public class SlskdSearchResultProcessor {
      * Every audio file the search returned -- any grade, NONE included, any format or bit rate -- in
      * the order the automatic picker would try them, the files the matcher calls another song last.
      * For a person to choose from (manual pick, 07-10-2026; every file since 08-10-2026): the format
-     * and bit-rate rule, the album-length rule, the unverified-artist rule and the name match itself
-     * are the picker's judgement calls, and the whole point of choosing by hand is to overrule them,
-     * so none is applied here; the grade travels on each file instead and is shown as a badge. Cover
+     * tier rule, the album-length rule, the unverified-artist rule and the name match itself are the
+     * picker's judgement calls, and the whole point of choosing by hand is to overrule them, so none
+     * drops a file here; the grade travels on each file instead and is shown as a badge, and the order
+     * is still the picker's (the chosen tier first, a file with no tier last). Cover
      * art, cue sheets and logs are left out: a song cannot download as one. Nothing is capped either:
      * the caller keeps as many as it wants to store.
      */
-    public List<Pick> allFiles(SearchState state, String query, String wording) {
-        return rank(graded(state, query, wording, SlskdSearchResultProcessor::isAudio, false));
+    public List<Pick> allFiles(SearchState state, String query, String wording, DownloadQuality chosen) {
+        return rank(graded(state, query, wording, SlskdSearchResultProcessor::isAudio, false), chosen);
     }
 
     /** Every file passing {@code keep}, graded against the song; with {@code dropNone} the files the matcher rejects are gone. */
@@ -153,8 +155,8 @@ public class SlskdSearchResultProcessor {
                 .toList();
     }
 
-    /** The picker's order: grade, then overloaded sharers last, then the length most files share, then availability. */
-    private List<Pick> rank(List<Pick> candidates) {
+    /** The picker's order: grade, overloaded sharers last, the chosen tier then the nearest, the length most files share, availability. */
+    private List<Pick> rank(List<Pick> candidates, DownloadQuality chosen) {
         Map<TrackMatchingService.Match, Map<Integer, Long>> countByLength = candidates.stream()
                 .filter(pick -> pick.file().getLength().isPresent())
                 .collect(Collectors.groupingBy(Pick::grade,
@@ -163,6 +165,7 @@ public class SlskdSearchResultProcessor {
                 .sorted(Comparator
                         .comparing(Pick::grade)
                         .thenComparing(pick -> isOverloaded(pick.peer()))
+                        .thenComparingInt(pick -> tierDistance(pick.file(), chosen))
                         .thenComparingLong((Pick pick) -> -pick.file().getLength()
                                 .map(length -> countByLength.get(pick.grade()).get(length)).orElse(0L))
                         .thenComparing(Pick::peer, BY_AVAILABILITY))
@@ -216,7 +219,6 @@ public class SlskdSearchResultProcessor {
                 && sharer.getQueueLength() > maxSharerQueue;
     }
 
-    private static final Set<String> LOSSLESS = Set.of("flac", "wav", "aif", "aiff", "ape", "wv");
     /** What a song can download as. Cover art, cue sheets, logs and playlists are not an option, so the manual list skips them. */
     private static final Set<String> AUDIO = Set.of("flac", "wav", "aif", "aiff", "aifc", "ape", "wv", "mp3", "m4a", "aac",
             "ogg", "oga", "opus", "wma", "alac", "mpc", "dsf");
@@ -225,12 +227,9 @@ public class SlskdSearchResultProcessor {
         return AUDIO.contains(format(file));
     }
 
-    /**
-     * Lossless files always pass; slskd reports no bit rate for them (13,845 of 14,188 FLAC files on
-     * 04-10-2026), so the bit-rate rule is for lossy files only. The whole-album picker applies the same rule.
-     */
-    public boolean isLosslessOrHighBitRate(SearchFile file) {
-        return LOSSLESS.contains(format(file)) || file.getBitRate().filter(bitRate -> bitRate >= minBitRate).isPresent();
+    /** A file with no tier (the manual list only; the automatic pick never holds one) sorts after every tier. */
+    private static int tierDistance(SearchFile file, DownloadQuality chosen) {
+        return DownloadQuality.of(file).map(chosen::distance).orElse(Integer.MAX_VALUE);
     }
 
     /**

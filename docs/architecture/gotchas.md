@@ -26,9 +26,9 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 
 ## 4. The FLAC check trusted slskd's `extension` field (fixed 04-10-2026)
 
-- Where: [SlskdSearchResultProcessor.isLosslessOrHighBitRate](../../src/main/java/com/catacomb5099/naviseerr/services/slskd/SlskdSearchResultProcessor.java), formerly `isFlacAndHighBitrate` with `file.getExtension().equals("flac")`.
+- Where: `SlskdSearchResultProcessor.isLosslessOrHighBitRate` (since 19-10-2026 [DownloadQuality.of](../../src/main/java/com/catacomb5099/naviseerr/services/slskd/DownloadQuality.java)), formerly `isFlacAndHighBitrate` with `file.getExtension().equals("flac")`.
 - What it was: worse than the case-sensitivity issue first logged here. slskd leaves `extension` blank on most files (8,972 of 14,188 FLAC files on 04-10-2026), sometimes gets it wrong (218 FLAC files claimed `"mp3"`), and lossless files carry no `bitRate`, so most FLAC failed both halves of the filter and MP3 won (Ticket To Ride kept 8 of 520 files). A null extension would also have thrown.
-- Status: **fixed.** The format comes from the file name's suffix, case-insensitive, falling back to `extension` only for a name with no suffix. Lossless suffixes (`flac`, `wav`, `aif`, `aiff`, `ape`, `wv`) always pass; everything else still needs `bitRate >= slskd-service.min-bit-rate`, so VBR MP3, m4a and opus (no or lower reported bit rate) are still dropped.
+- Status: **fixed.** The format comes from the file name's suffix, case-insensitive, falling back to `extension` only for a name with no suffix (now in `DownloadQuality.of`). Lossless suffixes (`flac`, `wav`, `aif`, `aiff`, `ape`, `wv`) are the Lossless tier; everything else is placed by its reported bit rate, so a lossy file with NO reported bit rate (m4a and opus mostly, 2.7% of files) has no tier and is still dropped. The 320 kbps floor itself went on 19-10-2026 with the download-quality setting ([download-quality-19-10-2026.md](../decisions/download-quality-19-10-2026.md)): lower rates are tiers the picker falls back to, not rejects.
 
 ## 5. `@EnableWebFlux` + CORS (login added 19-10-2026; allowlist since the same day)
 

@@ -2,7 +2,9 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.settings.InstallSettingsRepository;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -42,7 +44,9 @@ class AlbumSearchStepTest {
         repository = mock(DownloadTaskRepository.class);
         slskd = mock(SlskdService.class);
         picker = mock(AlbumFolderPicker.class);
-        step = new AlbumSearchStep(repository, slskd, picker, new StallingSharers(Duration.ofHours(6)),
+        InstallSettingsRepository settings = mock(InstallSettingsRepository.class);
+        when(settings.downloadQuality()).thenReturn(Mono.just(DownloadQuality.DEFAULT));
+        step = new AlbumSearchStep(repository, slskd, picker, new StallingSharers(Duration.ofHours(6)), settings,
                 Duration.ofSeconds(2), BUDGET);
         when(repository.waitingAlbumSongs(any(), any())).thenReturn(Flux.just(song));
         when(repository.saveAlbumSearch(any(), any(), any(), any())).thenReturn(Mono.just(1L));
@@ -219,7 +223,7 @@ class AlbumSearchStepTest {
         SearchResponseItem peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 1, "Baron53");
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(peer))));
-        when(picker.folders(any(), eq(List.of(song)), eq("Laughing Stock"), eq(List.of("Talk Talk")), any()))
+        when(picker.folders(any(), eq(List.of(song)), eq("Laughing Stock"), eq(List.of("Talk Talk")), any(), eq(DownloadQuality.DEFAULT)))
                 .thenReturn(List.of(new AlbumFolderPicker.Folder(peer, "TALK TALK\\LAUGHING STOCK",
                         Map.of(song.taskId(), file), 0)));
 
@@ -243,7 +247,7 @@ class AlbumSearchStepTest {
         SearchResponseItem b = new SearchResponseItem(2, List.of(bFirst, bSecond), true, 0, List.of(), 0, 1, 1, "b");
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(a, b))));
-        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of(
+        when(picker.folders(any(), any(), any(), any(), any(), any())).thenReturn(List.of(
                 new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), aFirst, third.taskId(), aThird), 0),
                 new AlbumFolderPicker.Folder(b, "B", Map.of(song.taskId(), bFirst, second.taskId(), bSecond), 0)));
 
@@ -266,7 +270,7 @@ class AlbumSearchStepTest {
         SearchResponseItem peer = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 3, 1, 1_500_000, "Baron53");
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(peer))));
-        when(picker.folders(any(), any(), any(), any(), any()))
+        when(picker.folders(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of(new AlbumFolderPicker.Folder(peer, "TALK TALK\\LAUGHING STOCK",
                         Map.of(song.taskId(), file), 2)));
 
@@ -293,8 +297,8 @@ class AlbumSearchStepTest {
         AlbumFolderPicker.Folder rejected = new AlbumFolderPicker.Folder(b, "B", Map.of(song.taskId(), bFile), 0);
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of(a, b))));
-        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of(judged));
-        when(picker.allFolders(any(), any(), any(), any())).thenReturn(List.of(rejected, judged));
+        when(picker.folders(any(), any(), any(), any(), any(), any())).thenReturn(List.of(judged));
+        when(picker.allFolders(any(), any(), any(), any(), any())).thenReturn(List.of(rejected, judged));
 
         step.step(album(DownloadPhase.SEARCH_POLL, 0),
                 Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
@@ -312,14 +316,14 @@ class AlbumSearchStepTest {
     void noFolderQualified_remembersNothing_andAFailedWriteStillReleasesTheSongs() {
         when(slskd.getSearchWithResponses("s1"))
                 .thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("s1", true, "Completed", List.of())));
-        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(picker.folders(any(), any(), any(), any(), any(), any())).thenReturn(List.of());
         step.step(album(DownloadPhase.SEARCH_POLL, 1),
                 Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
         verify(repository, never()).saveAlbumFolders(any(), any(), any());
 
         SearchFile file = new SearchFile("A\\1.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(333));
         SearchResponseItem a = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 1, "a");
-        when(picker.folders(any(), any(), any(), any(), any()))
+        when(picker.folders(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of(new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), file), 0)));
         when(repository.saveAlbumFolders(any(), any(), any())).thenReturn(Mono.error(new RuntimeException("database away")));
         step.step(album(DownloadPhase.SEARCH_POLL, 1),
@@ -332,7 +336,7 @@ class AlbumSearchStepTest {
         // slskd leaves some searches "InProgress" for days; the budget ends the wait, not the album.
         when(slskd.getSearchWithResponses("s1")).thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses(
                 "s1", false, "InProgress", List.of(new SearchResponseItem(0, List.of(), true, 0, List.of(), 0, 1, 1, "x")))));
-        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(picker.folders(any(), any(), any(), any(), any(), any())).thenReturn(List.of());
 
         step.step(album(DownloadPhase.SEARCH_POLL, 0),
                 Map.of("s1", SlskdFixtures.searchState("s1", false, "InProgress")), T0.plus(BUDGET), "me").block();

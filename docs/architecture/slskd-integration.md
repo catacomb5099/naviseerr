@@ -49,14 +49,14 @@ What has changed since the original assessment: `DownloadTaskRunner` now filters
 
 [SlskdSearchResultProcessor.java](../../src/main/java/com/catacomb5099/naviseerr/services/slskd/SlskdSearchResultProcessor.java):
 
-- `selectBestFiles(state, query)` builds the ordered candidate list `List<Map.Entry<SearchResponseItem, SearchFile>>` — unchanged by the state-machine rewrite, kept byte-for-byte as the guard that the pipeline work did not touch ranking:
+- `selectBestFiles(state, query, wording, albumTrackSeconds, chosen)` builds the ordered candidate list of `Pick`s (`chosen` is the install's download quality, `install_settings.download_quality`, read once per completed search):
   1. flatten every `(response item, file)` pair from `state.getResponses()`,
-  2. keep files that are lossless (flac, wav, aif, aiff, ape, wv, judged by the file name's suffix, not slskd's often-blank `extension`) or have bit rate `>= slskd-service.min-bit-rate`,
-  3. keep files whose filename is relevant to the query via [TrackMatchingService](#track-matching); for an album's song (P6, the 4-argument overload with the album row's length) also drop files whose slskd length is outside max(10 s, 3%) of it (`lengthTolerance`), so a live album's "03 - Mr. Jones.flac" is not taken for the studio track; a file with no length stays,
-  4. sort by availability first (`hasFreeUploadSlot`, then `queueLength`, then `uploadSpeed` descending) — see `SlskdSearchResultProcessor.BY_AVAILABILITY`,
+  2. keep files that have a quality tier (`DownloadQuality.of`: lossless by the file name's suffix, flac, wav, aif, aiff, ape, wv, not slskd's often-blank `extension`; else by the reported bit rate, Very high >= 288, High 224-287, Normal 160-223, Low 1-159). A lossy file with no reported bit rate has no tier and is dropped (2.7% of files). Since 19-10-2026; before, lossy files under `slskd-service.min-bit-rate` (320) were dropped,
+  3. keep files whose filename is relevant to the query via [TrackMatchingService](#track-matching); for an album's song (P6, `albumTrackSeconds` = the album row's length) also drop files whose slskd length is outside max(10 s, 3%) of it (`lengthTolerance`), so a live album's "03 - Mr. Jones.flac" is not taken for the studio track; a file with no length stays,
+  4. sort: the grade (requested version first), an overloaded sharer last, the chosen tier then the nearest (`DownloadQuality.distance`, ties going up), the length most files of the grade share, then availability (`hasFreeUploadSlot`, then `queueLength`, then `uploadSpeed` descending, `SlskdSearchResultProcessor.BY_AVAILABILITY`),
   5. cap to `slskd-service.max-files-per-download`.
 - `DownloadStepExecutor` calls this only once a `SEARCH_POLL` sees `isComplete = true`, then converts the result to `DownloadCandidate` (see [download-manager.md](download-manager.md)) for storage on the task row.
-- An album download's own search (P5) is judged by [AlbumFolderPicker](../../src/main/java/com/catacomb5099/naviseerr/download/AlbumFolderPicker.java) instead, which reuses this class's format rule (`isLosslessOrHighBitRate`) and overload test (`isOverloaded`) and `TrackMatchingService.grade`, and looks for a sharer's folder (disc subfolders merged) holding every track of the album, else at least half of them (P6); see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026). The 10-file cap above does not apply there.
+- An album download's own search (P5) is judged by [AlbumFolderPicker](../../src/main/java/com/catacomb5099/naviseerr/download/AlbumFolderPicker.java) instead, which reuses the same tier rule (`DownloadQuality.of`), this class's overload test (`isOverloaded`) and `TrackMatchingService.grade`, and looks for a sharer's folder (disc subfolders merged) holding every track of the album, else at least half of them (P6); see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026). The 10-file cap above does not apply there.
 
 ### Track matching
 
@@ -90,7 +90,6 @@ slskd 0.26.0 added its own per-file retry with real exponential backoff and part
 
 - `url`, `api_key` - client config.
 - `timeout` - search timeout sent to slskd.
-- `min-bit-rate` (320) - candidate bitrate filter.
 - `max-files-per-download` (10) - candidate list cap.
 - `retry-count` (2) - per-candidate failover retries, consumed by `DownloadStateMachine`, not by an in-process poller.
 

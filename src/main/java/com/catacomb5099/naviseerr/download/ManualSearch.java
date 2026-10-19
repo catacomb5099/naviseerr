@@ -2,8 +2,10 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.settings.InstallSettingsRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -58,19 +60,21 @@ public class ManualSearch {
     private final SlskdSearchResultProcessor processor;
     private final AlbumFolderPicker picker;
     private final DownloadTaskRepository repository;
+    private final InstallSettingsRepository settings;
     private final Clock clock;
     private final Duration pollInterval;
     private final Duration budget;
     private final AtomicInteger inFlight = new AtomicInteger();
 
     public ManualSearch(SlskdService slskdService, SlskdSearchResultProcessor processor, AlbumFolderPicker picker,
-                        DownloadTaskRepository repository, Clock clock,
+                        DownloadTaskRepository repository, InstallSettingsRepository settings, Clock clock,
                         @Value("${download-task.search-poll-interval-ms:2000}") Duration pollInterval,
                         @Value("${download-task.manual-search-budget-ms:30000}") Duration budget) {
         this.slskdService = slskdService;
         this.processor = processor;
         this.picker = picker;
         this.repository = repository;
+        this.settings = settings;
         this.clock = clock;
         this.pollInterval = pollInterval;
         this.budget = budget;
@@ -94,9 +98,11 @@ public class ManualSearch {
             if (DownloadService.statusOf(song) == PickListStatus.SEARCHING) {
                 return Mono.error(new SearchRunningException(taskId));
             }
-            return run(text).flatMap(state -> {
+            // The chosen download quality orders the list as the loop would (one SELECT); nothing is dropped for it.
+            return run(text).zipWith(settings.downloadQuality()).flatMap(result -> {
+            SearchState state = result.getT1();
             Instant now = clock.instant();
-            List<DownloadCandidate> files = processor.allFiles(state, SearchQueryTiers.pickerName(song.songName()), text)
+            List<DownloadCandidate> files = processor.allFiles(state, SearchQueryTiers.pickerName(song.songName()), text, result.getT2())
                     .stream().map(DownloadCandidate::from).toList();
             log.info("Manual search '{}' for song {} of download {}: slskd search {} ({}), {} file(s)", text, taskId,
                     downloadId, state.getId(), state.getState(), files.size());
@@ -128,13 +134,15 @@ public class ManualSearch {
             if (!"DONE".equals(album.phase())) {
                 return Mono.error(new SearchRunningException(downloadId));
             }
-            return repository.songs(downloadId).collectList().flatMap(songs -> run(text).flatMap(state -> {
+            return repository.songs(downloadId).collectList().flatMap(songs -> run(text).zipWith(settings.downloadQuality()).flatMap(result -> {
+                SearchState state = result.getT1();
+                DownloadQuality chosen = result.getT2();
                 Instant now = clock.instant();
                 List<SearchResponseItem> responses = state.getResponses() == null ? List.of() : state.getResponses();
                 // Off the event loop, as the album search step does: judging 250 responses takes a fifth of a second.
                 return Mono.fromCallable(() -> StoredFolder.of(
-                                picker.folders(responses, songs, album.title(), album.artists(), sharer -> false),
-                                picker.allFolders(responses, songs, album.title(), album.artists())))
+                                picker.folders(responses, songs, album.title(), album.artists(), sharer -> false, chosen),
+                                picker.allFolders(responses, songs, album.title(), album.artists(), chosen)))
                         .subscribeOn(Schedulers.parallel())
                         .flatMap(folders -> {
                             log.info("Manual album search '{}' for download {}: slskd search {} ({}), {} folder(s)", text,

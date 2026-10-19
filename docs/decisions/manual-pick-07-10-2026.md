@@ -32,8 +32,8 @@ show.
 2. **The cache write can never fail a search.** Its own statement, errors swallowed and logged, pinned by
    a test. An empty list stamps a fresh row ("searched, nothing relevant") but never wipes a list another
    wording found: the title alone and "title - artist" each see files the other misses.
-3. **The list ignores the automatic picker's filters and shows the grade instead.** The 320 kbps /
-   lossless rule, the album-length rule and the unverified-artist rule are judgement calls; the point of
+3. **The list ignores the automatic picker's filters and shows the grade instead.** The quality tier rule
+   (until 19-10-2026 the 320 kbps / lossless floor), the album-length rule and the unverified-artist rule are judgement calls; the point of
    choosing by hand is to overrule them. EXACT, OTHER_VERSION and UNVERIFIED are shown as a badge.
 4. **A pick replaces the candidate list with the one chosen file, in place.** `PICK_SQL` resets the row
    to `DOWNLOAD_INIT` with `candidates = [that file]` (grade EXACT, source `MANUAL`), index 0, retries 0,

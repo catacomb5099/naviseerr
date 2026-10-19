@@ -27,7 +27,7 @@ public record StoredFolder(
         /**
          * Whether the album search itself would take this folder ({@link AlbumFolderPicker#folders}), or
          * it is kept only for a person to choose ({@link AlbumFolderPicker#allFolders}, 08-10-2026): too
-         * few of the album's songs, no artist in its path, a low bit rate or a stalling sharer. Null on
+         * few of the album's songs, no artist in its path, lossy files with no reported bit rate or a stalling sharer. Null on
          * rows written before 08-10-2026, which were all judged.
          */
         Boolean judged) {

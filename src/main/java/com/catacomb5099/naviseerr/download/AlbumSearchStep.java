@@ -2,7 +2,9 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.settings.InstallSettingsRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -40,17 +42,19 @@ public class AlbumSearchStep {
     private final SlskdService slskdService;
     private final AlbumFolderPicker picker;
     private final StallingSharers stallingSharers;
+    private final InstallSettingsRepository settings;
     private final Duration searchPollInterval;
     private final Duration searchBudget;
 
     public AlbumSearchStep(DownloadTaskRepository repository, SlskdService slskdService,
-                           AlbumFolderPicker picker, StallingSharers stallingSharers,
+                           AlbumFolderPicker picker, StallingSharers stallingSharers, InstallSettingsRepository settings,
                            @Value("${download-task.search-poll-interval-ms:2000}") Duration searchPollInterval,
                            @Value("${download-task.search-budget-ms:120000}") Duration searchBudget) {
         this.repository = repository;
         this.slskdService = slskdService;
         this.picker = picker;
         this.stallingSharers = stallingSharers;
+        this.settings = settings;
         this.searchPollInterval = searchPollInterval;
         this.searchBudget = searchBudget;
     }
@@ -153,12 +157,14 @@ public class AlbumSearchStep {
         if (songs.isEmpty()) {
             return finish(album, AlbumSearch.Outcome.NOTHING_TO_SEARCH, Map.of(), now, owner);
         }
-        // Off the event loop: judging 250 responses (about 5,000 files) takes a fifth of a second.
-        return Mono.fromCallable(() -> picker.folders(responses, songs, album.title(), album.artists(),
-                        sharer -> stallingSharers.isStalling(sharer, now)))
+        // The chosen download quality is read from the settings row here (one SELECT per completed search),
+        // so a change in Settings applies to the next album search, no restart. Then off the event loop:
+        // judging 250 responses (about 5,000 files) takes a fifth of a second.
+        return settings.downloadQuality().flatMap(chosen -> Mono.fromCallable(() -> picker.folders(responses, songs,
+                        album.title(), album.artists(), sharer -> stallingSharers.isStalling(sharer, now), chosen))
                 .subscribeOn(Schedulers.parallel())
-                .flatMap(folders -> remember(album, responses, songs, folders, now).thenReturn(folders))
-                .flatMap(folders -> settle(album, responses.size(), songs.size(), folders, now, owner));
+                .flatMap(folders -> remember(album, responses, songs, folders, chosen, now).thenReturn(folders))
+                .flatMap(folders -> settle(album, responses.size(), songs.size(), folders, now, owner)));
     }
 
     /**
@@ -168,9 +174,9 @@ public class AlbumSearchStep {
      * Nothing to write when no folder holds a song; a failed write is logged and the search goes on.
      */
     private Mono<Void> remember(AlbumSearch album, List<SearchResponseItem> responses, List<DownloadTask> songs,
-                                List<AlbumFolderPicker.Folder> judged, Instant now) {
+                                List<AlbumFolderPicker.Folder> judged, DownloadQuality chosen, Instant now) {
         List<StoredFolder> stored = StoredFolder.of(judged,
-                picker.allFolders(responses, songs, album.title(), album.artists()));
+                picker.allFolders(responses, songs, album.title(), album.artists(), chosen));
         if (stored.isEmpty()) {
             return Mono.empty();
         }

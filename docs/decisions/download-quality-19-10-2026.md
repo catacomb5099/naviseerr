@@ -31,7 +31,8 @@ a song shared only below 320 kbps failed with `NO_CANDIDATES` (1 of 718 in the l
   which does not exist; putting the taken file's quality on the row is a small follow-up).
   Flip: "only this tier" (fail instead of falling back); not built.
 - **Default = Lossless, "what naviseerr did until now".** The nearest single tier to the old behaviour: replayed on the
-  lab fixture, lossless picks go 61% → 97% and the right-version rate does not move (0.931 → 0.933). What an existing
+  lab fixture, lossless picks go 61% → 97% and the right-version rate does not move (0.931 → 0.933 with the
+  research's proxy; `PickerLabelledTest` with the real matcher: 699 songs with a pick, 0.976 exact, 0.964 lossless). What an existing
   install will notice: the ~39% of picks that were a 320 kbps MP3 because that sharer was quicker become FLAC (bigger
   files). Flip A: Very high (matches the words "320 floor" but turns ~60% of today's FLAC picks into MP3s). Flip B: a
   sixth row "Automatic" keeping the old floor rule verbatim (two picker rules alive; not under ponytail).

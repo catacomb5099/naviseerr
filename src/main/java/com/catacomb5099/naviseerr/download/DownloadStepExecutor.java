@@ -4,8 +4,10 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.util.TransferedFileUtil;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.settings.InstallSettingsRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClientException;
@@ -39,17 +41,20 @@ public class DownloadStepExecutor {
     private final SlskdSearchResultProcessor searchResultProcessor;
     private final DownloadStateMachine stateMachine;
     private final DownloadTaskRepository repository;
+    private final InstallSettingsRepository settings;
     private final Clock clock;
 
     public DownloadStepExecutor(SlskdService slskdService,
                                 SlskdSearchResultProcessor searchResultProcessor,
                                 DownloadStateMachine stateMachine,
                                 DownloadTaskRepository repository,
+                                InstallSettingsRepository settings,
                                 Clock clock) {
         this.slskdService = slskdService;
         this.searchResultProcessor = searchResultProcessor;
         this.stateMachine = stateMachine;
         this.repository = repository;
+        this.settings = settings;
         this.clock = clock;
     }
 
@@ -147,8 +152,10 @@ public class DownloadStepExecutor {
         // batched state therefore finds zero candidates for every search, however many results it
         // really got, and the download dies on NO_CANDIDATES seconds after the search completes.
         // So the batch decides *when* to select; this single GET supplies *what* to select from.
-        // Costs one extra call per download, on the completion transition only, not per poll.
-        return slskdService.getSearchWithResponses(task.searchId())
+        // Costs one extra call per download, on the completion transition only, not per poll. The
+        // chosen download quality is read from the settings row at the same moment (one SELECT), so a
+        // change in Settings applies to the next search that completes, no restart.
+        return settings.downloadQuality().flatMap(chosen -> slskdService.getSearchWithResponses(task.searchId())
                 .doOnNext(full -> log.info(
                         "Search {} for download {} complete (state='{}'); summary reported "
                                 + "responseCount={} fileCount={} with {} response(s) inlined, refetch "
@@ -164,12 +171,12 @@ public class DownloadStepExecutor {
                 // files Soulseek offered (post-mortem of 28-09-2026). The wording goes along too: when
                 // it did not name the artist, the picker requires the artist in the file's path. An
                 // album's song also holds the files to the album track's length (P6).
-                .flatMap(full -> remember(task, full, now)
+                .flatMap(full -> remember(task, full, chosen, now)
                         .then(searchResultProcessor.selectBestFiles(full,
                                 SearchQueryTiers.pickerName(task.songName()), task.searchQuery(),
-                                task.albumTrackSeconds()))
+                                task.albumTrackSeconds(), chosen))
                         .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
-                        .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now)));
+                        .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now))));
     }
 
     /**
@@ -182,9 +189,9 @@ public class DownloadStepExecutor {
      * carries on exactly as if nothing had been remembered, since a missing list costs a person a
      * retry while a failed search costs them the song.
      */
-    private Mono<Void> remember(DownloadTask task, SearchState full, Instant now) {
+    private Mono<Void> remember(DownloadTask task, SearchState full, DownloadQuality chosen, Instant now) {
         return Mono.fromCallable(() -> searchResultProcessor.allFiles(full,
-                        SearchQueryTiers.pickerName(task.songName()), task.searchQuery()))
+                        SearchQueryTiers.pickerName(task.songName()), task.searchQuery(), chosen))
                 .flatMap(files -> repository.saveSearchResults(task.taskId(),
                         files.stream().map(DownloadCandidate::from).toList(), now))
                 .onErrorResume(error -> {
