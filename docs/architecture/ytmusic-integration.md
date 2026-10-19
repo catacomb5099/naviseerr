@@ -127,6 +127,7 @@ are load-bearing on the UI, not stylistic):
 | `Playlist.id` | `playlistId`, else `browseId`, else `""` | bare `PL...` preferred over the `VL`-prefixed `browseId` -- see Endpoints below |
 | `Playlist.artists` | `artists[].name` | the adapter folds ytmusicapi's `author` string into `artists[0]` |
 | `Playlist.trackCount` | `trackCount`, else `0` | the adapter's `itemCount`, already an int |
+| `Playlist.views` | `views`, as sent | the playlist's own view count in YouTube Music's wording ("375K views"), kept by the adapter from the search row; passed through unparsed and NOT through `plays()` (a playlist is viewed, not played). Null where the row shows a song count (editorial playlists) and from an older adapter |
 
 `YtMusicSearchResponseMapper.mapToSearchResponse(response)` classifies every item by `resultType`
 in a single pass and routes it into `tracks`/`albums`/`artists`/`playlists`; anything else (`video`, `episode`,

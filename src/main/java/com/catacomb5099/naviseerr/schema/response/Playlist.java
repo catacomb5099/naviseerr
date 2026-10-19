@@ -28,4 +28,11 @@ public class Playlist {
      */
     List<String> artistIds;
     int trackCount;
+    /**
+     * How often the playlist itself was viewed, in YouTube Music's own wording ("375K views"), as
+     * its search row shows it: passed through unparsed and never relabelled "plays" (a song's count).
+     * Null where YouTube Music shows a song count instead (its own editorial playlists), on the
+     * Top result card, and from an adapter image older than 19-10-2026.
+     */
+    String views;
 }

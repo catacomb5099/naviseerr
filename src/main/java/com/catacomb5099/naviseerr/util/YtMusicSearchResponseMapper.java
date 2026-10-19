@@ -118,7 +118,8 @@ public class YtMusicSearchResponseMapper {
                 orEmpty(item.getTitle()),
                 mapArtistNames(item.getArtists()),
                 mapArtistIds(item.getArtists()),
-                item.getTrackCount() != null ? item.getTrackCount() : 0
+                item.getTrackCount() != null ? item.getTrackCount() : 0,
+                item.getViews() // "375K views", YouTube's noun kept; not plays(): a playlist is viewed, not played
         );
     }
 

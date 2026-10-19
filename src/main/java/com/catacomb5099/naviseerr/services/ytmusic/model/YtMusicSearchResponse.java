@@ -47,7 +47,8 @@ public class YtMusicSearchResponse {
         private Integer year;
         // Playlist items only: ytmusicapi's itemCount, folded to an int by the adapter.
         private Integer trackCount;
-        // Song items only: YouTube's abbreviated play count with no noun ("7.2M"); null on the Top result card.
+        // Song items: YouTube's abbreviated play count with no noun ("7.2M"); null on the Top result card.
+        // Playlist items: the playlist's own view count with its noun ("375K views"), user-made only.
         private String views;
     }
 
