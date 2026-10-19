@@ -25,7 +25,10 @@ a song shared only below 320 kbps failed with `NO_CANDIDATES` (1 of 718 in the l
   nothing acceptable it takes the nearest tier, ties going up: Lossless → Very high → High → Normal → Low; Very high →
   Lossless → High → Normal → Low; High → Very high → Normal → Lossless → Low; Normal → High → Low → Very high → Lossless;
   Low → Normal → High → Very high → Lossless. The 320 kbps floor goes with it: a song shared only at 192 kbps now
-  downloads at 192 instead of failing, and the Downloads page's Quality column (already there) shows what was taken.
+  downloads at 192 instead of failing. What was taken shows in the song's Choose-a-file pop-up (the person icon on
+  a Downloads row, `GET /downloads/{id}/candidates`): every file's quality, the one being taken marked. The Downloads
+  row itself names the sharer only (review of 20-10-2026: the first wording said "the Downloads page's Quality column",
+  which does not exist; putting the taken file's quality on the row is a small follow-up).
   Flip: "only this tier" (fail instead of falling back); not built.
 - **Default = Lossless, "what naviseerr did until now".** The nearest single tier to the old behaviour: replayed on the
   lab fixture, lossless picks go 61% → 97% and the right-version rate does not move (0.931 → 0.933). What an existing

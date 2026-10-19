@@ -272,7 +272,7 @@ add no DDL. Secrets are stored as typed (like V16's client secret) and never rea
 data statement: where the database already holds a suggested-playlist download (`downloads.download_type = 'CURATED'`,
 the one trace of the feature this database holds: the playlists themselves live in croissant) the row is created with
 `suggested_playlists = TRUE`, so an upgrade does not stop a weekly run whose playlists were downloaded; an install that made
-playlists but never downloaded one starts OFF and sees the switch pre-filled on the setup's third screen; `setup_completed_at` stays null on purpose, so the setup shows once after the upgrade. Not here: the
+playlists but never downloaded one starts OFF and sees the switch pre-filled on the setup's fourth screen; `setup_completed_at` stays null on purpose, so the setup shows once after the upgrade. Not here: the
 Soulseek account (slskd reads it from its own files, `settings/SoulseekAccountFiles`) and the Authentik connection
 (V16). All SQL in
 [InstallSettingsRepository.java](../../src/main/java/com/catacomb5099/naviseerr/settings/InstallSettingsRepository.java):
