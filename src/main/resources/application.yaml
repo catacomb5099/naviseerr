@@ -183,10 +183,14 @@ auth:
   # How long a login lasts on one device. Spotify and YouTube Music keep you signed in for good,
   # Navidrome for two days; 30 days is the compromise.
   session-days: 30
-  # Which other web addresses the sign-in may send the browser back to afterwards (the `to` of
-  # GET /auth/authentik/start), comma-separated. The app's own address always may; this is for a
-  # developer's web app on another port (Vite on :5173 calling the server on :8080). Anything else lands
-  # on /. The default applies only when the variable is absent: an empty AUTH_ALLOWED_ORIGINS= means "none".
+  # Which other web addresses may call the API from a browser with your login cookie (CORS), and be
+  # sent back to after a sign-in (the `to` of GET /auth/authentik/start), comma-separated. Only the
+  # developer setup needs one: Vite on :5173 calling the server on :8080. The install never does: the
+  # web app's Caddy forwards /api, so its calls name the server's own address and are not cross-origin,
+  # through an HTTPS proxy too, and the Docker image sets this empty (Dockerfile), so an install allows
+  # no other address at all. Any address not listed here gets no CORS answer, so a page on another site
+  # cannot read from the API. The default applies only when the variable is absent: an empty
+  # AUTH_ALLOWED_ORIGINS= in .env means "none", not the default.
   allowed-origins: ${AUTH_ALLOWED_ORIGINS:http://localhost:5173}
 
 # Library organiser: moves each finished song out of slskd's downloads folder into an organised music
