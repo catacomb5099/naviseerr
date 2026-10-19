@@ -54,3 +54,8 @@ second try). For a 429 it is the opposite: the adapter has just said "too many",
 is how a short limit becomes a long one. The retry filter now skips `rateLimited`; a 429 fails at once and reaches the
 advice as `YOUTUBE_MUSIC_RATE_LIMITED`. `Retry-After` is still not read: nothing on the server waits on behalf of a
 browser request, and the sentence already tells the person to wait a few minutes.
+
+Known ceiling: only the in-call retry is gone. The download loop still asks the adapter once per pending download per
+pass (up to `download-task.batch-size` calls every pass; the rows stay PENDING), and the `/status` probe below keeps
+about one tiny search a minute going; both carry on through a rate limit. Skipping a pass while the last admission
+failure was a 429 is the next step, if a real one is ever observed.
