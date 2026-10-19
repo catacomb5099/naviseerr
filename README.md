@@ -127,6 +127,49 @@ leave it. Your existing playlists stay.
     copy its `SOULSEEK_USERNAME=` and `SOULSEEK_PASSWORD=` lines into `.env`.
   - Your music: copy `LIBRARY_DIR` like any other folder, or add it to the backups you already make.
 
+### Using your own login (Authentik)
+
+naviseerr has its own login: the web app asks you to create an account on its first open. If you already
+run [Authentik](https://goauthentik.io), you can put it in front of the whole web app instead, so one
+login covers naviseerr too, and switch naviseerr's own login off. Sonarr calls this "External"
+authentication: the proxy checks who you are, naviseerr trusts whoever gets through (it does not show
+your Authentik name anywhere; nothing in it is per-user yet). Any login proxy that speaks Caddy's
+`forward_auth` (Authelia, say) works the same way with its own snippet.
+
+1. **In Authentik:** Applications → Providers → Create → *Proxy Provider*: name `naviseerr`, an
+   authorization flow (`default-provider-authorization-implicit-consent`), mode **Forward auth (single
+   application)**, external host `http://<your naviseerr address>:5056` (what you type in the browser).
+   Applications → Create: name and slug `naviseerr`, provider: that one. Applications → Outposts → edit
+   *authentik Embedded Outpost* → add the `naviseerr` application.
+2. **Next to `compose.yaml`:** copy [`deploy/authentik.caddy`](deploy/authentik.caddy) there and replace
+   `authentik-server:9000` (two places) with where your Authentik answers *from inside the web-app
+   container*: its service name when it is on the same Docker network (add that network to the `client`
+   service), or `host.docker.internal:9000` on Docker Desktop.
+3. **In `compose.yaml`:** mount the snippet into the web app and switch the built-in login off:
+   ```yaml
+   services:
+     client:
+       volumes:
+         - ./authentik.caddy:/etc/caddy/conf.d/authentik.caddy:ro
+     naviseerr:
+       environment:
+         AUTH_REQUIRED: "false"   # Authentik is the login now
+   ```
+   (Or inline it, Docker Compose 2.23.1 or newer: a top-level `configs:` entry with `content: |` holding
+   the snippet, and `configs: [{source: ..., target: /etc/caddy/conf.d/authentik.caddy}]` on `client`.)
+   Then `docker compose up -d`.
+
+Opening the web app now goes to Authentik's login and straight back into naviseerr, with no second
+login screen. `curl -i http://<naviseerr>:5056/api/downloads/active` without an Authentik session
+answers a redirect to Authentik, never data. The web app's Caddy imports everything in
+`/etc/caddy/conf.d/`; with nothing mounted there, nothing changes.
+
+Never set `AUTH_REQUIRED=false` without a login in front: then anyone who can reach the web app can
+search and download. If Authentik is down or misconfigured and you are locked out, remove the
+`volumes:` line and the `AUTH_REQUIRED` line, `docker compose up -d`, and naviseerr's own login is
+back (the account you made before is still there). Checked with Authentik 2026.8.4 (its own compose
+no longer needs Redis).
+
 ### Troubleshooting
 
 - **"required variable LIBRARY_DIR is missing a value".** `.env` has no `LIBRARY_DIR` (or an empty
@@ -183,6 +226,9 @@ leave it. Your existing playlists stay.
   under the `naviseerr` service's `environment:` in `compose.yaml` (`.env` cannot do it: compose does not
   pass that variable on) and `docker compose up -d`. The app then has no login at all until you remove
   the line, so only do this on a network nobody else can reach.
+- **Locked out behind Authentik** (the login loops, or Authentik is down). Remove the `volumes:` line
+  that mounts `authentik.caddy` and the `AUTH_REQUIRED` line from `compose.yaml`, run
+  `docker compose up -d`, and naviseerr's own login is back; the account you made before is still there.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.

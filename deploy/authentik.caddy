@@ -1,0 +1,21 @@
+# Authentik in front of naviseerr (forward auth, 19-10-2026). Mounted into the web-app container at
+# /etc/caddy/conf.d/authentik.caddy; its Caddyfile imports everything in that folder. Pair it with
+# AUTH_REQUIRED=false on the naviseerr service, so naviseerr's own login screen stays out of the way.
+#
+# Replace authentik-server:9000 (both lines) with where your authentik, or its outpost, answers from
+# inside the web-app container: a service name on the same Docker network, or the host's address
+# (host.docker.internal:9000 on Docker Desktop). Capitalisation of the header names matters to Authentik.
+
+# Authentik's own callback path must stay open, or nobody can ever log in.
+@outpost path /outpost.goauthentik.io/*
+handle @outpost {
+	reverse_proxy http://authentik-server:9000
+}
+
+# Everything else, the app and its /api alike, is asked of Authentik first.
+@protected not path /outpost.goauthentik.io/*
+forward_auth @protected http://authentik-server:9000 {
+	uri /outpost.goauthentik.io/auth/caddy
+	copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Email X-Authentik-Name X-Authentik-Uid
+	trusted_proxies private_ranges
+}
