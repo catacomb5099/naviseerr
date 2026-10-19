@@ -190,8 +190,10 @@ auth:
   # Which other web addresses may call the API from a browser with your login cookie (CORS),
   # comma-separated. Only the developer setup needs one: Vite on :5173 calling the server on :8080.
   # The compose install never needs it: the web app's Caddy forwards /api, so its calls name the
-  # server's own address and are not cross-origin, through an HTTPS proxy too. Any address not listed
-  # here gets no CORS answer at all, so a page on another site cannot read from the API.
+  # server's own address and are not cross-origin, through an HTTPS proxy too, and the Docker image sets
+  # this empty (Dockerfile), so an install allows no other address at all. Any address not listed here
+  # gets no CORS answer, so a page on another site cannot read from the API. The default below applies
+  # only when the variable is absent: an empty AUTH_ALLOWED_ORIGINS= in .env means "none", not the default.
   allowed-origins: ${AUTH_ALLOWED_ORIGINS:http://localhost:5173}
 
 # Library organiser: moves each finished song out of slskd's downloads folder into an organised music

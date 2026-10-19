@@ -31,6 +31,10 @@ WORKDIR /app
 COPY --from=build /src/build/libs/*.jar app.jar
 # Default user; compose's `user: ${PUID}:${PGID}` overrides it. Numeric, so no passwd entry needed.
 USER 1000:1000
+# The image allows no other web address to call the API from a browser (CORS off): the web app and the
+# API share one address through the web app's Caddy. The jar's own default, http://localhost:5173, is
+# for a developer's Vite; set AUTH_ALLOWED_ORIGINS on the container to allow an address anyway.
+ENV AUTH_ALLOWED_ORIGINS=""
 EXPOSE 8080
 # /auth/session: answers 200 without a login (every data endpoint is 401 without one since 19-10-2026).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \

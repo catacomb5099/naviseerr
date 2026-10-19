@@ -5,11 +5,11 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpCookie;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
+import org.springframework.web.cors.reactive.CorsUtils;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
@@ -64,7 +64,9 @@ public class AuthFilter implements WebFilter {
                         .doOnNext(user -> exchange.getAttributes().put(USER, user)).then();
         return resolved.then(Mono.defer(() -> {
             String path = exchange.getRequest().getPath().value();
-            if (OPEN.contains(path) || HttpMethod.OPTIONS.equals(exchange.getRequest().getMethod())
+            // A CORS preflight (OPTIONS with Origin and Access-Control-Request-Method) never carries the cookie and
+            // must pass; a bare OPTIONS is a request like any other, or it would list every route's verbs for free.
+            if (OPEN.contains(path) || CorsUtils.isPreFlightRequest(exchange.getRequest())
                     || exchange.getAttributes().containsKey(USER)) {
                 return chain.filter(exchange);
             }

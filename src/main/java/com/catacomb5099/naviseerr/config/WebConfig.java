@@ -25,7 +25,9 @@ public class WebConfig implements WebFluxConfigurer {
      * {@code AuthFilter} answers 401 before any handler runs, and without this a cross-origin browser
      * (the dev setup, Vite :5173 -> :8080) could not read that answer. Only the listed origins
      * ({@code auth.allowed-origins}) may do so with the session cookie; any other origin gets no CORS
-     * headers, so a page on another site cannot read an answer or send the cookie along.
+     * headers, so a page on another site cannot read an answer or send the cookie along. The Docker image
+     * sets the list empty (Dockerfile): an install allows no other address at all, like Navidrome and
+     * Jellyfin; the jar's own default is the developers' Vite origin.
      *
      * <p>The web app's own calls carry an Origin whose host is the request's own Host (the scheme may
      * differ: HTTPS at the proxy, plain HTTP here, which is why Spring's own same-origin test is not

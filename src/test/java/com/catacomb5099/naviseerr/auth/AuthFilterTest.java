@@ -51,8 +51,19 @@ class AuthFilterTest {
             assertTrue(reachedHandler.get(), path);
         }
         reachedHandler.set(false);
-        filter.filter(MockServerWebExchange.from(MockServerHttpRequest.options("/downloads/active")), chain).block();
+        filter.filter(MockServerWebExchange.from(MockServerHttpRequest.options("/downloads/active")
+                .header("Origin", "http://localhost:5173").header("Access-Control-Request-Method", "GET")), chain).block();
         assertTrue(reachedHandler.get(), "CORS preflight");
+    }
+
+    @Test
+    void aBareOptions_isNotAPreflight_andIs401LikeAnyOtherRequest() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.options("/downloads/active"));
+
+        filter.filter(exchange, chain).block();
+
+        assertFalse(reachedHandler.get(), "no Allow header listing the route's verbs for a caller without a cookie");
+        assertEquals(HttpStatus.UNAUTHORIZED, exchange.getResponse().getStatusCode());
     }
 
     @Test
