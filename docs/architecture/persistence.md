@@ -166,14 +166,20 @@ those changes add no migration of their own and cannot land out of order.
   `track_count`, image), with the track number from `download_tasks.track_number` for an ALBUM track
   and from `song_albums.track_number` otherwise. No trusted album: no `r`, and the song's own image.
 - Songs already in the library (no schema of their own): `FILED_SONGS` is the filed history, SUCCEEDED
-  rows with a `library_path`, each with its title, album, track number and whether its pick was EXACT
-  (a song's `song_albums` album counts only when it was saved within `ALBUM_LOOKUP_GRACE` of the song's
-  `finished_at`). `FILED_COPIES_SQL` matches it against the songs about to be admitted, and
-  `CREATE_TASKS_SQL` writes a song whose copy is still on disk `SUCCEEDED` from birth: `finished_at =
-  :now`, progress 100 and that `library_path`, so nothing ever claims it. `TASKS_TO_ORGANISE_SQL` adds
-  `filed_copy` (the library's copy of the same album track, or with no album the same id and title),
-  `copy_key` (the organiser files one copy per key per pass) and `pick_size` (the new copy is deleted
-  only when its size is the pick's).
+  rows with a `library_path`, each with its title, primary artist and length (its `media_items` row's),
+  album, track number, the title of the album it is filed under, and whether its pick was EXACT (a
+  song's `song_albums` album counts only when it was saved within `ALBUM_LOOKUP_GRACE` of the song's
+  `finished_at`). `SAME_SONG` (19-10-2026) is the one fragment that says when a filed row is a copy of a
+  wanted song: same album and track; or, not for an album request, same id with the same title or a
+  length within the picker's tolerance; or, not for an album request, the same `songKey` and
+  `artistKey` (title and artist with YouTube's noise stripped, in SQL) unless the copy's album title
+  matches `VERSION_ALBUM`. `FILED_COPIES_SQL` joins it against the songs about to be admitted (their
+  artist from `media_items`, upserted first), and `CREATE_TASKS_SQL` writes a song whose copy is still
+  on disk `SUCCEEDED` from birth: `finished_at = :now`, progress 100 and that `library_path`, so
+  nothing ever claims it. `TASKS_TO_ORGANISE_SQL` adds `filed_copy` (the same fragment over a LATERAL
+  `w` built from the task and its media row; an album's track only by its own album and track),
+  `copy_key` (the title-and-artist key, else album and track, else id: the organiser files one copy
+  per key per pass) and `pick_size` (the new copy is deleted only when its size is the pick's).
 - `album_searches` (one row per album download: `phase` SEARCH_INIT/SEARCH_POLL/DONE, tier, search id,
   due time, lease, outcome) with the partial index `idx_album_searches_due`: written since 04-10-2026 by
   whole-album downloads (see [download-manager.md](download-manager.md#whole-album-first-p5-04-10-2026)).

@@ -25,6 +25,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -379,6 +380,9 @@ public class DownloadTaskRunner {
                         LinkedHashMap::new, Collectors.toList()))
                 .flatMapMany(copies -> Flux.fromIterable(copies.values()))
                 .flatMap(copies -> {
+                    // The album's own track goes first, so a playlist's twin then points at the file in
+                    // the album's folder rather than the album pointing at the twin's (19-10-2026).
+                    copies.sort(Comparator.comparing(job -> job.type() != DownloadType.ALBUM));
                     AtomicBoolean filed = new AtomicBoolean();
                     return Flux.fromIterable(copies).concatMap(job -> filed.get() ? Mono.empty() : organiser.file(job, now)
                             .flatMap(path -> repository.setLibraryPath(job.taskId(), path.toString()))

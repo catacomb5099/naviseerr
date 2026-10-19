@@ -169,7 +169,8 @@ copy that slipped through points at the existing file instead of becoming a seco
   track number, never by id: a Deluxe edition shares the plain album's ids, and taking those files
   would file half the Deluxe in the plain album's folder. A song or playlist track also matches by its
   trusted album track once it has a `song_albums` answer (the lookup often has not run yet at
-  admission, so the filing check below catches the rest).
+  admission, so the filing check below catches the rest). *19-10-2026: a song or playlist track now also
+  matches by title and artist, and by id with the same length; see the addendum at the end.*
 - **At filing** (`TASKS_TO_ORGANISE_SQL`'s `filed_copy`): a song whose album track (the album its tags
   follow, and its track number) the library already has, or with no album the same YouTube id and
   title, points at that file. Typically the official video's twin of a track an album download filed
@@ -194,9 +195,9 @@ admission: drop `f.exact AND` in `FILED_COPIES_SQL`.
   (From "8 Mile" Soundtrack)", a different title by the rule above.
 - A song requested while its album is still downloading (neither filed yet) is downloaded twice; the
   filing check then keeps one file per album track, so only the transfer is wasted. The same for an
-  album requested twice at once, and for the first request of a song the library has from its album
-  under the album's other YouTube id: the song lookup has not run at admission, so the song downloads
-  in full and its copy is then removed at filing.
+  album requested twice at once. *Until 19-10-2026* the same held for the first request of a song the
+  library had from its album under the album's other YouTube id (the song lookup has not run at
+  admission); the addendum below recognises that song by title and artist instead.
 - A song filed before B1, or filed under its own name because its album answer came late, never counts
   as its album's track: requesting the album downloads that track again (into the album's folder).
 - There is no way to get a better copy (MP3 to FLAC, or a wrong file graded exact) except deleting the
@@ -218,3 +219,73 @@ admission: drop `f.exact AND` in `FILED_COPIES_SQL`.
   `TASKS_TO_ORGANISE_SQL`).
 - Ids that time out every time are retried every tick, oldest first (`ponytail:` in
   `SongAlbumResolver.resolveDue`).
+
+## Addendum 19-10-2026: one copy of a song serves every playlist
+
+**Context.** The owner saw a playlist download songs an album had just filed: "it does not just point
+that playlist to the album file, it redownloads it". Measured on two YouTube Music playlists (an
+editorial and a fan one, 15 rows each): 28 of 30 rows carry the official video's id, which appears on
+no album page, and the dev database had 5 of 8 playlist/album title pairs under different ids. The
+admission check only knew a song by its YouTube id (or by an album answer that does not exist yet at
+admission), so the one place that could skip the search never fired, and the filing-time fallback
+depended on the album lookup trusting the very edition the user had downloaded. The library itself,
+title and artist, was never consulted as a song's identity.
+
+**Decisions.**
+
+1. **One predicate, `SAME_SONG`, for both checks.** `FILED_COPIES_SQL` (admission) and
+   `TASKS_TO_ORGANISE_SQL`'s `filed_copy` (filing) share one SQL fragment over `FILED_SONGS`, which now
+   also carries the filed row's primary artist, length and the title of the album it is filed under.
+   Three arms: (a) the same album and track number, as before; (b) for anything but an album request,
+   the same YouTube id with the same title OR a length within the picker's tolerance
+   (`SlskdSearchResultProcessor.lengthTolerance`, max(10 s, 3 %)): the same upload under a retitled row
+   ("Supersonic (Official Video)" vs "Supersonic"; the "Definitely Maybe 30th" case where one id sits on
+   two rows with two titles and two lengths still counts as two songs); (c) for anything but an album
+   request, the same `songKey` and `artistKey`, and lengths within a minute of each other when both are
+   known (a video drifts tens of seconds from the album track, 48 s measured; an artist's second
+   "Intro" or "Interlude" is another song). The keys are columns of `FILED_SONGS`, computed once per
+   row behind a `MATERIALIZED` fence, never expressions inside the predicate: arm (c) is one arm of an
+   OR, so Postgres runs it as a nested-loop filter over every (wanted × filed) pair.
+2. **`songKey` is YouTube's noise stripped in SQL**: lower case; a leading "Artist - " echo gone when
+   the title starts with the song's own artist; bracket groups containing official / video / audio /
+   lyric(s) / visualiser / remaster(ed) / HD / HQ / 4K / feat / ft / featuring as whole words gone
+   ("(Daft Punk Remix)" is not a "ft." credit, "(Soft Mix)" is not "[HD]"); letters and digits only.
+   Version words stay, and a group that names one is kept whole: "Wonderwall (Live)" is "wonderwall
+   live" and "Wonderwall (Live Video)" is "wonderwall live video", never "wonderwall", as
+   `SearchQueryTiers` already treats them. `artistKey` is the artist name reduced the same way.
+   Measured on the dev database's 144 noisy titles: every shape folded except uploads whose artist
+   field is the uploader ("Suede HQ", "BUNO Moments"), the stated ceiling; such a row downloads and is
+   deduplicated at filing as before. *ponytail:* a second, shorter normaliser next to the Java one
+   (`SearchQueryTiers.NOISE`, `SongAlbumResolver.key`); if a demo shows them drifting, move the
+   predicate to Java through `filedCopies`.
+3. **Never from a version album.** Arm (c) refuses a copy filed under an album whose title names a
+   version (`VERSION_ALBUM`: live, unplugged, acoustic, session(s), demo(s), remix(es), karaoke,
+   instrumental(s), cover(s)): a live album's "Wonderwall" is not the Wonderwall a playlist asks for.
+   Ceiling: a live album titled plainly ("Knebworth 1996") is taken as the song; a playlist's stated
+   preference is "any existing copy". The reverse ceiling: a studio album whose title merely contains
+   one of the words ("Live Through This", "BBC Sessions", "Long Live A$AP") is treated as a version
+   album, so its songs download again for a playlist (as they did before this addendum).
+4. **An album's own track points only at its own album's file.** At filing, arms (b) and (c) are off
+   for an album download's track: another album's copy of the recording is not this album's. The
+   `copy_key` the organiser groups by is now the title-and-artist key (album and track, then id, when
+   no media row exists), so an album track and its playlist twin ready in one pass are one group, and
+   the album's own track is filed first so the twin then points into the album's folder.
+5. **Playlists point, never copy.** A playlist or song row matched at admission is created `SUCCEEDED`
+   with the album file's `library_path`, no search, and the `.m3u8` lists that path, as Apple Music's
+   library does (a playlist is a list of references to library items, never a second copy); the same
+   as Navidrome and Jellyfin read our playlist files.
+
+**Flip:** the title-and-artist arm: drop arm (c) from `SAME_SONG` (then only ids and album answers match,
+as before 19-10-2026). The version guard: drop the `COALESCE(f.album_title, '') !~* VERSION_ALBUM` line.
+The length arm: drop the `abs(f.duration - w.duration)` line (then the same id needs the same title).
+The minute on arm (c): drop its `abs(f.duration - w.duration) <= 60` line.
+
+**Consequences.** A different recording with the identical title and artist from an album whose title
+has no version word is taken as the same song for a playlist (acceptable by the owner's rule; not
+closable without acoustic fingerprints); two different songs with one title by one artist ("Intro",
+"Interlude") are told apart by length only when a minute or more apart. The join is a nested loop over
+the filed history per admission and per filing batch: measured 19-10-2026 at 5000 filed songs, one
+24-song admission took 4.1 s with the key regexes inside the join filter and 0.1 s with the keys
+computed once per row (`MATERIALIZED`), a filing batch of ten 1.7 s → 0.09 s; a generated, indexed
+`song_key` column is the upgrade. Pre-V12 rows have no `duration_seconds`/`track_title`: the title arms use
+`media_items.title` and the length arm is skipped when either side is NULL.
