@@ -230,6 +230,20 @@ the OLD row's candidates, index, sharer and transfer id through a self-join (`FR
 the statement's snapshot) so the caller can stop the old transfer and delete the right partial files.
 `phase <> 'SUCCEEDED'` refuses a filed song; tasks are locked before the download row, as in `RETRY_SQL`.
 
+### V16: `login_settings` (log in with Authentik, 19-10-2026)
+
+[V16__login_settings.sql](../../src/main/resources/db/migration/V16__login_settings.sql) adds the one-row
+table that says how to reach the owner's Authentik: `issuer` (the provider's OpenID Configuration Issuer,
+stored with one trailing slash), `client_id`, `client_secret` (as typed, never read back out through the
+API), `enabled` (false until the first sign-in through Authentik succeeds; true = every route needs a
+session) and `updated_at`. The one-row trick is `one BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (one)`: a
+second INSERT fails, so `save` is `INSERT ... ON CONFLICT (one) DO UPDATE`. A typed row rather than a
+generic key/value `settings` table: one SELECT, no serialisation, and nothing else is a runtime setting
+today (the Soulseek account lives in slskd's files because slskd reads them). All SQL in
+[LoginSettingsRepository.java](../../src/main/java/com/catacomb5099/naviseerr/auth/LoginSettingsRepository.java);
+`isEnabled()` is `COALESCE((SELECT enabled FROM login_settings), FALSE)`, asked on every request once
+the login exists, so there is no cache to invalidate when the owner turns it off.
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.
