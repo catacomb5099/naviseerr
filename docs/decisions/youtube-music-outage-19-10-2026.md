@@ -67,8 +67,8 @@ from a page (Soulseek login, the library folder), fed by `GET /status`. YouTube 
 and the admission of every new download wait on it, and a download requested during an outage sits at "Waiting" with
 nothing to say why. `/status` now carries `youtubeMusic: {reachable, detail}` from the adapter's own cached
 `GET /health/ready` (one tiny search per minute per adapter worker), with the same 3 s budget as the slskd calls and
-always 200. The strip is one wording for every cause ("YouTube Music isn't answering — search and new downloads will
-wait until it is back"): the probe cannot tell a rate limit from an outage, and a strip that guesses is worse than one
+always 200. The strip is one wording for every cause ("YouTube Music isn't answering — search won't work and new
+downloads will wait until it is back"): the probe cannot tell a rate limit from an outage, and a strip that guesses is worse than one
 that is plain; `detail` keeps the distinction for the person reading the status by hand. This is the Sonarr / Radarr /
 Lidarr shape (System → Health: "Indexers are unavailable due to failures", cleared by the next periodic check).
 
