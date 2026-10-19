@@ -63,7 +63,11 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    cannot be reset.**
 5. Open the web app at `http://<this computer's address>:5056`, or http://localhost:5056 on the same
    computer. The first open asks you to create your account: choose a username and a password (at
-   least 8 characters); that is the only account, and you stay logged in for 30 days on each device.
+   least 8 characters), and type the **setup code** the server printed at start in a banner in its log
+   (`docker compose logs naviseerr`; it is also saved as `config/setup-code.txt` in naviseerr's data
+   folder). Only whoever can read that log can make the account, so nobody else can claim your install
+   first; the code works once and is then deleted, and a restart before you use it prints a new one.
+   That is the only account, and you stay logged in for 30 days on each device.
    The round button with your initial, top right, has "Log out". Is it working? `docker compose ps`
    shows every part running, the web app has no amber
    "Not connected to Soulseek" strip across its top (it stays until the Soulseek login works), and
@@ -85,8 +89,48 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    forwarding" page, forward TCP port 50300 to this computer. That is the door other Soulseek users
    knock on; slskd cannot open it by itself. The web app has a login, but it is plain HTTP: if you
    want it reachable from outside your home, put it behind a reverse proxy with HTTPS rather than
-   forwarding port 5056 as it is (a proxy on your own network or Docker network also makes the login
-   cookie Secure by itself: the web app passes its `X-Forwarded-Proto` on).
+   forwarding port 5056 as it is, and read the next section.
+
+### Exposing naviseerr on the internet
+
+With the web app behind a reverse proxy on your own domain, the login is what stands between the
+internet and your downloads (a bot that got in could hammer search until YouTube Music blocks your
+address, or start downloads until the disk is full). What the app does for you, and what you do:
+
+- **Nobody else can create the account.** The first-run screen needs the setup code from the server
+  log (step 5). Create your account **before** opening the proxy to the internet, or right after: the
+  code is in the log, never on the page, and a restart before you use it prints a new one. Keep it to
+  yourself like a password; it is void once the account exists. (Jupyter and Grafana hand out a
+  first-run token or password in their log the same way; Vaultwarden closes sign-ups behind an admin
+  token.)
+- **HTTPS at your proxy.** Your proxy owns the certificate; the login cookie is marked Secure by itself
+  when the request arrived over HTTPS (the web app passes `X-Forwarded-Proto` on from a proxy on your
+  own network or Docker network). The web app's own answers carry the usual browser hardening headers
+  (no type sniffing, no framing by other sites, no camera or location prompts); add HSTS at your proxy
+  if you want it.
+- **Guessing is slow, for one name and for everyone.** Five wrong passwords for one username in 20
+  seconds answer `429 Too many attempts, wait a moment` for the rest of those 20 seconds (Navidrome's
+  rule); thirty failed logins or setup codes in a minute, under any names, answer
+  `429 Too many attempts, wait a minute` to everyone, so a bot cycling through names gets nowhere
+  either. While that is happening you may see the minute's wait yourself; that is the price, and
+  Authentik in front (below) is the way to never pay it. Nothing else of the API answers without a
+  login: a bot cannot search or download at all.
+- **Every failure is in the log.** `docker compose logs naviseerr | grep "Login failed"` shows one line
+  per wrong password or setup code, with who tried it:
+  ```
+  WARN ... Login failed for "admin" from 203.0.113.9 (7 of 30 failures this minute for everyone)
+  WARN ... Too many failed logins from everyone: refusing every login and setup attempt for the rest of the minute
+  ```
+  The address is the real caller's as your proxy passed it on (`X-Forwarded-For`, trusted only from a
+  proxy on a private address); a caller on the internet is never believed about who it is. A fail2ban
+  rule on that line is the natural next step if you want to ban addresses at your firewall.
+- **Never `AUTH_REQUIRED=false` on an install the internet can reach**, unless Authentik or another
+  login proxy stands in front of the whole web app. With Authentik in front, bots are stopped before
+  they reach naviseerr at all; you may then switch the built-in login off (one login) or keep it on as a
+  second lock (two logins, one after the other). Either way, never leave neither.
+- **Only the web app's own address may call the API from a browser** with your login cookie. The
+  install needs nothing for that (the web app and the API share one address, through your proxy too).
+  Developers running the web app on another port list it in `AUTH_ALLOWED_ORIGINS` (`.env.example`).
 
 ### Updating
 
@@ -178,8 +222,10 @@ leave it. Your existing playlists stay.
   account" again and your downloads, playlists and settings are untouched:
   ```sh
   docker compose exec postgres psql -U naviseerr -c "DELETE FROM sessions; DELETE FROM users;"
+  docker compose restart naviseerr
   ```
-  If you would rather not touch the database, switch the login off instead: add `AUTH_REQUIRED: "false"`
+  The restart prints a fresh setup code in the naviseerr log for the new account (the code is made at
+  start, only while no account exists). If you would rather not touch the database, switch the login off instead: add `AUTH_REQUIRED: "false"`
   under the `naviseerr` service's `environment:` in `compose.yaml` (`.env` cannot do it: compose does not
   pass that variable on) and `docker compose up -d`. The app then has no login at all until you remove
   the line, so only do this on a network nobody else can reach.
