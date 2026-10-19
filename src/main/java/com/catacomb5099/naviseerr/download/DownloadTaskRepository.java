@@ -735,6 +735,71 @@ public class DownloadTaskRepository {
             """;
 
     /**
+     * Songs and playlist tracks still on their way (not finished, not leased by a step right now) whose
+     * song the library has an EXACT copy of by {@link #SAME_SONG}, newest copy first per song
+     * (19-10-2026). Run after a pass filed something: a playlist requested while its album was still
+     * downloading has rows that admission could not match, and this is how they learn the album's copy
+     * has landed. Never an album download's held songs: an album gets its own copy of every track.
+     * Whether each file is still there is {@link LibraryOrganiser#stillFiled}'s to say. The filed
+     * history is {@code MATERIALIZED} and the live rows' keys computed once each (see FILED_SONGS):
+     * 300 live rows x 5000 filed songs ran in ~0.3 s measured 19-10-2026, against 94 s with the keys
+     * inside the join filter.
+     */
+    private static final String WAITING_COPIES_SQL = """
+            WITH filed AS MATERIALIZED (%1$s)
+            SELECT t.task_id, t.download_id, f.library_path
+              FROM download_tasks t
+              JOIN downloads d ON d.download_id = t.download_id
+              LEFT JOIN media_items s ON s.youtube_id = t.youtube_id
+              LEFT JOIN song_albums a ON a.youtube_id = t.youtube_id
+              CROSS JOIN LATERAL (SELECT t.youtube_id, COALESCE(t.track_title, s.title) AS title, s.artists[1] AS artist,
+                                         COALESCE(t.duration_seconds, s.duration_seconds) AS duration,
+                                         false AS album, a.album_id, a.track_number,
+                                         %3$s AS song_key, %4$s AS artist_key
+                                  OFFSET 0) w
+              JOIN filed f ON f.exact AND %2$s
+             WHERE d.download_type <> 'ALBUM'
+               AND t.phase NOT IN ('SUCCEEDED', 'FAILED')
+               AND (t.lease_expires_at IS NULL OR t.lease_expires_at < :now)
+             ORDER BY t.task_id, f.finished_at DESC
+            """.formatted(FILED_SONGS, SAME_SONG, songKey("COALESCE(t.track_title, s.title)", "s.artists[1]"),
+            artistKey("s.artists[1]"));
+
+    /**
+     * Marks a still-live song done with the library's file: the same SET a song admitted with a copy
+     * gets from CREATE_TASKS_SQL, plus the peer columns cleared (it never got a file of its own). The
+     * guard repeats the claim's, so a row a step leased between the SELECT and this UPDATE is left to
+     * its search; that step's later SAVE_SQL then finds the row terminal and writes nothing. RETURNING
+     * hands back the peer and transfer the row had, so the caller can stop a transfer slskd is still
+     * running and remove its partial files (CANCEL_SQL's shape).
+     */
+    private static final String MARK_FILED_SQL = """
+            UPDATE download_tasks t
+               SET phase = 'SUCCEEDED',
+                   library_path = :path,
+                   finished_at = :now,
+                   phase_entered_at = :now,
+                   next_attempt_at = :now,
+                   progress_percent = 100,
+                   failure_reason = NULL,
+                   last_error = NULL,
+                   slskd_username = NULL,
+                   slskd_filename = NULL,
+                   slskd_transfer_id = NULL,
+                   updated_at = now(),
+                   lease_owner = NULL,
+                   lease_expires_at = NULL
+              FROM (SELECT task_id, download_id, candidates, candidate_index, slskd_username, slskd_filename,
+                           slskd_transfer_id
+                      FROM download_tasks WHERE task_id = :id) old
+             WHERE t.task_id = old.task_id
+               AND t.phase NOT IN ('SUCCEEDED', 'FAILED')
+               AND (t.lease_expires_at IS NULL OR t.lease_expires_at < :now)
+            RETURNING old.task_id, old.download_id, old.candidates, old.candidate_index,
+                      old.slskd_username, old.slskd_filename, old.slskd_transfer_id
+            """;
+
+    /**
      * Finished downloads whose collection-level work (the playlist file) is still to do: every one of
      * their succeeded songs has either been filed or given up on ({@code finished_at <= :cutoff} with
      * no path), and at least one WAS filed -- which is what keeps this off the install's history, where
@@ -1308,6 +1373,39 @@ public class DownloadTaskRepository {
                 .bind("path", libraryPath)
                 .fetch()
                 .rowsUpdated();
+    }
+
+    /** A live song and a library file that is a copy of it; see WAITING_COPIES_SQL. */
+    public record WaitingCopy(UUID taskId, UUID downloadId, String libraryPath) {}
+
+    /** Live songs the library has a copy of, newest copy first per song; see WAITING_COPIES_SQL. */
+    public Flux<WaitingCopy> waitingCopies(Instant now) {
+        return client.sql(WAITING_COPIES_SQL)
+                .bind("now", now)
+                .map((row, meta) -> new WaitingCopy(row.get("task_id", UUID.class),
+                        row.get("download_id", UUID.class), row.get("library_path", String.class)))
+                .all();
+    }
+
+    /**
+     * Marks a live, unleased song done with the library's file; see MARK_FILED_SQL. Empty when the row
+     * was finished or leased meanwhile; otherwise the peer, file and transfer it had, for stopping them.
+     */
+    public Flux<DownloadTask> markFiled(UUID taskId, String libraryPath, Instant now) {
+        return client.sql(MARK_FILED_SQL)
+                .bind("id", taskId)
+                .bind("path", libraryPath)
+                .bind("now", now)
+                .map((row, meta) -> DownloadTask.builder()
+                        .taskId(row.get("task_id", UUID.class))
+                        .downloadId(row.get("download_id", UUID.class))
+                        .candidates(readCandidates(row.get("candidates", String.class)))
+                        .candidateIndex(row.get("candidate_index", Integer.class))
+                        .slskdUsername(row.get("slskd_username", String.class))
+                        .slskdFilename(row.get("slskd_filename", String.class))
+                        .slskdTransferId(row.get("slskd_transfer_id", String.class))
+                        .build())
+                .all();
     }
 
     /** Downloads whose songs are all filed (or given up on) and whose playlist file is still to write. */

@@ -1094,6 +1094,59 @@ class DownloadTaskRepositoryIT {
         assertEquals(keys.get(track), keys.get(twin), "one song, so only one of the two is filed per pass");
     }
 
+    // ---- a waiting song whose copy has landed (19-10-2026) ---------------------------------------
+
+    @Test
+    void waitingCopies_listsALiveSongTheLibraryHas_neverALeasedRow_norAnAlbumsHeldSong() {
+        String file = definitelyMaybeSupersonic();
+        UUID playlist = insertDownload("PENDING", "PLAYLIST");
+        media("omv", "Oasis - Supersonic (Official Video)", "Oasis");
+        media("leased", "Supersonic", "Oasis");
+        media("other", "Live Forever", "Oasis");
+        repository.createTasks(playlist, List.of(wanted("omv", "Oasis - Supersonic (Official Video)", null),
+                wanted("leased", "Supersonic", null), wanted("other", "Live Forever", null)), NOW).block();
+        setTask(taskIdOf(playlist, "leased"), "lease_owner = 'a-step', lease_expires_at = '2099-01-01'");
+        UUID album = insertDownload("PENDING", "ALBUM", "MPREb_tf");
+        media("tf-6", "Supersonic", "Oasis");
+        repository.createTasks(album, List.of(wanted("tf-6", "Supersonic", 12)), NOW, HOLD).block();
+
+        assertEquals(List.of(taskIdOf(playlist, "omv") + " " + file),
+                repository.waitingCopies(NOW).map(c -> c.taskId() + " " + c.libraryPath()).collectList().block(),
+                "the waiting twin; not the row a step holds, not the song the library lacks, not an album's track");
+        assertEquals(playlist, repository.waitingCopies(NOW).blockFirst().downloadId());
+    }
+
+    @Test
+    void markFiled_finishesAWaitingRowWithTheFile_handsBackItsTransfer_andLeavesALeasedOrFinishedRowAlone() {
+        UUID playlist = insertDownload("PENDING", "PLAYLIST");
+        repository.createTasks(playlist, List.of(wanted("a", "A", null), wanted("b", "B", null), wanted("c", "C", null)), NOW).block();
+        UUID transferring = taskIdOf(playlist, "a");
+        UUID leased = taskIdOf(playlist, "b");
+        setTask(transferring, "phase = 'DOWNLOAD_POLL', slskd_username = 'bob', slskd_filename = 'x\\a.flac', "
+                + "slskd_transfer_id = 'tr-1', progress_percent = 40");
+        setTask(leased, "lease_owner = 'a-step', lease_expires_at = '2099-01-01'");
+
+        List<DownloadTask> was = repository.markFiled(transferring, "/music/Oasis/DM/01.flac", NOW).collectList().block();
+
+        assertEquals(1, was.size());
+        assertEquals("tr-1", was.getFirst().slskdTransferId(), "the transfer to stop in slskd");
+        assertEquals("bob", was.getFirst().slskdUsername());
+        assertEquals("SUCCEEDED", taskField(transferring, "phase"));
+        assertEquals("/music/Oasis/DM/01.flac", taskField(transferring, "library_path"));
+        assertEquals(NOW, template.getDatabaseClient()
+                .sql("SELECT finished_at FROM download_tasks WHERE task_id = :id").bind("id", transferring)
+                .map((row, meta) -> row.get("finished_at", Instant.class)).one().block());
+        assertNull(taskField(transferring, "slskd_username"), "no peer of its own: the client reads it as in your library");
+        assertNull(taskField(transferring, "slskd_transfer_id"));
+        assertEquals(List.of(), repository.markFiled(transferring, "/music/elsewhere.flac", NOW).collectList().block(),
+                "finished rows are never touched");
+        assertEquals(List.of(), repository.markFiled(leased, "/music/Oasis/DM/02.flac", NOW).collectList().block(),
+                "a row a step holds is left to that step");
+        assertEquals("SEARCH_INIT", taskField(leased, "phase"));
+        assertEquals(1L, repository.markFiled(taskIdOf(playlist, "c"), "/music/Oasis/DM/03.flac", NOW).count().block());
+        assertEquals(0L, repository.concludeDownloads().block(), "one song still waits, so the playlist stays open");
+    }
+
     @Test
     void setLibraryPath_writesOnce() {
         UUID dl = insertDownload("SUCCEEDED");
@@ -2435,6 +2488,13 @@ class DownloadTaskRepositoryIT {
 
     private UUID taskIdOf(UUID downloadId) {
         return taskIdsOf(downloadId).getFirst();
+    }
+
+    private UUID taskIdOf(UUID downloadId, String youtubeId) {
+        return template.getDatabaseClient()
+                .sql("SELECT task_id FROM download_tasks WHERE download_id = :id AND youtube_id = :yt")
+                .bind("id", downloadId).bind("yt", youtubeId)
+                .map((row, meta) -> row.get("task_id", UUID.class)).one().block();
     }
 
     private List<UUID> taskIdsOf(UUID downloadId) {

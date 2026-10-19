@@ -184,6 +184,54 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
+    void aPassThatFiledASong_marksWaitingSongsTheLibraryNowHasDone_stopsTheirTransfers_andConcludesAgain() {
+        LibraryOrganiser.Job filed = job(UUID.randomUUID());
+        UUID playlistId = UUID.randomUUID();
+        UUID waiting = UUID.randomUUID();
+        UUID gone = UUID.randomUUID();
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(organiser.albumCutoff(T0)).thenReturn(T0.minusSeconds(120));
+        when(repository.tasksToOrganise(10, T0.minusSeconds(600), T0.minusSeconds(120))).thenReturn(Flux.just(filed));
+        when(organiser.file(filed, T0)).thenReturn(Mono.just(java.nio.file.Path.of("/music/Oasis/DM/06.flac")));
+        when(repository.setLibraryPath(any(), any())).thenReturn(Mono.just(1L));
+        when(repository.waitingCopies(T0)).thenReturn(Flux.just(
+                new DownloadTaskRepository.WaitingCopy(waiting, playlistId, "/music/Oasis/DM/06.flac"),
+                new DownloadTaskRepository.WaitingCopy(waiting, playlistId, "/music/Oasis/older.flac"),
+                new DownloadTaskRepository.WaitingCopy(gone, playlistId, "/music/Oasis/deleted.flac")));
+        when(organiser.stillFiled(2, List.of(
+                new LibraryOrganiser.FiledCopy(1, "/music/Oasis/DM/06.flac"),
+                new LibraryOrganiser.FiledCopy(1, "/music/Oasis/older.flac"),
+                new LibraryOrganiser.FiledCopy(2, "/music/Oasis/deleted.flac"))))
+                .thenReturn(Mono.just(java.util.Arrays.asList("/music/Oasis/DM/06.flac", null)));
+        when(repository.markFiled(waiting, "/music/Oasis/DM/06.flac", T0)).thenReturn(Flux.just(DownloadTask.builder()
+                .taskId(waiting).downloadId(playlistId).candidates(List.of()).slskdUsername("bob").slskdTransferId("tr-1").build()));
+        when(slskdService.cancelDownload("bob", "tr-1")).thenReturn(Mono.empty());
+
+        runner.pass().block();
+
+        verify(repository).markFiled(waiting, "/music/Oasis/DM/06.flac", T0);
+        verify(repository, never()).markFiled(eq(gone), any(), any());
+        verify(slskdService).cancelDownload("bob", "tr-1");
+        verify(repository, times(2)).concludeDownloads();
+    }
+
+    @Test
+    void aPassThatFiledNothing_sweepsNoWaitingSongs() {
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(organiser.albumCutoff(T0)).thenReturn(T0.minusSeconds(120));
+        LibraryOrganiser.Job notYet = job(UUID.randomUUID());
+        when(repository.tasksToOrganise(10, T0.minusSeconds(600), T0.minusSeconds(120))).thenReturn(Flux.just(notYet));
+        when(organiser.file(notYet, T0)).thenReturn(Mono.empty());
+
+        runner.pass().block();
+
+        verify(repository, never()).waitingCopies(any());
+        verify(repository, times(1)).concludeDownloads();
+    }
+
+    @Test
     void withTheOrganiserOn_eachFiledSongGetsItsLibraryPathWritten_andAMissingFileIsLeftForNextPass() {
         LibraryOrganiser.Job filed = job(UUID.randomUUID());
         LibraryOrganiser.Job notYet = job(UUID.randomUUID());
