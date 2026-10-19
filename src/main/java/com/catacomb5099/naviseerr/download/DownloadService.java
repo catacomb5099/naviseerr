@@ -203,17 +203,24 @@ public class DownloadService {
                 .defaultIfEmpty(List.of());
     }
 
+    /** The view for the song's remembered list: the loop's own wording and slskd's id and time for it. */
     private static TaskCandidatesView view(DownloadTaskRepository.CachedSearch song, List<DownloadCandidate> files,
                                            PickListStatus status, String reason) {
         List<String> wordings = SearchQueryTiers.of(song.songName());
+        return view(song, files, status, reason, wordings.get(Math.clamp(song.searchTier(), 0, wordings.size() - 1)),
+                song.searchId(), song.searchedAt());
+    }
+
+    /** The same view over any list: a person's own search ({@link ManualSearch}) names its text, id and time. */
+    static TaskCandidatesView view(DownloadTaskRepository.CachedSearch song, List<DownloadCandidate> files,
+                                   PickListStatus status, String reason, String query, String searchId, Instant searchedAt) {
         DownloadCandidate current = song.current();
-        return new TaskCandidatesView(song.taskId(), status, reason,
-                wordings.get(Math.clamp(song.searchTier(), 0, wordings.size() - 1)), song.searchId(), song.searchedAt(),
+        return new TaskCandidatesView(song.taskId(), status, reason, query, searchId, searchedAt,
                 ActiveDownloadRepository.toSongStage(song.phase()), TaskCandidatesView.Current.of(current),
                 files.stream().map(file -> TaskCandidatesView.Candidate.of(file, current)).toList());
     }
 
-    private static PickListStatus statusOf(DownloadTaskRepository.CachedSearch song) {
+    static PickListStatus statusOf(DownloadTaskRepository.CachedSearch song) {
         return "SEARCH_INIT".equals(song.phase()) || "SEARCH_POLL".equals(song.phase())
                 ? PickListStatus.SEARCHING : PickListStatus.NONE;
     }

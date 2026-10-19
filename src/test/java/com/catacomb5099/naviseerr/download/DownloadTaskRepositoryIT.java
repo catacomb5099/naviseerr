@@ -2297,6 +2297,13 @@ class DownloadTaskRepositoryIT {
         assertEquals(NOW, after.searchedAt());
         assertEquals("song", after.songName());
         assertEquals(0, after.searchTier());
+        assertNull(after.searchId(), "the loop's save leaves the row's search id alone");
+
+        // A person's own search (ManualSearch) makes its slskd id the row's, so the reopened pop-up points at it.
+        assertEquals(1L, repository.saveSearchResults(task, DownloadTaskFixtures.candidates("carol"), NOW.plusSeconds(5), "manual-1").block());
+        assertEquals("manual-1", repository.cachedSearch(id, task).block().searchId());
+        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("dave"), NOW.plusSeconds(9)).block();
+        assertEquals("manual-1", repository.cachedSearch(id, task).block().searchId(), "a save without an id keeps the one there");
     }
 
     @Test

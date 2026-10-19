@@ -122,6 +122,11 @@ download-task:
   # drop) -- a client away longer than this asks GET /downloads?ids= directly instead, so raising it
   # buys nothing. Published in the response so the client sizes its own timers against it.
   terminal-retention-ms: 600000
+  # How long a person's own Soulseek search from the manual-import pop-up may run while they wait
+  # (POST /downloads/{id}/tasks/{taskId}/search). slskd's own search timeout above is 10 s of silence,
+  # and a queued slot adds a few seconds, so 30 s covers a search end to end; at the cap the answers
+  # received so far are shown. Counts against max-concurrent-searches while it runs.
+  manual-search-budget-ms: 30000
   # Real duration budgets for SEARCH_POLL/DOWNLOAD_POLL. The old slskd-service polling
   # attempt-count/back-off config keys that used to gate the in-process pollers are gone as of
   # Task 6 (removed along with that dead code); these budgets are now the only polling limits

@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -15,6 +16,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -33,14 +35,16 @@ class DownloadControllerTest {
     private static final Duration RETENTION = Duration.ofMinutes(10);
 
     private DownloadService downloadService;
+    private ManualSearch manualSearch;
     private ActiveDownloadRepository activeDownloadRepository;
     private DownloadController controller;
 
     @BeforeEach
     void setUp() {
         downloadService = mock(DownloadService.class);
+        manualSearch = mock(ManualSearch.class);
         activeDownloadRepository = mock(ActiveDownloadRepository.class);
-        controller = new DownloadController(downloadService, activeDownloadRepository,
+        controller = new DownloadController(downloadService, manualSearch, activeDownloadRepository,
                 Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(5), RETENTION);
         // Nothing already exists unless a test says so; Mockito's default for a Mono is null.
         when(activeDownloadRepository.findCurrent(any(), any(), anyBoolean())).thenReturn(Mono.empty());
@@ -288,6 +292,99 @@ class DownloadControllerTest {
                 .expectBody()
                 .jsonPath("$.reason").isEqualTo("NOT_AN_ALBUM")
                 .jsonPath("$.message").isNotEmpty();
+    }
+
+    // ---- a person's own Soulseek search (19-10-2026) ----------------------------------------------
+
+    @Test
+    void search_runsTheTextAsTyped_andAnswersTheListItFound() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        TaskCandidatesView list = new TaskCandidatesView(taskId, PickListStatus.READY, null, "Common People Pulp 1995", "new-1", NOW,
+                DownloadStage.FAILED, null, List.of(new TaskCandidatesView.Candidate("alice", "music/alice/song.flac", 1000L,
+                null, 240, "flac", 1_000_000, true, 0, "EXACT", false)));
+        when(manualSearch.song(id, taskId, "Common People Pulp 1995")).thenReturn(Mono.just(list));
+
+        WebTestClient.bindToController(controller).build()
+                .post().uri("/downloads/" + id + "/tasks/" + taskId + "/search")
+                .bodyValue(Map.of("text", "  Common People Pulp 1995  "))   // trimmed, otherwise verbatim
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("READY")
+                .jsonPath("$.query").isEqualTo("Common People Pulp 1995")
+                .jsonPath("$.searchId").isEqualTo("new-1")
+                .jsonPath("$.candidates[0].username").isEqualTo("alice");
+    }
+
+    @Test
+    void search_withBlankOrOverlongText_is400_withoutSearching() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "   ")).exchange()
+                .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isNotEmpty();
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x".repeat(201))).exchange()
+                .expectStatus().isBadRequest();
+        // A control character inside the text would forge a log line and reach slskd.
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "Common People\n2026-10-19 INFO forged")).exchange()
+                .expectStatus().isBadRequest();
+
+        verify(manualSearch, never()).song(any(), any(), any());
+    }
+
+    @Test
+    void search_whileTheLoopsOwnSearchRuns_is409SearchRunning() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(new ManualSearch.SearchRunningException(taskId)));
+
+        WebTestClient.bindToController(controller).build()
+                .post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("SEARCH_RUNNING").jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    void search_ofAnUnknownSong_is404WithAMessage() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.empty());
+
+        WebTestClient.bindToController(controller).build()
+                .post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isNotFound()
+                .expectBody().jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    void search_wordsSlskdsRefusals_409Offline_429Busy_502Unreachable() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+
+        when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(SlskdFixtures.soulseekOffline()));
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody()
+                .jsonPath("$.reason").isEqualTo("SOULSEEK_OFFLINE")
+                .jsonPath("$.message").value(message -> {
+                    assertTrue(message.toString().startsWith("Soulseek is offline"), message.toString());
+                    // slskd's own sentence, unquoted; no status code for a person to read.
+                    assertTrue(message.toString().endsWith(": The server connection must be connected and logged in to perform a search (currently: Disconnected)"), message.toString());
+                });
+
+        when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(SlskdFixtures.responseFailure(429)));
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
+                .expectBody().jsonPath("$.reason").isEqualTo("SOULSEEK_BUSY")
+                .jsonPath("$.message").isEqualTo("Soulseek is busy with other searches; try again in a moment.");
+
+        when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.BAD_GATEWAY)
+                .expectBody().jsonPath("$.reason").isEqualTo("SLSKD_UNREACHABLE");
     }
 
     // ---- picking a file by hand ------------------------------------------------------------------

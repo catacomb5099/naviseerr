@@ -51,6 +51,7 @@ public class DownloadTaskRunner {
     private final RadioRepository radioRepository;
     private final LibraryOrganiser organiser;
     private final AlbumSearchStep albumSearches;
+    private final ManualSearch manualSearch;
     private final Clock clock;
     private final Duration loopInterval;
     private final int batchSize;
@@ -84,6 +85,7 @@ public class DownloadTaskRunner {
             RadioRepository radioRepository,
             LibraryOrganiser organiser,
             AlbumSearchStep albumSearches,
+            ManualSearch manualSearch,
             Clock clock,
             @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
             @Value("${download-task.batch-size:10}") int batchSize,
@@ -100,6 +102,7 @@ public class DownloadTaskRunner {
         this.radioRepository = radioRepository;
         this.organiser = organiser;
         this.albumSearches = albumSearches;
+        this.manualSearch = manualSearch;
         this.clock = clock;
         this.loopInterval = loopInterval;
         this.batchSize = batchSize;
@@ -562,13 +565,15 @@ public class DownloadTaskRunner {
      * we start beyond its slots only waits in that queue while our search budget runs down. Album
      * searches (P5) share those slots and are claimed first: the songs get only what they leave, so
      * one pass never starts more than the free slots between them, and an album's songs (held while
-     * it searches) are never kept waiting behind another download's songs.
+     * it searches) are never kept waiting behind another download's songs. A search a person is running
+     * from the pop-up ({@link ManualSearch}) holds a slot too, so the loop does not pile a third search
+     * onto slskd behind it.
      */
     private Mono<Void> stepDueTasks(Instant now) {
         return Mono.zip(repository.transfersInFlight().collectList(), repository.countActiveSearches())
                 .flatMap(active -> {
                     boolean transferSlotsFree = active.getT1().size() < maxConcurrentTransfers;
-                    int searchSlots = (int) Math.max(0, maxConcurrentSearches - active.getT2());
+                    int searchSlots = (int) Math.max(0, maxConcurrentSearches - active.getT2() - manualSearch.inFlight());
                     return repository.claimDueAlbumSearches(batchSize, instanceId, now, leaseDuration, searchSlots)
                             .collectList()
                             .flatMap(albums -> {

@@ -1017,7 +1017,8 @@ public class DownloadTaskRepository {
     private static final String SAVE_SEARCH_RESULTS_SQL = """
             UPDATE download_tasks
                SET search_results = :files::jsonb,
-                   search_results_at = :now
+                   search_results_at = :now,
+                   search_id = COALESCE(:searchId, search_id)
              WHERE task_id = :id
                AND (search_results_at IS NULL OR jsonb_array_length(:files::jsonb) > 0)
             """;
@@ -1658,10 +1659,19 @@ public class DownloadTaskRepository {
 
     /** Remembers what a completed search found for the manual picker; see SAVE_SEARCH_RESULTS_SQL. */
     public Mono<Long> saveSearchResults(UUID taskId, List<DownloadCandidate> files, Instant now) {
-        return client.sql(SAVE_SEARCH_RESULTS_SQL)
+        return saveSearchResults(taskId, files, now, null);
+    }
+
+    /**
+     * The same, also making {@code searchId} the song's search id when given: a person's own search
+     * ({@link ManualSearch}) is then the one the reopened pop-up's grey line points at. The loop passes
+     * nothing (its id is already on the row).
+     */
+    public Mono<Long> saveSearchResults(UUID taskId, List<DownloadCandidate> files, Instant now, String searchId) {
+        return bindNullable(client.sql(SAVE_SEARCH_RESULTS_SQL)
                 .bind("id", taskId)
                 .bind("files", writeCandidates(files))
-                .bind("now", now)
+                .bind("now", now), "searchId", searchId)
                 .fetch()
                 .rowsUpdated();
     }

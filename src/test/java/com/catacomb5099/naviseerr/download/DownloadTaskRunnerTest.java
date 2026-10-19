@@ -57,6 +57,7 @@ class DownloadTaskRunnerTest {
     private CuratorClient curatorClient;
     private RadioRepository radioRepository;
     private AlbumSearchStep albumSearches;
+    private ManualSearch manualSearch;
     private DownloadTaskRunner runner;
 
     @BeforeEach
@@ -70,6 +71,7 @@ class DownloadTaskRunnerTest {
         curatorClient = mock(CuratorClient.class);
         radioRepository = mock(RadioRepository.class);
         albumSearches = mock(AlbumSearchStep.class);
+        manualSearch = mock(ManualSearch.class);   // inFlight() is 0 unless a test says otherwise
         when(organiser.isEnabled()).thenReturn(false);
         when(organiser.deletePartials(any())).thenReturn(Mono.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.empty());
@@ -92,7 +94,7 @@ class DownloadTaskRunnerTest {
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, Clock.fixed(T0, ZoneOffset.UTC),
+                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, manualSearch, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
     }
 
@@ -423,6 +425,19 @@ class DownloadTaskRunnerTest {
                 eq(true), eq(1));
     }
 
+    @Test
+    void aPersonsOwnSearchFromThePopUp_holdsOneOfTheSearchSlots() {
+        // ManualSearch runs outside the loop, so the SEARCH_POLL count does not see it; the loop asks it
+        // directly and starts one search fewer while it runs (slskd still only runs two at a time).
+        when(repository.countActiveSearches()).thenReturn(Mono.just(1L));
+        when(manualSearch.inFlight()).thenReturn(1);
+
+        runner.pass().block();
+
+        verify(repository).claimDueAlbumSearches(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)), eq(0));
+        verify(repository).claimDueTasks(eq(10), any(), eq(T0), eq(Duration.ofSeconds(60)), eq(true), eq(0));
+    }
+
     // ---- whole album first (P5) ------------------------------------------------------------------
 
     private static AlbumSearch albumSearch(DownloadPhase phase, String searchId) {
@@ -631,7 +646,7 @@ class DownloadTaskRunnerTest {
         Clock clock = mock(Clock.class);
         when(clock.instant()).thenReturn(T0, T0.plusSeconds(45));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, clock,
+                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, manualSearch, clock,
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
         when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));
         when(repository.pauseDueWork(any(), any())).thenReturn(Mono.just(1L));
@@ -665,7 +680,7 @@ class DownloadTaskRunnerTest {
         Clock clock = mock(Clock.class);
         when(clock.instant()).thenReturn(T0, T0.plus(DownloadTaskRunner.OFFLINE_PAUSE_CEILING));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, clock,
+                ytMusicService, curatorClient, radioRepository, organiser, albumSearches, manualSearch, clock,
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
         captureRunnerLogs();
         when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));
