@@ -133,16 +133,19 @@ the Client ID, secret and Redirect URL against it, and says "Authentik answered 
 Client ID, secret and Redirect URL", or what to fix in plain words (a wrong slug answers 404; a Client ID
 or secret Authentik does not accept, or a Redirect URL not yet in its Redirect URIs, is named and nothing
 is saved; "could not reach" means this server cannot see Authentik's address: both your browser and the
-naviseerr container must be able to reach it, so `localhost` will not do in Docker). Then press **Continue with
-Authentik**, sign in there, and you are back in naviseerr, signed in. **That first sign-in is what
-turns the login on:** from then on every visitor sees "Continue with Authentik" first, and
-`https://<your address>/api/...` answers 401 without a session. Until then nothing is enforced, so a
-wrong Client ID or Redirect URL can never lock you out. You stay signed in for 30 days per device, a
+naviseerr container must be able to reach it, so `localhost` will not do in Docker). **A successful Save
+and test turns the login on at once:** from that moment every visitor sees "Continue with Authentik"
+first, and `https://<your address>/api/...` answers 401 without a session. The page says "The login is
+on. Sign in to carry on.": press **Continue with Authentik**, sign in there, and you are back in naviseerr
+on the same page, signed in. A wrong Client ID, secret or Redirect URL cannot lock you out, because Save
+and test refuses it and saves nothing; if Authentik itself goes away later, Troubleshooting's "Locked out"
+line opens the app again. You stay signed in for 30 days per device, a
 server restart included; "Log out" (top right) ends naviseerr's session only, Authentik's stays, so the
 next "Continue with Authentik" is one click. **Turn off Authentik login** in Settings opens the app
-again and logs everyone out; the settings are kept.
+again and logs everyone out; the settings are kept, and Save and test (with the secret field left
+empty) turns it back on.
 
-Do it **before** you open your proxy to the internet: until you have signed in once, anyone who can
+Do it **before** you open your proxy to the internet: until Save and test has succeeded, anyone who can
 reach the page could connect their own Authentik instead (see Troubleshooting, "Locked out", for the way
 back in if that ever happens). naviseerr keeps no accounts of its own and shows no names; nothing in it
 is per-user. The server stores only Authentik's stable id for you, and your Client secret, in its
@@ -154,8 +157,8 @@ With the web app behind a reverse proxy on your own domain, Authentik is what st
 internet and your downloads (a bot that got in could hammer search until YouTube Music blocks your
 address, or start downloads until the disk is full). What the app does for you, and what you do:
 
-- **Connect Authentik first** (the section above), and sign in once, before the proxy is open to the
-  world. Until that first sign-in the web app is open to anyone who can reach it.
+- **Connect Authentik first** (the section above) before the proxy is open to the world. The login is
+  on from the moment Save and test succeeds; until then the web app is open to anyone who can reach it.
 - **Bind the Authentik application to your own user.** Whoever Authentik admits to the application may
   use naviseerr; the binding is how it admits only you.
 - **HTTPS at your proxy.** Your proxy owns the certificate; the login cookie is marked Secure by itself
@@ -278,9 +281,9 @@ leave it. Your existing playlists stay.
   ```sh
   docker compose exec postgres psql -U naviseerr -d naviseerr -c "UPDATE login_settings SET enabled = false"
   ```
-  Then Settings -> Login: fix the values or connect your own Authentik and sign in once, which turns
-  the login back on. If you have no terminal (TrueNAS: the postgres container's Shell), the same
-  statement runs there.
+  Then Settings -> Login: fix the values or connect your own Authentik and press Save and test, which
+  turns the login back on, then sign in. If you have no terminal (TrueNAS: the postgres container's
+  Shell), the same statement runs there.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.

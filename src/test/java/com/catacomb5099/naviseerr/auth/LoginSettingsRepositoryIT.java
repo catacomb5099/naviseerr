@@ -34,27 +34,26 @@ class LoginSettingsRepositoryIT {
     }
 
     @Test
-    void save_writesOneRow_aSecondSaveReplacesIt_andEnabledSurvivesTheReplace() {
+    void save_writesOneRow_andTurnsTheLoginOn_turnOffOpensIt_andTheNextSaveTurnsItOnAgain() {
         repository.save("https://auth.example.com/application/o/naviseerr/", "id-1", "secret-1").block();
         LoginSettings first = repository.find().block();
         assertNotNull(first);
         assertEquals("id-1", first.clientId());
         assertEquals("secret-1", first.clientSecret());
-        assertFalse(first.enabled(), "saving never turns the login on");
-
-        repository.setEnabled(true).block();
+        assertTrue(first.enabled(), "a successful Save and test is the switch (19-10-2026 22:40)");
         assertEquals(Boolean.TRUE, repository.isEnabled().block());
+
+        repository.setEnabled(false).block();   // "Turn off", and the README's recovery line
+        assertEquals(Boolean.FALSE, repository.isEnabled().block());
+        assertEquals("id-1", repository.find().block().clientId(), "the settings stay");
 
         repository.save("https://auth.example.com/application/o/music/", "id-2", "secret-2").block();
         LoginSettings second = repository.find().block();
         assertNotNull(second);
         assertEquals("https://auth.example.com/application/o/music/", second.issuer());
         assertEquals("secret-2", second.clientSecret());
-        assertTrue(second.enabled(), "a changed address does not switch the door off");
+        assertTrue(second.enabled(), "saving again turns it back on in the same statement");
         assertEquals(1L, template.getDatabaseClient().sql("SELECT count(*) AS n FROM login_settings")
                 .map(row -> row.get("n", Long.class)).one().block(), "one row, ever");
-
-        repository.setEnabled(false).block();
-        assertEquals(Boolean.FALSE, repository.isEnabled().block());
     }
 }

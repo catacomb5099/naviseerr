@@ -27,6 +27,7 @@ import static org.mockito.Mockito.*;
 /**
  * Both legs of the sign-in and the three other routes, behind the real {@link AuthFilter}, over in-memory
  * stand-ins for the two tables and a mocked Authentik (the HTTP boundary is {@link AuthentikClientTest}'s).
+ * The door is on from "Save and test" (19-10-2026 22:40); the sign-in only opens it for one browser.
  */
 class AuthControllerTest {
 
@@ -56,6 +57,11 @@ class AuthControllerTest {
             if (s != null) row.set(new LoginSettings(s.issuer(), s.clientId(), s.clientSecret(), i.getArgument(0)));
             return Mono.empty();
         });
+        when(settings.save(any(), any(), any())).thenAnswer(i -> {
+            row.set(new LoginSettings(i.getArgument(0), i.getArgument(1), i.getArgument(2), true));   // save = on, as the SQL does
+            return Mono.empty();
+        });
+        when(authentik.checkClient(any(), any(), any(), any())).thenReturn(Mono.empty());
         when(sessions.createSession(any(), any(), any())).thenAnswer(i -> { sessionRows.put(i.getArgument(0), i.getArgument(1)); return Mono.empty(); });
         when(sessions.findBySession(any(), any())).thenAnswer(i -> Mono.justOrEmpty(sessionRows.get(i.<String>getArgument(0))));
         when(sessions.deleteSession(any())).thenAnswer(i -> { sessionRows.remove(i.<String>getArgument(0)); return Mono.empty(); });
@@ -197,9 +203,43 @@ class AuthControllerTest {
         }
     }
 
+    /** Open until Save and test: a data route passes; from the PUT on, the very next request without a session is 401. */
     @Test
-    void callback_withTheRightState_opensASession_setsTheCookie_turnsTheLoginOn_andLandsOnTo() {
-        connected(false);
+    void saveAndTest_shutsTheDoorAtOnce_theNextRequestWithoutASessionIs401_andTheSignInOpensItForThisBrowser() {
+        http.get().uri("/downloads/active").exchange().expectStatus().isNotFound();   // past the filter; no handler bound here
+
+        http.put().uri("/settings/login").header("Host", "nas:5056")
+                .bodyValue(Map.of("issuer", ISSUER, "clientId", "client-1", "clientSecret", "s3cret")).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.enabled").isEqualTo(true)
+                .jsonPath("$.message").value(m -> assertTrue(m.toString().endsWith("The login is on. Sign in to carry on."), m.toString()));
+
+        http.get().uri("/downloads/active").exchange()
+                .expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.message").isEqualTo("Log in to Naviseerr");
+        http.get().uri("/auth/session").exchange().expectBody()
+                .jsonPath("$.mode").isEqualTo("authentik").jsonPath("$.authenticated").isEqualTo(false);
+        http.put().uri("/settings/login").bodyValue(Map.of("issuer", ISSUER, "clientId", "client-1")).exchange()
+                .expectStatus().isUnauthorized();
+        http.delete().uri("/settings/login").exchange().expectStatus().isUnauthorized();
+
+        String loginCookie = start("http://nas:5056/settings");
+        String session = cookieValue(callback(loginCookie, attemptIn(loginCookie).state()).expectStatus().isFound()
+                .expectHeader().location("http://nas:5056/settings")
+                .returnResult(Void.class).getResponseHeaders().get("Set-Cookie").getFirst());
+        http.get().uri("/downloads/active").cookie(AuthFilter.COOKIE, session).exchange().expectStatus().isNotFound();
+        // From inside, a Save and test says the login is on and does not ask to sign in again.
+        http.put().uri("/settings/login").header("Host", "nas:5056").cookie(AuthFilter.COOKIE, session)
+                .bodyValue(Map.of("issuer", ISSUER, "clientId", "client-1")).exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.message").value(m -> assertTrue(m.toString().endsWith("Redirect URL. The login is on."), m.toString()));
+        verify(settings, never()).setEnabled(anyBoolean());
+    }
+
+    @Test
+    void callback_withTheRightState_opensASession_setsTheCookie_andLandsOnTo() {
+        connected(true);   // on since Save and test
         String loginCookie = start("http://nas:5056/downloads");
         String state = attemptIn(loginCookie).state();
 
@@ -217,10 +257,10 @@ class AuthControllerTest {
         assertEquals(43, cookieValue(session).length());
         assertTrue(cleared.contains("Max-Age=0"), cleared);
         assertEquals("subject-42", sessionRows.get(cookieValue(session)), "the row holds Authentik's subject, nothing else");
-        assertTrue(row.get().enabled(), "the first successful sign-in turns the door on");
+        verify(settings, never()).setEnabled(anyBoolean());   // the switch is Save and test's; the sign-in leaves it alone
         verify(sessions).deleteExpired(CLOCK.instant());
 
-        // Now the door is shut for everyone else, and open for this cookie.
+        // The door, shut since Save and test, stays shut for everyone else and opens for this cookie.
         http.get().uri("/auth/session").exchange().expectBody()
                 .jsonPath("$.mode").isEqualTo("authentik").jsonPath("$.authenticated").isEqualTo(false);
         http.get().uri("/auth/session").cookie(AuthFilter.COOKIE, cookieValue(session)).exchange().expectBody()
@@ -242,8 +282,8 @@ class AuthControllerTest {
     }
 
     @Test
-    void callback_withAWrongOrMissingState_isRefused_noSession_nothingTurnedOn() {
-        connected(false);
+    void callback_withAWrongOrMissingState_isRefused_noSession_nothingChanged() {
+        connected(true);
         String loginCookie = start("http://nas:5056/downloads");
 
         http.get().uri("/auth/authentik/callback?code=c&state=forged").header("Host", "nas:5056")
@@ -260,13 +300,13 @@ class AuthControllerTest {
                 .expectBody(String.class).value(body -> assertTrue(body.contains("href=\"/\""), "no cookie: back to the root"));
 
         assertTrue(sessionRows.isEmpty());
-        assertFalse(row.get().enabled());
+        verify(settings, never()).setEnabled(anyBoolean());
         verify(authentik, never()).exchangeCode(any(), any(), any(), any(), any(), any());
     }
 
     @Test
     void callback_authentikSaidNo_orTheTokenIsWrong_isAPlainPage_notASession() {
-        connected(false);
+        connected(true);
         String loginCookie = start(null);
         String state = attemptIn(loginCookie).state();
 
@@ -301,12 +341,12 @@ class AuthControllerTest {
                 .expectBody(String.class).value(body -> assertTrue(body.contains("did not match this sign-in (the nonce)"), body));
 
         assertTrue(sessionRows.isEmpty());
-        assertFalse(row.get().enabled());
+        verify(settings, never()).setEnabled(anyBoolean());
     }
 
     @Test
     void logout_dropsTheSession_andExpiresTheCookie_evenADeadOne() {
-        connected(false);
+        connected(true);
         String loginCookie = start(null);
         String session = cookieValue(callback(loginCookie, attemptIn(loginCookie).state())
                 .returnResult(Void.class).getResponseHeaders().get("Set-Cookie").getFirst());
@@ -328,7 +368,7 @@ class AuthControllerTest {
 
     @Test
     void turnOff_needsASession_thenOpensTheAppAgain_andLogsEveryoneOut() {
-        connected(false);
+        connected(true);
         String loginCookie = start(null);
         String session = cookieValue(callback(loginCookie, attemptIn(loginCookie).state())
                 .returnResult(Void.class).getResponseHeaders().get("Set-Cookie").getFirst());
@@ -342,7 +382,7 @@ class AuthControllerTest {
         assertTrue(sessionRows.isEmpty());
         http.get().uri("/auth/session").exchange().expectBody().jsonPath("$.mode").isEqualTo("open");
         http.get().uri("/downloads/active").exchange().expectStatus().isNotFound();
-        assertEquals(ISSUER, row.get().issuer(), "the settings stay for the next Continue with Authentik");
+        assertEquals(ISSUER, row.get().issuer(), "the settings stay for the next Save and test, which turns it back on");
     }
 
     @Test

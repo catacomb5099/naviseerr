@@ -5,18 +5,22 @@ import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
 
-/** All {@code login_settings} SQL (V16): the one row saying how to reach Authentik, and whether the login is on. */
+/**
+ * All {@code login_settings} SQL (V16): the one row saying how to reach Authentik, and whether the login is on.
+ * Since 19-10-2026 22:40 a successful "Save and test" IS the switch: {@link #save} writes the row with
+ * {@code enabled = true} in the same statement, so there is no "saved but not on yet" state between them.
+ */
 @Repository
 public class LoginSettingsRepository {
 
     private static final String FIND_SQL = "SELECT issuer, client_id, client_secret, enabled FROM login_settings";
 
     private static final String SAVE_SQL = """
-            INSERT INTO login_settings (issuer, client_id, client_secret)
-            VALUES (:issuer, :clientId, :clientSecret)
+            INSERT INTO login_settings (issuer, client_id, client_secret, enabled)
+            VALUES (:issuer, :clientId, :clientSecret, TRUE)
             ON CONFLICT (one) DO UPDATE
                SET issuer = EXCLUDED.issuer, client_id = EXCLUDED.client_id,
-                   client_secret = EXCLUDED.client_secret, updated_at = now()
+                   client_secret = EXCLUDED.client_secret, enabled = TRUE, updated_at = now()
             """;
 
     private static final String SET_ENABLED_SQL = "UPDATE login_settings SET enabled = :enabled, updated_at = now()";
@@ -37,13 +41,13 @@ public class LoginSettingsRepository {
                 Boolean.TRUE.equals(row.get("enabled", Boolean.class)))).one();
     }
 
-    /** Writes the row, or replaces its values; {@code enabled} is left as it was. */
+    /** Writes the row, or replaces its values, and turns the login on: the next request without a session is 401. */
     public Mono<Void> save(String issuer, String clientId, String clientSecret) {
         return client.sql(SAVE_SQL).bind("issuer", issuer).bind("clientId", clientId).bind("clientSecret", clientSecret)
                 .fetch().rowsUpdated().then();
     }
 
-    /** True turns the door on (the first successful sign-in); false opens the app again ("Turn off"). */
+    /** False opens the app again ("Turn off"; the recovery line in the README is the same UPDATE). True is what {@link #save} already does. */
     public Mono<Void> setEnabled(boolean enabled) {
         return client.sql(SET_ENABLED_SQL).bind("enabled", enabled).fetch().rowsUpdated().then();
     }
