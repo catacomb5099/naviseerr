@@ -309,8 +309,10 @@ public class YtMusicService {
                         error -> !(error instanceof YtMusicException),
                         error -> new YtMusicUnavailableException("ytmusic-adapter request failed: " + error.getMessage(), error)
                 )
+                // A 429 is the one availability failure a retry makes worse: three tries in 150 ms
+                // against a rate limit is what the limit is there to punish. It fails at once.
                 .retryWhen(ReactivePoller.defaultBackoff(Duration.ofMillis(firstBackOffDurationMs), retryCount)
-                        .filter(YtMusicUnavailableException.class::isInstance)
+                        .filter(error -> error instanceof YtMusicUnavailableException unavailable && !unavailable.isRateLimited())
                         .doBeforeRetry(signal -> log.warn(
                                 "Retrying ytmusic-adapter request for type={} subject='{}' (attempt {}) after: {}",
                                 label, subject, signal.totalRetries() + 1, signal.failure().getMessage()))

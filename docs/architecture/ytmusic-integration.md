@@ -84,7 +84,8 @@ Two-exception hierarchy, both extending `YtMusicException`
 | `400`, `422`, `500` | `YtMusicBadRequestException` | No |
 | `404` **with** the adapter's `{"error":{"code":"not_found",…}}` envelope — it looked, the id does not exist | `YtMusicBadRequestException` | No |
 | `404` **without** it — FastAPI's `{"detail":"Not Found"}` or an empty body: the running image has no such route | `YtMusicUnavailableException` ("…is the sidecar image up to date?") | Yes |
-| `429`, `502`, `504`, any other status | `YtMusicUnavailableException` | Yes |
+| `429` (the adapter's `rate_limited`) | `YtMusicUnavailableException` with `rateLimited` true | **No** (19-10-2026): a rate limit is the one outage a retry makes worse |
+| `502`, `504`, any other status | `YtMusicUnavailableException` | Yes |
 | client-side timeout / connection refused / decode failure | `YtMusicUnavailableException` | Yes |
 | `500` whose body is not JSON (a stall: YouTube held the call 5-10 s, then sent an empty body, and the adapter's unhandled `JSONDecodeError` became FastAPI's plain-text 500) | `YtMusicUnavailableException` ("…unreadable error body") | Yes |
 
@@ -105,7 +106,7 @@ On top of this, every search route caps each try and asks again after a slow one
 
 Retries reuse [ReactivePoller.defaultBackoff](../../src/main/java/com/catacomb5099/naviseerr/util/networkcalls/ReactivePoller.java)
 (`Retry.backoff(...).jitter(0.2).transientErrors(true)`), filtered to `YtMusicUnavailableException`
-only. One subtlety worth knowing if you touch this: Reactor's default retry-exhaustion behavior wraps
+that is not `rateLimited`. One subtlety worth knowing if you touch this: Reactor's default retry-exhaustion behavior wraps
 the last failure in an `IllegalStateException` (`Exceptions.retryExhausted`), which would have hidden
 the real exception type from every caller. `getResults(query, type)` overrides that with
 `.onRetryExhaustedThrow((spec, signal) -> signal.failure())` so callers only ever see

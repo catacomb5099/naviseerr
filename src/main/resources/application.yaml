@@ -64,8 +64,9 @@ yt-music-service:
     # search, and slskd runs two at a time. The adapter allows up to 100.
     radio-size: 25
     timeout-ms: 15000
-    # Retries apply only to YtMusicUnavailableException (adapter 429/502/504, timeout, connection
-    # refused) - never to a 4xx the adapter rejected outright. See YtMusicService.
+    # Retries apply only to YtMusicUnavailableException (adapter 502/504, timeout, connection
+    # refused) - never to a 429 (a rate limit, which a retry makes worse; since 19-10-2026) and never
+    # to a 4xx the adapter rejected outright. See YtMusicService.
     retry-count: 2
     first-back-off-duration-ms: 50
 
