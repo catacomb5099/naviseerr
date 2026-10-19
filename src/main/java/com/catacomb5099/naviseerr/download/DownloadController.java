@@ -330,7 +330,8 @@ public class DownloadController {
      * album's songs (the ones the album search itself would take first), stored as the album's folders so any can be
      * taken with {@code POST .../album-pick}. 200 with the {@code GET .../album-candidates} shape, {@code query} the
      * text; 400 / 404 / 409 {@code SOULSEEK_OFFLINE} / 429 / 502 as the song route; 409 {@code NOT_AN_ALBUM} for
-     * anything but an album; 409 {@code NO_ALBUM_SEARCH} for an album with no search row to keep folders on.
+     * anything but an album; 409 {@code NO_ALBUM_SEARCH} for an album with no search row to keep folders on; 409
+     * {@code SEARCH_RUNNING} while the album's own search still runs.
      */
     @PostMapping("/downloads/{id}/album-search")
     Mono<ResponseEntity<Object>> albumSearch(@PathVariable UUID id, @RequestBody SearchRequest body) {
@@ -345,7 +346,9 @@ public class DownloadController {
                 .onErrorResume(DownloadService.NotAnAlbumException.class, notAnAlbum -> Mono.just(
                         refused(HttpStatus.CONFLICT, "NOT_AN_ALBUM", notAnAlbum.getMessage())))
                 .onErrorResume(ManualSearch.NoAlbumSearchException.class, noSearch -> Mono.just(
-                        refused(HttpStatus.CONFLICT, "NO_ALBUM_SEARCH", noSearch.getMessage())));
+                        refused(HttpStatus.CONFLICT, "NO_ALBUM_SEARCH", noSearch.getMessage())))
+                .onErrorResume(ManualSearch.SearchRunningException.class, running -> Mono.just(
+                        refused(HttpStatus.CONFLICT, "SEARCH_RUNNING", running.getMessage())));
     }
 
     /** The trimmed text, or null when there is nothing to search for, too much, or a control character (it is logged). */

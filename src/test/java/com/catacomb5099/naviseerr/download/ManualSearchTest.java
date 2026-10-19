@@ -202,7 +202,7 @@ class ManualSearchTest {
         when(repository.songPicks(downloadId)).thenReturn(reactor.core.publisher.Flux.just(
                 new DownloadTaskRepository.SongPick(done, 3, "Live Forever", "SUCCEEDED", null),
                 new DownloadTaskRepository.SongPick(waiting, 5, "Columbia", "FAILED", null)));
-        when(repository.saveAlbumFolders(eq(downloadId), any(), eq(NOW))).thenReturn(Mono.just(1L));
+        when(repository.saveAlbumFolders(eq(downloadId), any(), eq(NOW), eq("new-2"))).thenReturn(Mono.just(1L));
         when(slskd.searchResults("Definitely Maybe 1994 flac")).thenReturn(Mono.just(SlskdFixtures.searchState("new-2", false, "InProgress")));
         SearchState doneState = SlskdFixtures.searchStateWithResponses("new-2", true, "Completed, TimedOut", List.of(peer));
         when(slskd.getSearchWithResponses("new-2")).thenReturn(Mono.just(doneState));
@@ -229,7 +229,7 @@ class ManualSearchTest {
                 .verifyComplete();
 
         verify(repository).saveAlbumFolders(eq(downloadId), argThat(folders -> folders.size() == 2
-                && folders.get(0).username().equals("vinyl") && Boolean.TRUE.equals(folders.get(0).judged())), eq(NOW));
+                && folders.get(0).username().equals("vinyl") && Boolean.TRUE.equals(folders.get(0).judged())), eq(NOW), eq("new-2"));
         // Every folder is shown, stalling sharer or not: the filter the album search applies is not applied here.
         verify(picker).folders(any(), any(), any(), any(), argThat(stalling -> !stalling.test("anyone")));
     }
@@ -254,7 +254,16 @@ class ManualSearchTest {
                 })
                 .verifyComplete();
 
-        verify(repository, never()).saveAlbumFolders(any(), any(), any());
+        verify(repository, never()).saveAlbumFolders(any(), any(), any(), any());
+    }
+
+    @Test
+    void album_whileTheLoopsOwnAlbumSearchRuns_isRefused_withoutSearching() {
+        when(repository.cachedAlbumSearch(downloadId)).thenReturn(Mono.just(album(DownloadType.ALBUM, "SEARCH_POLL")));
+
+        StepVerifier.create(search.album(downloadId, "x")).expectError(ManualSearch.SearchRunningException.class).verify();
+
+        verify(slskd, never()).searchResults(any());
     }
 
     @Test

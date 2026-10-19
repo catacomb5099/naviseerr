@@ -1051,7 +1051,8 @@ public class DownloadTaskRepository {
     private static final String SAVE_ALBUM_FOLDERS_SQL = """
             UPDATE album_searches
                SET folders = :folders::jsonb,
-                   folders_at = :now
+                   folders_at = :now,
+                   search_id = COALESCE(:searchId, search_id)
              WHERE download_id = :id
             """;
 
@@ -1729,16 +1730,21 @@ public class DownloadTaskRepository {
 
     /** Remembers the folders an album search judged, best first; see SAVE_ALBUM_FOLDERS_SQL. */
     public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now) {
+        return saveAlbumFolders(downloadId, folders, now, null);
+    }
+
+    /** The same, also making {@code searchId} the album search's id when given (a person's own search, {@link ManualSearch}). */
+    public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now, String searchId) {
         String json;
         try {
             json = objectMapper.writeValueAsString(folders);
         } catch (Exception e) {
             return Mono.error(new IllegalStateException("Could not serialise album folders", e));
         }
-        return client.sql(SAVE_ALBUM_FOLDERS_SQL)
+        return bindNullable(client.sql(SAVE_ALBUM_FOLDERS_SQL)
                 .bind("id", downloadId)
                 .bind("folders", json)
-                .bind("now", now)
+                .bind("now", now), "searchId", searchId)
                 .fetch()
                 .rowsUpdated();
     }

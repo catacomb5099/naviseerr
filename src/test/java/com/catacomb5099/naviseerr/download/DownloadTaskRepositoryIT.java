@@ -2397,6 +2397,11 @@ class DownloadTaskRepositoryIT {
         assertEquals(DownloadCandidate.ALBUM_FOLDER, read.files().get(songs.get(0)).source());
         assertEquals(1, after.holding(songs.get(0)).size());
         assertTrue(after.holding(songs.get(1)).isEmpty(), "a song the folder lacks has no folder to choose");
+        assertNull(after.searchId(), "the loop's save leaves the album search's id alone");
+
+        // A person's own album search (ManualSearch) makes its slskd id the row's.
+        assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW.plusSeconds(5), "manual-2").block());
+        assertEquals("manual-2", repository.cachedAlbumSearch(id).block().searchId());
     }
 
     @Test

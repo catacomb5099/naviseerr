@@ -409,6 +409,11 @@ class DownloadControllerTest {
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody().jsonPath("$.reason").isEqualTo("NO_ALBUM_SEARCH").jsonPath("$.message").isNotEmpty();
 
+        when(manualSearch.album(id, "x")).thenReturn(Mono.error(new ManualSearch.SearchRunningException(id)));
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("SEARCH_RUNNING").jsonPath("$.message").isNotEmpty();
+
         when(manualSearch.album(id, "x")).thenReturn(Mono.error(SlskdFixtures.soulseekOffline()));
         http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)

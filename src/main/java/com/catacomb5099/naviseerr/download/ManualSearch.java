@@ -114,7 +114,7 @@ public class ManualSearch {
      * text as the query. Every song of the album is matched, finished ones too, so "11 of 11" reads right. No
      * stalling-sharer filter: the person sees everything and decides. Nothing is written when no folder holds a
      * song (as the album search step does), so the old list stays. Empty for an unknown download; an error for a
-     * download that is not an album or has no album search row to keep folders on.
+     * download that is not an album, has no album search row to keep folders on, or whose album search still runs.
      */
     public Mono<AlbumCandidatesView> album(UUID downloadId, String text) {
         return repository.cachedAlbumSearch(downloadId).flatMap(album -> {
@@ -123,6 +123,10 @@ public class ManualSearch {
             }
             if (album.phase() == null) {
                 return Mono.error(new NoAlbumSearchException(downloadId));
+            }
+            // The loop's album search would poll this id and write its folders over the person's when it completes.
+            if (!"DONE".equals(album.phase())) {
+                return Mono.error(new SearchRunningException(downloadId));
             }
             return repository.songs(downloadId).collectList().flatMap(songs -> run(text).flatMap(state -> {
                 Instant now = clock.instant();
@@ -135,7 +139,7 @@ public class ManualSearch {
                         .flatMap(folders -> {
                             log.info("Manual album search '{}' for download {}: slskd search {} ({}), {} folder(s)", text,
                                     downloadId, state.getId(), state.getState(), folders.size());
-                            Mono<Long> saved = folders.isEmpty() ? Mono.just(0L) : repository.saveAlbumFolders(downloadId, folders, now);
+                            Mono<Long> saved = folders.isEmpty() ? Mono.just(0L) : repository.saveAlbumFolders(downloadId, folders, now, state.getId());
                             // The view reads status and reason off the row: DONE with these folders, NO_RESULTS when none.
                             DownloadTaskRepository.CachedAlbumSearch found = new DownloadTaskRepository.CachedAlbumSearch(
                                     album.type(), "DONE", folders.isEmpty() ? "NO_RESULTS" : album.outcome(), album.searchTier(),
