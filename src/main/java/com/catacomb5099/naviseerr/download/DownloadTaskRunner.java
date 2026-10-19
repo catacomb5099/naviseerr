@@ -234,19 +234,22 @@ public class DownloadTaskRunner {
                             ? albumSearches.holdUntil(now) : null;
                     return repository.upsertMedia(media)
                             .then(alreadyFiled(download, tasks))
-                            .flatMap(ready -> repository.createTasks(download.getDownloadId(), ready, now, albumHold))
-                            .doOnNext(admitted -> {
-                                if (admitted > 0) {
-                                    log.info("Admitted download {} ({} '{}') as {} task(s)",
-                                            download.getDownloadId(), download.getDownloadType(),
-                                            collection.name(), admitted);
-                                } else {
-                                    // The guards in CREATE_TASKS_SQL held, so something else had
-                                    // already admitted this row. Nothing to fix, worth seeing.
-                                    log.debug("Download {} was already admitted or is no longer "
-                                            + "pending; no tasks created", download.getDownloadId());
-                                }
-                            })
+                            .flatMap(ready -> repository.createTasks(download.getDownloadId(), ready, now, albumHold)
+                                    .doOnNext(admitted -> {
+                                        if (admitted > 0) {
+                                            log.info("Admitted download {} ({} '{}') as {} task(s)",
+                                                    download.getDownloadId(), download.getDownloadType(),
+                                                    collection.name(), admitted);
+                                        } else {
+                                            // The guards in CREATE_TASKS_SQL held, so something else had
+                                            // already admitted this row. Nothing to fix, worth seeing;
+                                            // copies made for it are not wanted.
+                                            log.debug("Download {} was already admitted or is no longer "
+                                                    + "pending; no tasks created", download.getDownloadId());
+                                            ready.stream().filter(t -> t.slskdFilename() != null)
+                                                    .forEach(t -> organiser.discardCopy(t.slskdFilename()).subscribe());
+                                        }
+                                    }))
                             .then();
                 })
                 .onErrorResume(YtMusicBadRequestException.class, error -> {
@@ -275,26 +278,50 @@ public class DownloadTaskRunner {
     }
 
     /**
-     * The tasks, with the library's file set on each song the library already has from an earlier
-     * download (see {@code FILED_COPIES_SQL} for what counts), so it is created finished instead of
-     * downloaded again. Only with the organiser on: without it there is no library to look in.
+     * The tasks, with what the library already has set on each song it has from an earlier download
+     * (see {@code FILED_COPIES_SQL} for what counts), so it is created finished instead of downloaded
+     * again. A song, playlist or curated row POINTS at the file ({@code libraryPath}); so does an album's
+     * track the library has as this very album's. An album's track the library has only as ANOTHER
+     * album's (a compilation, EP, deluxe edition or best-of sharing the recording) gets its own COPY
+     * ({@link LibraryOrganiser#copyIntoDownloads}, set as {@code slskdFilename}): each album folder
+     * must hold its songs, tagged as that album's (19-10-2026). A copy that fails (disk full, a
+     * permission) is logged and the song downloads as before. Only with the organiser on: without it
+     * there is no library to look in.
      */
     private Mono<List<DownloadTask>> alreadyFiled(Download download, List<DownloadTask> tasks) {
         if (!organiser.isEnabled()) {
             return Mono.just(tasks);
         }
+        boolean album = download.getDownloadType() == DownloadType.ALBUM;
         return repository.filedCopies(download.getDownloadType(), download.getYoutubeId(), tasks)
                 .collectList()
                 .flatMap(copies -> organiser.stillFiled(tasks.size(), copies))
-                .map(paths -> {
-                    long owned = paths.stream().filter(Objects::nonNull).count();
-                    if (owned > 0) {
-                        log.info("Download {}: {} of {} song(s) already in the library; not downloading "
-                                + "them again", download.getDownloadId(), owned, tasks.size());
+                .flatMapMany(found -> Flux.range(0, tasks.size()).concatMap(i -> {
+                    DownloadTask task = tasks.get(i);
+                    LibraryOrganiser.FiledCopy copy = found.get(i);
+                    if (copy == null) {
+                        return Mono.just(task);
                     }
-                    return java.util.stream.IntStream.range(0, tasks.size())
-                            .mapToObj(i -> tasks.get(i).toBuilder().libraryPath(paths.get(i)).build())
-                            .toList();
+                    if (album && !copy.sameAlbum()) {
+                        return organiser.copyIntoDownloads(copy.libraryPath())
+                                .map(name -> task.toBuilder().slskdFilename(name).build())
+                                .onErrorResume(error -> {
+                                    log.warn("Could not copy {} for download {}; downloading the song instead",
+                                            copy.libraryPath(), download.getDownloadId(), error);
+                                    return Mono.just(task);
+                                });
+                    }
+                    return Mono.just(task.toBuilder().libraryPath(copy.libraryPath()).build());
+                }))
+                .collectList()
+                .doOnNext(ready -> {
+                    long pointed = ready.stream().filter(t -> t.libraryPath() != null).count();
+                    long copied = ready.stream().filter(t -> t.slskdFilename() != null).count();
+                    if (pointed + copied > 0) {
+                        log.info("Download {}: {} of {} song(s) already in the library; not downloading them again"
+                                + "{}", download.getDownloadId(), pointed + copied, tasks.size(),
+                                copied > 0 ? " (" + copied + " copied into the album's folder)" : "");
+                    }
                 });
     }
 
@@ -429,12 +456,12 @@ public class DownloadTaskRunner {
                     return organiser.stillFiled(songs.size(), copies.stream()
                                     .map(copy -> new LibraryOrganiser.FiledCopy(position.get(copy.taskId()), copy.libraryPath()))
                                     .toList())
-                            .flatMapMany(paths -> Flux.range(0, songs.size())
-                                    .filter(i -> paths.get(i) != null)
-                                    .concatMap(i -> repository.markFiled(songs.get(i).taskId(), paths.get(i), now)
+                            .flatMapMany(found -> Flux.range(0, songs.size())
+                                    .filter(i -> found.get(i) != null)
+                                    .concatMap(i -> repository.markFiled(songs.get(i).taskId(), found.get(i).libraryPath(), now)
                                             .doOnNext(was -> {
                                                 log.info("Song {} of download {} is already in the library as {}; not "
-                                                        + "fetching it", was.taskId(), was.downloadId(), paths.get(i));
+                                                        + "fetching it", was.taskId(), was.downloadId(), found.get(i).libraryPath());
                                                 stopInSlskd(was);
                                             })))
                             .count()

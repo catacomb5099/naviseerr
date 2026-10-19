@@ -165,9 +165,10 @@ copy that slipped through points at the existing file instead of becoming a seco
   counts (a live take or remix fetched because nothing better was shared does not, so asking again can
   still find the real song). A matched song's row is created `SUCCEEDED`, finished, 100 %, with that
   `library_path` and no peer: terminal from birth, so nothing claims, leases or searches it, and the
-  download concludes and writes its playlist as usual. An album download matches only by album and
-  track number, never by id: a Deluxe edition shares the plain album's ids, and taking those files
-  would file half the Deluxe in the plain album's folder. A song or playlist track also matches by its
+  download concludes and writes its playlist as usual. *Until 19-10-2026* an album download matched
+  only by album and track number, never by id: a Deluxe edition shares the plain album's ids, and
+  taking those files would have filed half the Deluxe in the plain album's folder; the addendum below
+  matches by id too and gives the album its own copy instead. A song or playlist track also matches by its
   trusted album track once it has a `song_albums` answer (the lookup often has not run yet at
   admission, so the filing check below catches the rest). *19-10-2026: a song or playlist track now also
   matches by title and artist, and by id with the same length; see the addendum at the end.*
@@ -180,7 +181,8 @@ copy that slipped through points at the existing file instead of becoming a seco
   new copy is deleted only when its size is the picked file's (two songs can share a folder and file
   name in slskd's downloads folder; the other's stays). Copies of one song ready in the same pass
   (`copy_key`) are filed one after the other, and once one is filed the rest wait a pass to see it.
-- Deluxe and plain editions are different albums here: asking for the Deluxe downloads all of it.
+- Deluxe and plain editions are different albums here: asking for the Deluxe downloads all of it
+  (*19-10-2026*: the shared tracks are copied from the plain album, the rest downloaded).
 
 *Flip:* no admission check: return `Mono.just(tasks)` first in `DownloadTaskRunner.alreadyFiled`. No
 filing check: select `NULL AS filed_copy` in `TASKS_TO_ORGANISE_SQL`. Count stand-in picks as owned at
@@ -220,7 +222,7 @@ admission: drop `f.exact AND` in `FILED_COPIES_SQL`.
 - Ids that time out every time are retried every tick, oldest first (`ponytail:` in
   `SongAlbumResolver.resolveDue`).
 
-## Addendum 19-10-2026: one copy of a song serves every playlist
+## Addendum 19-10-2026: a song in many playlists and albums
 
 **Context.** The owner saw a playlist download songs an album had just filed: "it does not just point
 that playlist to the album file, it redownloads it". Measured on two YouTube Music playlists (an
@@ -284,8 +286,30 @@ title and artist, was never consulted as a song's identity.
    at a time, so most of a playlist's rows are still waiting when its album lands: this is where the
    transfers are saved. An album download's held songs are never swept: each album gets its own copy.
 
+7. **An album you download gets its own copy of a song you already have.** The owner's rule: "avoid
+   redownloading the same song, but each downloaded album must get the song filed under that album".
+   Measured live: a compilation, best-of, EP or deluxe edition lists the ORIGINAL upload's id for a
+   shared track (14 of 14 across five Oasis and Nirvana pairs), titles match after `lower()` and the
+   row length drifts up to 18 s (4.8 %). So arm (b) now applies to album requests too, and
+   `FILED_COPIES_SQL` says whether the copy is this very album's (`same_album`, sorted first). In
+   `DownloadTaskRunner.alreadyFiled` an album's own track is pointed at as before; a track the library
+   has only as another album's is COPIED: `LibraryOrganiser.copyIntoDownloads` puts the file in slskd's
+   downloads folder as `naviseerr-copy-<uuid>/<file>` and the row is created `SUCCEEDED` with that
+   `slskd_filename` and no `library_path`, so the next organiser pass tags it with the NEW album's
+   details (ALBUM, TRACK n/N, YEAR, cover) and moves it into the new album's folder exactly like a file
+   a sharer sent; `DownloadService.reasonOf` reads the prefix as `ALREADY_IN_LIBRARY`. On disk this is
+   Lidarr's and beets' model: one file per album folder (a compilation is a different album; Navidrome
+   groups by tags and Jellyfin by folder, so each shows the track under both albums). Rejected: hard
+   links (the tagger rewrites in place, so a shared inode would retag the original); symlinks (same
+   tags, so Navidrome would list it as a second entry of the first album); pointing (leaves the new
+   album's folder short a track, the 04-10 worry). Playlists keep pointing at whichever copy exists.
+   A copy that fails (disk full, a permission) is logged and the song downloads as before; copies made
+   for a download that turned out to be admitted already are discarded.
 **Flip:** the title-and-artist arm: drop arm (c) from `SAME_SONG` (then only ids and album answers match,
-as before 19-10-2026). The version guard: drop the `COALESCE(f.album_title, '') !~* VERSION_ALBUM` line.
+as before 19-10-2026). Albums pointing instead of copying: in `alreadyFiled` drop the `album &&
+!copy.sameAlbum()` branch (the new album's folder is then short the shared tracks). Albums never matching
+by id (the 04-10 rule): put `NOT w.album AND` back on arm (b). "Copied from <album>" on the row: a
+`copied_from` column or a LIBRARY candidate, then the client wording. The version guard: drop the `COALESCE(f.album_title, '') !~* VERSION_ALBUM` line.
 The length arm: drop the `abs(f.duration - w.duration)` line (then the same id needs the same title).
 The minute on arm (c): drop its `abs(f.duration - w.duration) <= 60` line.
 
@@ -295,6 +319,17 @@ closable without acoustic fingerprints); two different songs with one title by o
 "Interlude") are told apart by length only when a minute or more apart. The join is a nested loop over
 the filed history per admission and per filing batch: measured 19-10-2026 at 5000 filed songs, one
 24-song admission took 4.1 s with the key regexes inside the join filter and 0.1 s with the keys
-computed once per row (`MATERIALIZED`), a filing batch of ten 1.7 s → 0.09 s; a generated, indexed
-`song_key` column is the upgrade. Pre-V12 rows have no `duration_seconds`/`track_title`: the title arms use
-`media_items.title` and the length arm is skipped when either side is NULL.
+computed once per row (`MATERIALIZED`), a filing batch of ten 1.7 s → 0.09 s, the sweep over 300 live
+rows 94 s → 0.25 s; a generated, indexed `song_key` column is the upgrade. Pre-V12 rows have no
+`duration_seconds`/`track_title`: the title arms use `media_items.title` and the length arm is skipped
+when either side is NULL. An album's copy costs one extra file per shared track (a 44-track deluxe over
+an owned 11-track album copies 11 files, ~350 MB of FLAC); when slskd's downloads folder and the library
+are two volumes the bytes are written twice (the copy, then the organiser's move). A copied row has no
+pick of its own (`candidates '[]'`) but counts as EXACT, being a byte copy of an EXACT file: the same
+album asked for again ("Download again", or after a file of it went missing) points at its own copied
+track and copies nothing, and a third album or a playlist can take the copy once the original is gone
+(an original is preferred over a copy, `copied` in the ORDER BYs); only when every copy is gone does
+the song download again, the ceiling pointed rows have. A copy that still reaches filing with its own
+album's file already there is deleted (it is always ours), never left in slskd's folder. The copy
+keeps the original's file name ("06 - Supersonic.flac" as track 1 of the EP): both servers order by
+the TRACK tag, and the organiser never renames.

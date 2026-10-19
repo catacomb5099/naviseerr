@@ -245,6 +245,18 @@ class LibraryOrganiserTest {
     }
 
     @Test
+    void aCopyThisAppMade_whoseAlbumAlreadyHasTheFile_isRemoved_itHasNoPickSizeButIsAlwaysOurs() throws IOException {
+        Path existing = put(root.resolve("Oasis/Supersonic"), "06 - Supersonic.flac");
+        Path copy = put(downloads.resolve(LibraryOrganiser.COPY_PREFIX + "abc"), "06 - Supersonic.flac");
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
+                LibraryOrganiser.COPY_PREFIX + "abc\\06 - Supersonic.flac", NOW.minusSeconds(5), "Supersonic", List.of("Oasis"),
+                "Supersonic", List.of("Oasis"), null, List.of(), null, existing.toString(), "MPREb_ep#1", null);
+
+        assertEquals(existing, organiser.file(job, NOW).block());
+        assertFalse(Files.exists(copy.getParent()), "the unneeded copy and its folder are gone from slskd's downloads");
+    }
+
+    @Test
     void aNewCopyOfAnotherSize_isLeftAlone_itMayBeAnotherSongsFileWithTheSameName() throws IOException {
         Path existing = put(root.resolve("Oasis/Definitely Maybe"), "06 - Supersonic.flac");
         Path other = put(downloads.resolve("CD1"), "01 Intro.mp3");
@@ -278,8 +290,44 @@ class LibraryOrganiserTest {
                 new LibraryOrganiser.FiledCopy(2, outside.toString()),
                 new LibraryOrganiser.FiledCopy(3, root.resolve("../elsewhere/outside.flac").toString()));
 
-        assertEquals(java.util.Arrays.asList(kept.toString(), null, null, null), organiser.stillFiled(4, copies).block(),
+        assertEquals(java.util.Arrays.asList(copies.get(1), null, null, null), organiser.stillFiled(4, copies).block(),
                 "a deleted file falls through to the next copy; outside the library never counts; no copy is null");
+    }
+
+    @Test
+    void copyIntoDownloads_putsACopyUnderSlskdsFolder_thatFilingTagsAndMovesIntoTheOtherAlbum() throws IOException {
+        Path original = put(root.resolve("Oasis/Definitely Maybe"), "06 - Supersonic.flac");
+
+        String name = organiser.copyIntoDownloads(original.toString()).block();
+
+        assertTrue(name.startsWith(LibraryOrganiser.COPY_PREFIX), name);
+        assertTrue(name.endsWith("\\06 - Supersonic.flac"), "slskd's own shape, so locate() finds it: " + name);
+        Path copy = organiser.locate(name);
+        assertNotNull(copy);
+        assertTrue(copy.startsWith(downloads));
+        assertEquals("audio", Files.readString(copy));
+
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM, name, NOW.minusSeconds(5),
+                "Supersonic", List.of("Oasis"), "Supersonic", List.of("Oasis"), null, List.of(), null);
+        assertEquals(root.resolve("Oasis/Supersonic/06 - Supersonic.flac"), organiser.file(job, NOW).block(),
+                "filed into the requesting album's folder");
+        assertEquals("audio", Files.readString(original), "the original is untouched");
+        assertFalse(Files.exists(copy.getParent()), "the copy's folder is gone from slskd's downloads");
+    }
+
+    @Test
+    void copyIntoDownloads_refusesAFileOutsideTheLibrary_andDiscardCopyRemovesAnUnusedCopy() throws IOException {
+        Path outside = put(tmp.resolve("elsewhere"), "x.flac");
+        assertThrows(java.nio.file.NoSuchFileException.class, () -> organiser.copyIntoDownloadsBlocking(outside.toString()));
+        assertThrows(java.nio.file.NoSuchFileException.class,
+                () -> organiser.copyIntoDownloadsBlocking(root.resolve("Oasis/gone.flac").toString()));
+
+        Path original = put(root.resolve("Oasis/Definitely Maybe"), "06 - Supersonic.flac");
+        String name = organiser.copyIntoDownloads(original.toString()).block();
+        organiser.discardCopy(name).block();
+        assertNull(organiser.locate(name));
+        assertTrue(Files.exists(original));
+        organiser.discardCopy(name).block();   // twice is harmless
     }
 
     @Test

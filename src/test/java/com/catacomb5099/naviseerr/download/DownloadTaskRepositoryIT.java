@@ -794,16 +794,26 @@ class DownloadTaskRepositoryIT {
                 .map(c -> c.position() + " " + c.libraryPath()).collectList().block();
     }
 
+    private List<String> copiesWithAlbum(DownloadType type, String downloadYoutubeId, DownloadTask... tasks) {
+        return repository.filedCopies(type, downloadYoutubeId, List.of(tasks))
+                .map(c -> c.position() + " " + c.libraryPath() + (c.sameAlbum() ? " own" : " other")).collectList().block();
+    }
+
     @Test
-    void filedCopies_forAnAlbum_isTheSameAlbumTrack_neverTheSameIdFromElsewhere() {
+    void filedCopies_forAnAlbum_isItsOwnTrack_orAnotherAlbumsCopyOfTheSameId_toBeCopied() {
         UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
         filed(album, "supersonic-atv", "Supersonic", 6, "EXACT", "/music/Oasis/DM/06.flac");
-        // A Deluxe edition shares the plain album's ids; its files must not be taken for this album's.
+        // A Deluxe edition shares the plain album's ids (19-10-2026: it gets its own copies of them).
         UUID deluxe = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm_deluxe");
-        filed(deluxe, "live-forever", "Live Forever", 5, "EXACT", "/music/Oasis/DMD/05.flac");
+        setTask(filed(deluxe, "live-forever", "Live Forever", 5, "EXACT", "/music/Oasis/DMD/05.flac"), "duration_seconds = 278");
+        filed(deluxe, "supersonic-atv", "Supersonic", 6, "EXACT", "/music/Oasis/DMD/06.flac");
 
-        assertEquals(List.of("1 /music/Oasis/DM/06.flac"), copies(DownloadType.ALBUM, "MPREb_dm",
-                wanted("supersonic-other-id", "Supersonic", 6), wanted("live-forever", "Live Forever", 5)));
+        assertEquals(List.of("1 /music/Oasis/DM/06.flac own", "1 /music/Oasis/DMD/06.flac other",
+                        "2 /music/Oasis/DMD/05.flac other"),
+                copiesWithAlbum(DownloadType.ALBUM, "MPREb_dm",
+                        wanted("supersonic-atv", "Supersonic", 6), wanted("live-forever", "Live Forever (Remastered)", 5)
+                                .toBuilder().durationSeconds(277).build()),
+                "the album's own track first (pointed at), another album's by id and title or length (copied)");
     }
 
     @Test
@@ -901,16 +911,59 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
-    void filedCopies_neverTakesASongForAnAlbumTrack_byAnAlbumAnswerThatCameAfterItWasFiled() {
+    void filedCopies_aSongFiledByItsOwnName_isCopiedForItsAlbum_neverPointedAt() {
         // Filed by its own name (no answer within the organiser's wait), then looked up late: the file
-        // is in its own folder, so the album still needs its own copy of the track.
+        // is in its own folder, so the album gets its own copy of it (19-10-2026; before, it downloaded).
         UUID song = insertDownload("SUCCEEDED", "SONG");
         filed(song, "supersonic", "Supersonic", null, "EXACT", "/music/Oasis/Supersonic/s.flac");
         songAlbum("supersonic", "MPREb_dm", 6, NOW);
 
-        assertEquals(List.of(), copies(DownloadType.ALBUM, "MPREb_dm", wanted("supersonic", "Supersonic", 6)));
-        assertEquals(List.of("1 /music/Oasis/Supersonic/s.flac"), copies(DownloadType.SONG, "supersonic",
-                wanted("supersonic", "Supersonic", null)), "asked for as a song, it is still the same song");
+        assertEquals(List.of("1 /music/Oasis/Supersonic/s.flac other"),
+                copiesWithAlbum(DownloadType.ALBUM, "MPREb_dm", wanted("supersonic", "Supersonic", 6)),
+                "the late answer does not make the file this album's: it is copied into the album's folder");
+        assertEquals(List.of("1 /music/Oasis/Supersonic/s.flac other"), copiesWithAlbum(DownloadType.SONG, "supersonic",
+                wanted("supersonic", "Supersonic", null)), "asked for as a song, it is still the same song; no album on "
+                + "either side is not 'the same album'");
+    }
+
+    @Test
+    void filedCopies_anAlbumAskedForAgain_pointsAtItsOwnCopiedTrack_andAPlaylistPrefersTheOriginal() {
+        String original = definitelyMaybeSupersonic();
+        // The EP's Supersonic was copied from Definitely Maybe: no pick of its own, a naviseerr-copy file.
+        UUID ep = insertDownload("SUCCEEDED", "ALBUM", "MPREb_ep");
+        setTask(filed(ep, "supersonic-atv", "Supersonic", 1, "EXACT", "/music/Oasis/EP/06.flac"),
+                "candidates = '[]', slskd_filename = '" + LibraryOrganiser.COPY_PREFIX + "abc\\06.flac'");
+
+        assertEquals(List.of("1 /music/Oasis/EP/06.flac own", "1 " + original + " other"),
+                copiesWithAlbum(DownloadType.ALBUM, "MPREb_ep", wanted("supersonic-atv", "Supersonic", 1)),
+                "a copy of an EXACT file is EXACT: the album's own track first, so it is pointed at, not copied again");
+        assertEquals(List.of("1 " + original, "1 /music/Oasis/EP/06.flac"),
+                copies(DownloadType.PLAYLIST, "VL-britpop", wanted("supersonic-atv", "Supersonic", null)),
+                "a playlist takes the original before a copy made of it");
+    }
+
+    @Test
+    void createTasks_createsASongGivenACopy_finished_andTheOrganiserFilesItLikeAnyOther() {
+        UUID album = insertDownload("PENDING", "ALBUM", "MPREb_ep");
+        media("MPREb_ep", "Supersonic", "Oasis");
+        media("supersonic-atv", "Supersonic", "Oasis");
+        List<DownloadTask> tasks = List.of(
+                wanted("supersonic-atv", "Supersonic", 1).toBuilder()
+                        .slskdFilename(LibraryOrganiser.COPY_PREFIX + "abc\\06 - Supersonic.flac").build(),
+                wanted("take-me-away", "Take Me Away", 2));
+
+        assertEquals(2L, repository.createTasks(album, tasks, NOW, HOLD).block());
+
+        UUID copied = taskIdOf(album, "supersonic-atv");
+        assertEquals("SUCCEEDED", taskField(copied, "phase"));
+        assertNull(taskField(copied, "library_path"), "not filed yet: the organiser moves the copy");
+        assertEquals(LibraryOrganiser.COPY_PREFIX + "abc\\06 - Supersonic.flac", taskField(copied, "slskd_filename"));
+        assertEquals("SEARCH_INIT", taskField(taskIdOf(album, "take-me-away"), "phase"));
+        LibraryOrganiser.Job job = repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW).blockFirst();
+        assertEquals(copied, job.taskId(), "picked up like a file a sharer sent");
+        assertEquals("Supersonic", job.tags().album());
+        assertEquals(1, job.tags().track(), "tagged as THIS album's track");
+        assertNull(job.filedCopy(), "its own album has no other copy: it is filed, not pointed");
     }
 
     @Test

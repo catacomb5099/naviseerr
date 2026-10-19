@@ -229,7 +229,8 @@ public class DownloadService {
 
     /**
      * Why a song past searching has no list, from what the row already records; see
-     * {@link TaskCandidatesView#reason()}. A song whose file came from the album search's folder or a
+     * {@link TaskCandidatesView#reason()}. A song the library already had (pointed at its file, or an
+     * album's copy of another album's file, 19-10-2026) never searched. A song whose file came from the album search's folder or a
      * person, with no search id of its own, never searched (a file from its own search with no id is a
      * pre-V15 row that kept a first wording's files when the next was refused: it did search); a failed
      * row with no completed search reports the failure code itself ({@code SOULSEEK_OFFLINE} and
@@ -240,7 +241,8 @@ public class DownloadService {
         if (statusOf(song) != PickListStatus.NONE) {
             return null;
         }
-        if (song.libraryPath() != null && song.slskdFilename() == null) {
+        if ((song.libraryPath() != null && song.slskdFilename() == null)
+                || (song.slskdFilename() != null && song.slskdFilename().startsWith(LibraryOrganiser.COPY_PREFIX))) {
             return "ALREADY_IN_LIBRARY";
         }
         DownloadCandidate current = song.current();
