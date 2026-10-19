@@ -297,20 +297,21 @@ class DownloadTaskRunnerTest {
     void aFinishedPlaylist_getsItsPlaylistFileWritten_thenIsStampedOrganised() {
         UUID playlistId = UUID.randomUUID();
         LibraryOrganiser.Collection playlist = new LibraryOrganiser.Collection(playlistId,
-                DownloadType.PLAYLIST, "Alt Nation 1989");
+                DownloadType.PLAYLIST, "Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj");
         LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(playlist));
         when(repository.playlistEntries(playlistId)).thenReturn(Flux.just(entry));
-        when(organiser.writePlaylist("Alt Nation 1989", List.of(entry)))
+        when(organiser.writePlaylist("Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", List.of(entry)))
                 .thenReturn(Mono.just(java.nio.file.Path.of("/music/Playlists/Alt Nation 1989.m3u8")));
         when(repository.setOrganisedAt(playlistId, T0)).thenReturn(Mono.just(1L));
 
         runner.pass().block();
 
-        verify(organiser).writePlaylist("Alt Nation 1989", List.of(entry));
+        // The picture the playlist had in the app goes with the file: the organiser writes it beside the .m3u8.
+        verify(organiser).writePlaylist("Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", List.of(entry));
         verify(repository).setOrganisedAt(playlistId, T0);
         verify(mediaServers).libraryChanged();
         verify(mediaServers).flush(T0);
@@ -344,12 +345,12 @@ class DownloadTaskRunnerTest {
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
-                new LibraryOrganiser.Collection(albumId, DownloadType.ALBUM, "Doolittle")));
+                new LibraryOrganiser.Collection(albumId, DownloadType.ALBUM, "Doolittle", null)));
         when(repository.setOrganisedAt(albumId, T0)).thenReturn(Mono.just(1L));
 
         runner.pass().block();
 
-        verify(organiser, never()).writePlaylist(any(), any());
+        verify(organiser, never()).writePlaylist(any(), any(), any());
         verify(repository, never()).playlistEntries(any());
         verify(repository).setOrganisedAt(albumId, T0);
     }
@@ -361,9 +362,9 @@ class DownloadTaskRunnerTest {
         when(organiser.cutoff(any())).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
-                new LibraryOrganiser.Collection(playlistId, DownloadType.PLAYLIST, "Mix")));
+                new LibraryOrganiser.Collection(playlistId, DownloadType.PLAYLIST, "Mix", null)));
         when(repository.playlistEntries(playlistId)).thenReturn(Flux.empty());
-        when(organiser.writePlaylist(any(), any())).thenReturn(Mono.error(new java.io.IOException("read-only")));
+        when(organiser.writePlaylist(any(), any(), any())).thenReturn(Mono.error(new java.io.IOException("read-only")));
 
         assertDoesNotThrow(() -> runner.pass().block());
 
@@ -1045,20 +1046,20 @@ class DownloadTaskRunnerTest {
     void aFinishedCuratedPlaylist_getsItsPlaylistFileWritten_likeAYouTubePlaylist() {
         UUID downloadId = UUID.randomUUID();
         LibraryOrganiser.Collection curated = new LibraryOrganiser.Collection(downloadId,
-                DownloadType.CURATED, "80s indie pop");
+                DownloadType.CURATED, "80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg");
         LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(curated));
         when(repository.playlistEntries(downloadId)).thenReturn(Flux.just(entry));
-        when(organiser.writePlaylist("80s indie pop", List.of(entry)))
+        when(organiser.writePlaylist("80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg", List.of(entry)))
                 .thenReturn(Mono.just(java.nio.file.Path.of("/music/Playlists/80s indie pop.m3u8")));
         when(repository.setOrganisedAt(downloadId, T0)).thenReturn(Mono.just(1L));
 
         runner.pass().block();
 
-        verify(organiser).writePlaylist("80s indie pop", List.of(entry));
+        verify(organiser).writePlaylist("80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg", List.of(entry));
         verify(repository).setOrganisedAt(downloadId, T0);
     }
 

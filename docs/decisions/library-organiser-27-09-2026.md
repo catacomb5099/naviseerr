@@ -235,3 +235,35 @@ downloads shows it is needed.
 - Windows naming rules (reserved characters, device names, trailing dots, MAX_PATH):
   https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
 - Per-component length limits by filesystem: https://ss64.com/nt/syntax-filenames.html
+
+## Addendum 19-10-2026: the playlist's picture beside its file
+
+Owner's ask: "find a way to change playlist image at the processing stage, so navidrome and/or jellyfin see
+a playlist with an image set to what the playlist's image was when the playlist was downloaded". The
+follow-up this ADR named ("fetch `media_items.image_url`") is now done for playlists.
+
+**What is written.** FINALISE fetches the collection's stored picture (`media_items.image_url`, the one
+the app showed at request time) through the album-cover path (`SongTagger.cover(String)`: album-art
+shaped `googleusercontent` URLs only, resized to 1200 px JPEG, cached, 10 s timeout) and writes it as
+`Playlists/<sanitised title>.jpg`, staged and atomically renamed, **before** the `.m3u8` with the same
+stem, rewritten whole on every finalise. About a quarter of a megabyte per playlist.
+
+**What each server does with it** (checked live 19-10-2026, byte for byte):
+
+| | Navidrome 0.64.2 | Jellyfin 12.2.0 |
+|---|---|---|
+| `Playlists/<title>.jpg` beside `<title>.m3u8` | shown as the playlist cover (since 0.61.0, 31-03-2026; same base name, case-insensitive; nothing to enable) | ignored (`<title>.jpg` and `<title>-poster.jpg` both; a full item refresh too) |
+| `#EXTALBUMARTURL:` line in the m3u | works too, lower priority than the sidecar: redundant | ignores every `#` line |
+| API | `POST /api/playlist/{id}/image` needs a Navidrome user login (JWT); not used | `POST /Items/{id}/Images/Primary` with the install's API key, base64 body: used by the companion change (`feat/ai-playlist-cover-jellyfin`) after the rescan that `media-server-rescan-19-10-2026.md` triggers |
+| older servers | < 0.61: no sidecar, mosaic only (README says "0.61 or newer") | any version with the API |
+
+**Flippable choices (defaults first).** A playlist gets the picture it had in the app at download time,
+1200 px JPEG. CURATED and RADIO-with-video-seed downloads get **no** sidecar: their picture is a 4:3
+`i.ytimg.com` video frame, the wrong shape for a square tile, so the servers keep their mosaic (the better
+tile). Flip: let `SongTagger.coverUrl` accept `i.ytimg.com` (one regex) or build `maxresdefault.jpg`.
+Picture unreachable: the playlist file is written as before, no sidecar, one INFO line; a retry's finalise
+tries again; an older sidecar is kept. Two playlists with one title share both files (known, above).
+
+**Not changed.** The `.m3u8` content; album `cover.jpg` files (still the open follow-up above); nothing in
+the web app.
+

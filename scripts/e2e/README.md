@@ -11,6 +11,10 @@ scripts/e2e/playlist-file.sh
 About 2-3 minutes on a laptop (most of it the first image build; later runs reuse Docker's cache). It
 prints `PASS: ...` at the end, or `FAIL: <what>` plus the last 40 log lines of naviseerr and slskd.
 
+> The playlist's picture (`Playlists/<title>.jpg`, 19-10-2026) is not asserted here: the stack is sealed from the
+> internet, so the picture cannot be fetched; `LibraryOrganiserTest` covers the file, and the Navidrome check in
+> `demos/playlist-cover` of the 19-10 sweep covers the display.
+
 ## What it does
 
 1. Starts the install's own `compose.yaml` under the project name `naviseerr-e2e`, with
