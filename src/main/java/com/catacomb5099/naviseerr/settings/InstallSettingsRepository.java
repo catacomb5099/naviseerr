@@ -52,6 +52,13 @@ public class InstallSettingsRepository {
     /** False with no row at all: a fresh install makes no playlists until someone says yes. */
     private static final String SUGGESTED_PLAYLISTS_SQL = "SELECT COALESCE((SELECT suggested_playlists FROM install_settings), FALSE) AS switched_on";
 
+    private static final String SAVE_SLSKD_SQL = """
+            INSERT INTO install_settings (slskd_url, slskd_api_key) VALUES (:url, :apiKey)
+            ON CONFLICT (one) DO UPDATE SET slskd_url = EXCLUDED.slskd_url, slskd_api_key = EXCLUDED.slskd_api_key, updated_at = now()
+            """;
+
+    private static final String CLEAR_SLSKD_SQL = "UPDATE install_settings SET slskd_url = NULL, slskd_api_key = NULL, updated_at = now()";
+
     private final DatabaseClient client;
 
     public InstallSettingsRepository(R2dbcEntityTemplate entityTemplate) {
@@ -103,5 +110,15 @@ public class InstallSettingsRepository {
     /** Asked at every cron tick and on every suggested-playlists request: one SELECT on a one-row table. */
     public Mono<Boolean> suggestedPlaylists() {
         return client.sql(SUGGESTED_PLAYLISTS_SQL).map(row -> Boolean.TRUE.equals(row.get("switched_on", Boolean.class))).one();
+    }
+
+    /** Your own slskd (after "Save and test" reached it); wins over the install file's SLSKD_URL / SLSKD_API_KEY. */
+    public Mono<Void> saveSlskd(String url, String apiKey) {
+        return client.sql(SAVE_SLSKD_SQL).bind("url", url).bind("apiKey", apiKey).fetch().rowsUpdated().then();
+    }
+
+    /** Back to the install file's slskd. */
+    public Mono<Void> clearSlskd() {
+        return client.sql(CLEAR_SLSKD_SQL).fetch().rowsUpdated().then();
     }
 }

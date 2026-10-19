@@ -28,13 +28,27 @@ public class SlskdService {
     private final static String SERVER_ENDPOINT = "/server";
     private final static String OPTIONS_ENDPOINT = "/options";
 
-    private final WebClient webClient;
+    /** Swapped whole by {@link #use} when Settings points at your own slskd; every call reads it once. */
+    private volatile WebClient webClient;
+    @Value("${slskd-service.url:}")
+    private volatile String url;
 
     @Value("${slskd-service.timeout}")
     private int timeout;
 
     public SlskdService(WebClient slskdWebClient) {
         this.webClient = slskdWebClient;
+    }
+
+    /** Talk to this slskd from now on (the one saved in Settings, or the install file's again), no restart. */
+    public void use(WebClient client, String url) {
+        this.webClient = client;
+        this.url = url;
+    }
+
+    /** The slskd every call goes to right now. */
+    public String url() {
+        return url;
     }
 
     /**

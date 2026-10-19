@@ -34,6 +34,19 @@ public class SlskdConfig {
     // download-task.batch-size in-flight refetches per pass.
     @Bean
     public WebClient slskdWebClient() {
+        return build(url, apiKey);
+    }
+
+    /** The install file's slskd address (SLSKD_URL), the fallback when none was saved in the app. */
+    public String url() {
+        return url;
+    }
+
+    /**
+     * A client for any slskd (the install file's at boot; your own, saved in Settings, from then on), same
+     * pool, timeouts and buffer limit. ponytail: a replaced client's pool is not disposed; a save is rare.
+     */
+    public WebClient build(String url, String apiKey) {
         ConnectionProvider pool = ConnectionProvider.builder("slskd")
                 .maxIdleTime(poolMaxIdleTime)
                 .maxLifeTime(poolMaxLifeTime)
@@ -51,6 +64,4 @@ public class SlskdConfig {
                         .maxInMemorySize(16 * 1024 * 1024))
                 .build();
     }
-
-
 }

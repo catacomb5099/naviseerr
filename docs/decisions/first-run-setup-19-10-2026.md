@@ -50,6 +50,20 @@ The owner's words: the compose file "is not navigable by a non-technical person"
   included, is open to anyone who can reach its address: finish the setup, the Authentik step included, before pointing
   a public address at it (the README says so).
 
+## Your own slskd (W4)
+
+The owner named the question ("do you have an instance of slskd?"), so the first screen gets a third card,
+"Use my own slskd": address and API key, "Save and test" = that slskd's `GET /server` with the typed key (proves
+address and key, and says whether Soulseek is in), then `install_settings.slskd_url` / `slskd_api_key` and
+`SlskdService.use()` swap the live `WebClient` (built by `SlskdConfig.build()`, the same pool and timeouts the
+bundled one gets). The address may be typed as host and port; `/api/v0/` is added. The install file's
+`SLSKD_URL` / `SLSKD_API_KEY` stay the fallback (DELETE goes back to them). The hazard this cannot check and the
+screen's one help line carries: an outside slskd whose downloads folder naviseerr cannot see means no filing and
+no playlist files (the 30-09 root cause); the install's downloads volume must point at that folder. Sonarr keeps
+"your own download client" in Settings the same way. The bundled slskd keeps running and `/settings/soulseek`
+keeps describing its account files; the web app shows the own-slskd card instead when `fromInstallFile` is false.
+Flip: drop W4/K5, nothing else depends on them.
+
 ## Flippable choices (defaults first)
 
 - Upgrade path: the setup shows once (default) / V18 also stamps `setup_completed_at` where `downloads` has rows
