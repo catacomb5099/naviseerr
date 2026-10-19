@@ -176,6 +176,19 @@ download-task:
   # means the lookup is broken, not that the download finished -- fail fast and loudly instead.
   missing-transfer-grace-ms: 60000
 
+# Login with Authentik (19-10-2026). Nothing is on until Authentik is connected in the web app's Settings
+# and someone signs in through it once; from then on every call needs the session cookie a sign-in gives,
+# until "Turn off Authentik login" in Settings. See docs/decisions/login-19-10-2026.md.
+auth:
+  # How long a login lasts on one device. Spotify and YouTube Music keep you signed in for good,
+  # Navidrome for two days; 30 days is the compromise.
+  session-days: 30
+  # Which other web addresses the sign-in may send the browser back to afterwards (the `to` of
+  # GET /auth/authentik/start), comma-separated. The app's own address always may; this is for a
+  # developer's web app on another port (Vite on :5173 calling the server on :8080). Anything else lands
+  # on /. The default applies only when the variable is absent: an empty AUTH_ALLOWED_ORIGINS= means "none".
+  allowed-origins: ${AUTH_ALLOWED_ORIGINS:http://localhost:5173}
+
 # Library organiser: moves each finished song out of slskd's downloads folder into an organised music
 # library that Navidrome / Jellyfin can scan. OFF unless BOTH slskd-downloads-dir and root are set --
 # an install that sets neither behaves exactly as before. Needs slskd's downloads folder to be visible

@@ -244,6 +244,18 @@ today (the Soulseek account lives in slskd's files because slskd reads them). Al
 `isEnabled()` is `COALESCE((SELECT enabled FROM login_settings), FALSE)`, asked on every request once
 the login exists, so there is no cache to invalidate when the owner turns it off.
 
+### V17: `sessions` (sign in with Authentik, 19-10-2026)
+
+[V17__sessions.sql](../../src/main/resources/db/migration/V17__sessions.sql) adds the table a signed-in
+browser is a row of: `session_id` (the random 32-byte id in the `naviseerr_session` cookie, base64url),
+`subject` (Authentik's stable per-application id for the person, `sub` of the ID token; no name, nothing
+else about them), `created_at`, `expires_at` (indexed). Written by the sign-in callback, read on every
+request while the login is on (`findBySession(id, now)`, expiry exclusive), deleted on logout
+(`deleteSession`), all of them on "Turn off Authentik login" (`deleteAll`), expired ones swept at each
+sign-in (`deleteExpired`), so no scheduler. A restart keeps everyone signed in. All SQL in
+[AuthRepository.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthRepository.java). No foreign
+key: there is no users table, Authentik is the directory.
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.

@@ -95,8 +95,9 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
      rescan the library: ...") and in `GET /api/status` under `library.mediaServers`; nothing else breaks.
 7. Optional, but you get more search results and fewer failed downloads: on your router's "port
    forwarding" page, forward TCP port 50300 to this computer. That is the door other Soulseek users
-   knock on; slskd cannot open it by itself. **Do not forward port 5056 on your router: the web app
-   has no login.**
+   knock on; slskd cannot open it by itself. **Do not forward port 5056 on your router until you have
+   connected Authentik** (Settings -> Login in the web app): until then the web app has no login and
+   anyone who can reach it can use it.
 
 ### Updating
 

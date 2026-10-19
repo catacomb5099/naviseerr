@@ -177,4 +177,49 @@ class AuthentikClientTest {
                 .expectErrorMatches(e -> e instanceof LoginProblem && e.getMessage().startsWith("Could not reach " + host + ": connection refused."))
                 .verify();
     }
+
+    @Test
+    void exchangeCode_postsTheSixFormFields_andAnswersTheIdToken() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                .setBody("{\"access_token\":\"ignored\",\"token_type\":\"Bearer\",\"id_token\":\"h.p.s\"}"));
+
+        StepVerifier.create(client.exchangeCode(openId(), "client-1", "s3cret", "the-code",
+                        "http://nas:5056/api/auth/authentik/callback", "the-verifier"))
+                .expectNext("h.p.s")
+                .verifyComplete();
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("POST", request.getMethod());
+        assertEquals("/application/o/token/", request.getPath());
+        assertTrue(request.getHeader("Content-Type").startsWith("application/x-www-form-urlencoded"), request.getHeader("Content-Type"));
+        assertEquals(Map.of("grant_type", "authorization_code", "code", "the-code",
+                "redirect_uri", "http://nas:5056/api/auth/authentik/callback", "client_id", "client-1",
+                "client_secret", "s3cret", "code_verifier", "the-verifier"), form(request));
+    }
+
+    @Test
+    void exchangeCode_refused_namesAuthentiksErrorWord_andPointsAtTheSettings() {
+        server.enqueue(new MockResponse().setResponseCode(401).setHeader("Content-Type", "application/json")
+                .setBody("{\"error\":\"invalid_client\",\"error_description\":\"...\"}"));
+
+        StepVerifier.create(client.exchangeCode(openId(), "client-1", "wrong", "c", "http://nas/cb", "v"))
+                .expectErrorMatches(e -> e instanceof LoginProblem && e.getMessage().equals(
+                        "Authentik refused the sign-in (invalid_client). Check the Client ID and Client secret in Settings."))
+                .verify();
+
+        server.enqueue(new MockResponse().setResponseCode(500).setBody("boom"));
+        StepVerifier.create(client.exchangeCode(openId(), "client-1", "wrong", "c", "http://nas/cb", "v"))
+                .expectErrorMatches(e -> e instanceof LoginProblem && e.getMessage().startsWith("Authentik refused the sign-in (500)."))
+                .verify();
+    }
+
+    @Test
+    void exchangeCode_withoutAnIdToken_saysTheOpenidScopeIsMissing() {
+        server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                .setBody("{\"access_token\":\"only\"}"));
+
+        StepVerifier.create(client.exchangeCode(openId(), "client-1", "s", "c", "http://nas/cb", "v"))
+                .expectErrorMatches(e -> e instanceof LoginProblem && e.getMessage().startsWith("Authentik's answer had no ID token."))
+                .verify();
+    }
 }
