@@ -55,8 +55,10 @@ The owner's words: the compose file "is not navigable by a non-technical person"
 The owner named the question ("do you have an instance of slskd?"), so the first screen gets a third card,
 "Use my own slskd": address and API key, "Save and test" = that slskd's `GET /server` with the typed key (proves
 address and key, and says whether Soulseek is in), then `install_settings.slskd_url` / `slskd_api_key` and
-`SlskdService.use()` swap the live `WebClient` (built by `SlskdConfig.build()`, the same pool and timeouts the
-bundled one gets). The address may be typed as host and port; `/api/v0/` is added. The install file's
+`SlskdService.use()` swap the live `WebClient` (built by `SlskdConfig.build()`: one connection pool shared by every
+slskd client the process builds, same timeouts). Searches and downloads under way at the switch fail within about a
+minute (the new slskd never had their ids) and can be retried. An empty key keeps the saved one for its own host only.
+The address may be typed as host and port; `/api/v0/` is added. The install file's
 `SLSKD_URL` / `SLSKD_API_KEY` stay the fallback (DELETE goes back to them). The hazard this cannot check and the
 screen's one help line carries: an outside slskd whose downloads folder naviseerr cannot see means no filing and
 no playlist files (the 30-09 root cause); the install's downloads volume must point at that folder. Sonarr keeps

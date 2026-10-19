@@ -29,8 +29,10 @@ import java.time.Duration;
  * asks that slskd for its Soulseek state ({@code GET /server}) with the typed key, and only then stores
  * the address and key and points every call (searches, downloads, {@code /status}) at it, live. What the
  * app saved wins; the install file's {@code SLSKD_URL} / {@code SLSKD_API_KEY} are the fallback
- * ({@code fromInstallFile}). The key is write-only. Not checked here, and said on the screen: naviseerr
- * must see that slskd's downloads folder, or nothing is filed and no playlist file is written.
+ * ({@code fromInstallFile}). The key is write-only (an empty field keeps the saved one, for its own host only).
+ * Not checked here, and said on the screen: naviseerr must see that slskd's downloads folder, or nothing is
+ * filed and no playlist file is written. Searches and downloads under way at the switch fail within about a
+ * minute (the new slskd never had their ids) and can be retried.
  */
 @Slf4j
 @RestController
@@ -89,7 +91,7 @@ public class SlskdSettingsController {
         String url = normalise(typed);
         return settings.find().flatMap(existing -> {
             String apiKey = body.apiKey() == null || body.apiKey().isBlank()
-                    ? (existing.slskdApiKey() == null ? "" : existing.slskdApiKey()) : body.apiKey().strip();
+                    ? MediaServerSettingsController.storedSecret(url, existing.slskdUrl(), existing.slskdApiKey()) : body.apiKey().strip();
             if (apiKey.isEmpty()) return Mono.error(new SettingsProblem("Enter the slskd API key."));
             return test(url, apiKey)
                     .flatMap(state -> settings.saveSlskd(url, apiKey).then(Mono.defer(settings::find))
@@ -135,6 +137,8 @@ public class SlskdSettingsController {
     }
 
     private View view(InstallSettings s, String message) {
-        return new View(slskd.url(), true, s.slskdUrl() == null, message);
+        boolean fromInstallFile = s.slskdUrl() == null;
+        // A key is in force either way (the install file's, or the saved one); the web app offers "leave empty to keep it" for a saved one only.
+        return new View(slskd.url(), fromInstallFile || s.slskdApiKey() != null, fromInstallFile, message);
     }
 }

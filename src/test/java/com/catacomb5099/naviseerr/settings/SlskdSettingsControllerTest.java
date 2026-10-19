@@ -81,6 +81,7 @@ class SlskdSettingsControllerTest {
 
     @Test
     void nothingSaved_showsTheInstallFilesSlskd_withoutItsKey() {
+        // apiKeySet: a key is in force (here the install file's); the saved-key case is asserted in saveAndTest below.
         http.get().uri("/settings/slskd").exchange()
                 .expectStatus().isOk()
                 .expectBody()
@@ -100,6 +101,7 @@ class SlskdSettingsControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.url").isEqualTo(ownBase() + "/api/v0/")
+                .jsonPath("$.apiKeySet").isEqualTo(true)
                 .jsonPath("$.fromInstallFile").isEqualTo(false)
                 .jsonPath("$.apiKey").doesNotExist()
                 .jsonPath("$.message").isEqualTo("Connected to your slskd at " + ownBase() + "/api/v0/; it is logged in to Soulseek.");
@@ -160,6 +162,14 @@ class SlskdSettingsControllerTest {
         http.put().uri("/settings/slskd").bodyValue(Map.of("url", ownBase(), "apiKey", "")).exchange().expectStatus().isOk();
 
         assertEquals("kept", own.takeRequest().getHeader("X-API-Key"));
+    }
+
+    @Test
+    void anEmptyKey_forAnotherHost_isNotFilledFromTheStoredOne() {
+        row.set(new InstallSettings(null, false, null, null, null, null, null, "http://nas:5030/api/v0/", "kept"));
+
+        assertEquals("Enter the slskd API key.", put(Map.of("url", ownBase(), "apiKey", "")));
+        assertEquals(0, own.getRequestCount());
     }
 
     @Test

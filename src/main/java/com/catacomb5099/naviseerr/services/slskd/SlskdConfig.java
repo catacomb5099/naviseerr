@@ -25,6 +25,12 @@ public class SlskdConfig {
     private Duration poolEvictInterval = Duration.ofSeconds(30);
     private Duration responseTimeout = Duration.ofSeconds(15);
     private Duration connectTimeout = Duration.ofSeconds(5);
+    /** One pool for every slskd client this process builds (the install file's, your own after a save, each Save and test). */
+    private final ConnectionProvider pool = ConnectionProvider.builder("slskd")
+            .maxIdleTime(poolMaxIdleTime)
+            .maxLifeTime(poolMaxLifeTime)
+            .evictInBackground(poolEvictInterval)
+            .build();
 
     // getSearchWithResponses fetches a search including every peer response, which for a popular
     // track on a live instance measured over 1 MiB decoded -- 4x the framework's 256 KiB default
@@ -44,14 +50,9 @@ public class SlskdConfig {
 
     /**
      * A client for any slskd (the install file's at boot; your own, saved in Settings, from then on), same
-     * pool, timeouts and buffer limit. ponytail: a replaced client's pool is not disposed; a save is rare.
+     * pool, timeouts and buffer limit; a replaced client leaves nothing behind.
      */
     public WebClient build(String url, String apiKey) {
-        ConnectionProvider pool = ConnectionProvider.builder("slskd")
-                .maxIdleTime(poolMaxIdleTime)
-                .maxLifeTime(poolMaxLifeTime)
-                .evictInBackground(poolEvictInterval)
-                .build();
         HttpClient httpClient = HttpClient.create(pool)
                 .responseTimeout(responseTimeout)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis());
