@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.auth;
 
+import io.netty.util.NetUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
@@ -22,8 +23,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -41,8 +45,6 @@ public class AuthController {
     static final String WRONG_CODE = "Wrong setup code";
     /** A web app from before the setup code sends none: refused with words, so nothing silently opens. */
     static final String OLD_CLIENT = "This web app is older than the server: update it";
-    /** Wrong setup codes count in this login-throttle bucket (an account named "setup" would share it; harmless). */
-    static final String SETUP_BUCKET = "setup";
     static final int MIN_PASSWORD = 8;
     /** bcrypt hashes the first 72 bytes only, and spring-security-crypto refuses a longer one outright. */
     static final int MAX_PASSWORD_BYTES = 72;
@@ -86,20 +88,20 @@ public class AuthController {
 
     /**
      * The first account, once, with the setup code from the server log: 201 with the session started;
-     * 401 {@link #WRONG_CODE} (counted by the login throttle, so guessing it is as slow as guessing a
-     * password); 409 once an account exists, whatever the code; 400 for a missing code (an old web app)
-     * or a name or password that will not do.
+     * 401 {@link #WRONG_CODE} (counted against the caller's address by the login throttle, so one address
+     * gets thirty guesses a minute at 31^12 codes); 409 once an account exists, whatever the code; 400
+     * for a missing code (an old web app) or a name or password that will not do.
      */
     @PostMapping("/setup")
     Mono<ResponseEntity<?>> setup(@RequestBody Credentials body, ServerWebExchange exchange) {
         if (body == null || body.setupCode() == null) return Mono.just(ResponseEntity.badRequest().body(Map.of("message", OLD_CLIENT)));
-        if (throttle.blockedForEveryone()) return Mono.just(tooManyForEveryone());
-        if (throttle.blocked(SETUP_BUCKET)) return Mono.just(tooMany());
+        String address = clientAddress(exchange.getRequest());
+        if (throttle.blockedAddress(address)) return Mono.just(tooManyFromAddress());
         if (!setupCode.matches(body.setupCode())) {
             // A spent code means the account exists: say so, and the web app shows the login instead.
             return repository.anyUser().map(any -> {
                 if (any) return accountExists();
-                throttle.failed(SETUP_BUCKET, clientAddress(exchange.getRequest()));
+                throttle.failedSetup(address);
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", WRONG_CODE));
             });
         }
@@ -111,7 +113,6 @@ public class AuthController {
                 .flatMap(created -> {
                     if (!created) return Mono.just(accountExists());
                     setupCode.consumed();
-                    throttle.succeeded(SETUP_BUCKET);
                     return repository.findByUsername(username).flatMap(user -> startSession(user, exchange, HttpStatus.CREATED));
                 });
     }
@@ -119,13 +120,17 @@ public class AuthController {
     /**
      * 200 with the session started, 401 {@link #WRONG_LOGIN} otherwise: never says which half was wrong.
      * 429 {@link LoginThrottle#TOO_MANY} once a name has had its five wrong passwords in 20 seconds, or
-     * {@link LoginThrottle#TOO_MANY_FOR_EVERYONE} once everyone together has had thirty failures in a minute.
+     * {@link LoginThrottle#TOO_MANY_FROM_ADDRESS} once the caller's address has had thirty failures in a
+     * minute under any names. A name longer than any account's is 401 at once: no bcrypt, no log line,
+     * no count, so it cannot be used to fill the log or the throttle's memory.
      */
     @PostMapping("/login")
     Mono<ResponseEntity<?>> login(@RequestBody Credentials body, ServerWebExchange exchange) {
         if (body == null || body.username() == null || body.password() == null) return Mono.just(wrongLogin());
         String name = body.username().trim();
-        if (throttle.blockedForEveryone()) return Mono.just(tooManyForEveryone());
+        if (name.length() > MAX_USERNAME) return Mono.just(wrongLogin());
+        String address = clientAddress(exchange.getRequest());
+        if (throttle.blockedAddress(address)) return Mono.just(tooManyFromAddress());
         if (throttle.blocked(name)) return Mono.just(tooMany());
         // Exactly one bcrypt check per attempt, against the dummy hash for an unknown name, so the time
         // taken does not say whether the name exists.
@@ -138,7 +143,7 @@ public class AuthController {
                     throttle.succeeded(name);
                     return repository.deleteExpired(clock.instant()).then(startSession(user, exchange, HttpStatus.OK));
                 })
-                .switchIfEmpty(Mono.fromSupplier(() -> { throttle.failed(name, clientAddress(exchange.getRequest())); return wrongLogin(); }));
+                .switchIfEmpty(Mono.fromSupplier(() -> { throttle.failed(name, address); return wrongLogin(); }));
     }
 
     /** Ends this browser's session: the row goes, the cookie is told to expire. 204 either way. */
@@ -181,23 +186,33 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY));
     }
 
-    private static ResponseEntity<?> tooManyForEveryone() {
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY_FOR_EVERYONE));
+    private static ResponseEntity<?> tooManyFromAddress() {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY_FROM_ADDRESS));
     }
 
     /**
-     * Who is knocking, for the log. The peer's address, unless the peer is on a private or loopback
-     * address (the web app's proxy in the Docker install, a dev machine): then the FIRST address in
-     * X-Forwarded-For, which that proxy filled in with the real client (Caddy only passes an incoming
-     * X-Forwarded-For on from a trusted proxy and otherwise writes the client's own address). A peer on
-     * the internet is never believed about who it is: a forged header there would only forge the log.
+     * Who is knocking, for the log and the per-address cap. The peer's address, unless the peer is on a
+     * private or loopback address (the web app's proxy in the Docker install, a dev machine): then the
+     * caller according to X-Forwarded-For, read from the RIGHT. Proxies append to that header (Caddy,
+     * nginx's $proxy_add_x_forwarded_for, Traefik, Cloudflare), so whatever a caller wrote in it itself
+     * ends up left of its real address; the rightmost hop that is not a private address is the first
+     * machine outside the owner's network, the caller. When every hop is private (a caller on the LAN)
+     * the leftmost is the caller. Only IP literals count, never names, and nothing is looked up. A peer
+     * on the internet is never believed about who it is. The owner's own proxy must set or append the
+     * header itself (the README says so); one that passes it through untouched lets the caller choose.
      */
     static String clientAddress(ServerHttpRequest request) {
         InetSocketAddress peer = request.getRemoteAddress();
         InetAddress ip = peer == null ? null : peer.getAddress();
-        String forwarded = request.getHeaders().getFirst("X-Forwarded-For");
-        if (ip != null && isPrivate(ip) && forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
+        List<String> forwarded = request.getHeaders().get("X-Forwarded-For");
+        if (ip != null && isPrivate(ip) && forwarded != null) {
+            List<InetAddress> hops = Arrays.stream(String.join(",", forwarded).split(","))
+                    .map(hop -> NetUtil.createInetAddressFromIpAddressString(hop.trim()))
+                    .filter(Objects::nonNull).toList();
+            for (int i = hops.size() - 1; i >= 0; i--) {
+                if (!isPrivate(hops.get(i))) return hops.get(i).getHostAddress();
+            }
+            if (!hops.isEmpty()) return hops.get(0).getHostAddress();
         }
         return ip == null ? "unknown" : ip.getHostAddress();
     }

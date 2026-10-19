@@ -3,8 +3,12 @@ package com.catacomb5099.naviseerr.auth;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.server.WebFilter;
 import reactor.core.publisher.Mono;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -29,7 +33,21 @@ class AuthControllerTest {
     private final AuthFilter filter = new AuthFilter(repository, CLOCK, true);
     private final SetupCode setupCode = new SetupCode(repository, true, "", "");
     private final WebTestClient http = WebTestClient.bindToController(new AuthController(repository, filter, new LoginThrottle(CLOCK), setupCode, CLOCK, 30))
-            .webFilter(filter).build();
+            .webFilter(PEER, filter).build();
+    /** Test-only: the address a request "came from" (header {@code X-Test-Peer}); Netty sets the real one. Without it, every request is from "unknown". */
+    private static final WebFilter PEER = (exchange, chain) -> {
+        String peer = exchange.getRequest().getHeaders().getFirst("X-Test-Peer");
+        if (peer == null) return chain.filter(exchange);
+        return chain.filter(exchange.mutate().request(exchange.getRequest().mutate().remoteAddress(address(peer)).build()).build());
+    };
+
+    private static InetSocketAddress address(String ip) {
+        try {
+            return new InetSocketAddress(InetAddress.getByName(ip), 40000);
+        } catch (UnknownHostException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
     /** The code the server "printed in its log" at start. */
     private final String code;
 
@@ -100,19 +118,25 @@ class AuthControllerTest {
     }
 
     @Test
-    void setup_withTheWrongCode_is401_fiveOfThemIs429_andNoAccountIsMade() {
-        for (int i = 0; i < 5; i++) {
-            http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", "guess-" + i)).exchange()
+    void setup_withTheWrongCode_is401_thirtyFromOneAddressIs429ForThatAddressOnly_andNoAccountIsMade() {
+        for (int i = 0; i < 30; i++) {
+            http.post().uri("/auth/setup").header("X-Test-Peer", "203.0.113.9")
+                    .bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", "guess-" + i)).exchange()
                     .expectStatus().isUnauthorized()
                     .expectHeader().doesNotExist("Set-Cookie")
                     .expectBody().jsonPath("$.message").isEqualTo(AuthController.WRONG_CODE);
         }
-        // The same throttle as the login: the sixth try is refused before the code is even looked at, the right one included.
-        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", code)).exchange()
+        // That address is refused before the code is even looked at, the right one included; no shared bucket to lock the owner out with.
+        http.post().uri("/auth/setup").header("X-Test-Peer", "203.0.113.9")
+                .bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", code)).exchange()
                 .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
-                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY);
+                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY_FROM_ADDRESS);
         assertNull(account.get());
         assertNotNull(setupCode.current(), "still live: nobody used it");
+        // The owner, on another address, with the right code: made.
+        http.post().uri("/auth/setup").header("X-Test-Peer", "198.51.100.7")
+                .bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", code)).exchange()
+                .expectStatus().isCreated();
     }
 
     @Test
@@ -197,27 +221,53 @@ class AuthControllerTest {
     }
 
     @Test
-    void thirtyWrongLoginsUnderMadeUpNames_thenEveryoneWaitsAMinute_theRightPasswordAndSetupIncluded() {
+    void thirtyWrongLoginsUnderMadeUpNamesFromOneAddress_thenThatAddressWaitsAMinute_andTheOwnerElsewhereLogsIn() {
         setup("alex", "correct horse");
         for (int i = 0; i < 30; i++) {
-            http.post().uri("/auth/login").bodyValue(Map.of("username", "bot-" + i, "password", "guess")).exchange()
+            http.post().uri("/auth/login").header("X-Test-Peer", "203.0.113.9").bodyValue(Map.of("username", "bot-" + i, "password", "guess")).exchange()
                     .expectStatus().isUnauthorized();
         }
-        http.post().uri("/auth/login").bodyValue(Map.of("username", "alex", "password", "correct horse")).exchange()
+        // The bot's address: every login and setup attempt is refused, the right password included.
+        http.post().uri("/auth/login").header("X-Test-Peer", "203.0.113.9").bodyValue(Map.of("username", "alex", "password", "correct horse")).exchange()
                 .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
                 .expectHeader().doesNotExist("Set-Cookie")
-                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY_FOR_EVERYONE);
-        http.post().uri("/auth/setup").bodyValue(Map.of("username", "bob", "password", "another one", "setupCode", "x")).exchange()
+                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY_FROM_ADDRESS);
+        http.post().uri("/auth/setup").header("X-Test-Peer", "203.0.113.9").bodyValue(Map.of("username", "bob", "password", "another one", "setupCode", "x")).exchange()
                 .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
-                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY_FOR_EVERYONE);
+                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY_FROM_ADDRESS);
+        // The owner's address: untouched by the bot.
+        http.post().uri("/auth/login").header("X-Test-Peer", "198.51.100.7").bodyValue(Map.of("username", "alex", "password", "correct horse")).exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.username").isEqualTo("alex");
     }
 
     @Test
-    void theLoggedAddress_isTheForwardedClientBehindAPrivateProxy_andThePeerItselfOtherwise() throws Exception {
+    void aNameLongerThanAnyAccount_is401AtOnce_andIsNeitherCheckedNorCounted() {
+        setup("alex", "correct horse");
+        for (int i = 0; i < 40; i++) {
+            http.post().uri("/auth/login").header("X-Test-Peer", "203.0.113.9").bodyValue(Map.of("username", "x".repeat(31) + i, "password", "guess")).exchange()
+                    .expectStatus().isUnauthorized()
+                    .expectBody().jsonPath("$.message").isEqualTo(AuthController.WRONG_LOGIN);
+        }
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).findByUsername(org.mockito.ArgumentMatchers.argThat(n -> n.length() > 30));
+        // Forty of them did not count: the address is not blocked, so a real guess from it is a plain 401.
+        http.post().uri("/auth/login").header("X-Test-Peer", "203.0.113.9").bodyValue(Map.of("username", "alex", "password", "guess")).exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void theCallersAddress_isTheRightmostPublicHopBehindAPrivateProxy_andThePeerItselfOtherwise() throws Exception {
         // The install: Caddy on the Docker network passes the real client on in X-Forwarded-For.
         assertEquals("203.0.113.9", AuthController.clientAddress(request("172.18.0.3", "203.0.113.9, 172.18.0.1")));
         assertEquals("203.0.113.9", AuthController.clientAddress(request("127.0.0.1", "203.0.113.9")));
         assertEquals("203.0.113.9", AuthController.clientAddress(request("fd12:3456::1", "203.0.113.9")));
+        // The owner's proxy in front of Caddy: both append, so the caller's own forged front hop is left of its real address.
+        assertEquals("203.0.113.9", AuthController.clientAddress(request("172.18.0.3", "8.8.8.8, 203.0.113.9, 172.18.0.1")));
+        assertEquals("203.0.113.9", AuthController.clientAddress(request("172.18.0.3", "evil.example, 203.0.113.9")), "names are skipped, never looked up");
+        // Every hop private (a caller on the LAN): the leftmost is the caller.
+        assertEquals("192.168.1.20", AuthController.clientAddress(request("172.18.0.3", "192.168.1.20, 192.168.1.1")));
+        // Nothing usable in the header: the peer.
+        assertEquals("172.18.0.3", AuthController.clientAddress(request("172.18.0.3", "nonsense, more nonsense")));
         // The server reached from the internet directly: the header is the caller's word, never believed.
         assertEquals("198.51.100.7", AuthController.clientAddress(request("198.51.100.7", "10.0.0.1")));
         assertEquals("2001:db8:0:0:0:0:0:7", AuthController.clientAddress(request("2001:db8::7", "10.0.0.1")), "Java prints the long form");
