@@ -4,6 +4,7 @@ import com.catacomb5099.naviseerr.curator.CuratorClient;
 import com.catacomb5099.naviseerr.services.RadioRepository;
 import com.catacomb5099.naviseerr.curator.CuratorEdition;
 import com.catacomb5099.naviseerr.curator.CuratorException;
+import com.catacomb5099.naviseerr.mediaserver.MediaServerNotifier;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
@@ -52,6 +53,7 @@ public class DownloadTaskRunner {
     private final LibraryOrganiser organiser;
     private final AlbumSearchStep albumSearches;
     private final ManualSearch manualSearch;
+    private final MediaServerNotifier mediaServers;
     private final Clock clock;
     private final Duration loopInterval;
     private final int batchSize;
@@ -86,6 +88,7 @@ public class DownloadTaskRunner {
             LibraryOrganiser organiser,
             AlbumSearchStep albumSearches,
             ManualSearch manualSearch,
+            MediaServerNotifier mediaServers,
             Clock clock,
             @Value("${download-task.loop-interval-ms:2000}") Duration loopInterval,
             @Value("${download-task.batch-size:10}") int batchSize,
@@ -103,6 +106,7 @@ public class DownloadTaskRunner {
         this.organiser = organiser;
         this.albumSearches = albumSearches;
         this.manualSearch = manualSearch;
+        this.mediaServers = mediaServers;
         this.clock = clock;
         this.loopInterval = loopInterval;
         this.batchSize = batchSize;
@@ -129,6 +133,8 @@ public class DownloadTaskRunner {
      * so one that was missed (a crash between the last task's terminal write and here) is picked up
      * by the next pass regardless. Filing is the same shape: it asks the table which finished songs
      * still have no library path, so a song whose file was not moved yet is picked up again next pass.
+     * Last, the music servers are told to rescan when a download was stamped organised this pass
+     * ({@link MediaServerNotifier}: one call per server, at most one every 30 s, never a failed pass).
      */
     Mono<Void> pass() {
         Instant now = clock.instant();
@@ -154,6 +160,7 @@ public class DownloadTaskRunner {
                         })
                         .then())
                 .then(organise(now))
+                .then(Mono.defer(() -> mediaServers.flush(now)))
                 .onErrorResume(error -> {
                     log.error("Download task pass failed", error);
                     return Mono.empty();
@@ -436,6 +443,11 @@ public class DownloadTaskRunner {
                                             + "pass", collection.downloadId(), collection.title(), error);
                                     return Mono.empty();
                                 }), batchSize)
+                        // Rows stamped this pass: the music servers have something new to see.
+                        .reduce(0L, Long::sum)
+                        .doOnNext(stamped -> {
+                            if (stamped > 0) mediaServers.libraryChanged();
+                        })
                         .then());
     }
 

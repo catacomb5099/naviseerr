@@ -1,0 +1,132 @@
+package com.catacomb5099.naviseerr.mediaserver;
+
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import reactor.test.StepVerifier;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class JellyfinClientTest {
+
+    /** As Jellyfin 12.2.0 answers GET /Library/MediaFolders with one music library (fields trimmed). */
+    private static final String MEDIA_FOLDERS = """
+            {"Items":[
+              {"Name":"Music","Id":"7e64e319657a9516ec78490da03edccb","Path":"/config/root/default/Music","CollectionType":"music"},
+              {"Name":"Films","Id":"aaaa","Path":"/config/root/default/Films","CollectionType":"movies"},
+              {"Name":"Playlists","Id":"1071671e7bffa0532e930debee501d2e","Path":"/config/data/playlists","CollectionType":"playlists"}
+            ],"TotalRecordCount":3,"StartIndex":0}
+            """;
+
+    private MockWebServer server;
+    private JellyfinClient client;
+
+    @BeforeEach
+    void setUp() throws IOException {
+        server = new MockWebServer();
+        server.start();
+        String url = server.url("/").toString();
+        client = new JellyfinClient(MediaServerConfig.http(url, Duration.ofSeconds(2))
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "MediaBrowser Token=\"k3y\"").build(),
+                url, "k3y", Duration.ofSeconds(2));
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        server.shutdown();
+    }
+
+    @Test
+    void rescan_refreshesEachMusicLibrary_withTheKeyInTheHeader_neverInTheUrl() throws InterruptedException {
+        server.enqueue(json(200, MEDIA_FOLDERS));
+        server.enqueue(new MockResponse().setResponseCode(204));
+
+        StepVerifier.create(client.rescan()).verifyComplete();
+
+        RecordedRequest list = server.takeRequest();
+        assertEquals("GET", list.getMethod());
+        assertEquals("/Library/MediaFolders", list.getPath());
+        assertEquals("MediaBrowser Token=\"k3y\"", list.getHeader("Authorization"));
+        RecordedRequest refresh = server.takeRequest();
+        assertEquals("POST", refresh.getMethod());
+        assertEquals("/Items/7e64e319657a9516ec78490da03edccb/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=Default",
+                refresh.getPath());
+        assertEquals("MediaBrowser Token=\"k3y\"", refresh.getHeader("Authorization"));
+        assertEquals(2, server.getRequestCount(), "the film library is left alone");
+    }
+
+    @Test
+    void noMusicLibrary_fallsBackToRefreshingEverything() throws InterruptedException {
+        server.enqueue(json(200, "{\"Items\":[{\"Name\":\"Films\",\"Id\":\"aaaa\",\"CollectionType\":\"movies\"}]}"));
+        server.enqueue(new MockResponse().setResponseCode(204));
+
+        StepVerifier.create(client.rescan()).verifyComplete();
+
+        server.takeRequest();
+        RecordedRequest refresh = server.takeRequest();
+        assertEquals("POST", refresh.getMethod());
+        assertEquals("/Library/Refresh", refresh.getPath());
+    }
+
+    @Test
+    void musicLibraryIds_matchesTheCollectionTypeCaseInsensitively() throws Exception {
+        tools.jackson.databind.JsonNode body = new tools.jackson.databind.ObjectMapper().readTree(
+                "{\"Items\":[{\"Id\":\"a\",\"CollectionType\":\"Music\"},{\"Id\":\"b\",\"CollectionType\":\"movies\"},{\"Id\":\"\",\"CollectionType\":\"music\"}]}");
+        assertEquals(List.of("a"), JellyfinClient.musicLibraryIds(body));
+    }
+
+    @Test
+    void aRejectedKey_isSaidPlainly() {
+        server.enqueue(new MockResponse().setResponseCode(401));
+
+        StepVerifier.create(client.rescan())
+                .expectErrorSatisfies(error -> {
+                    assertInstanceOf(MediaServerException.class, error);
+                    assertEquals("Jellyfin rejected the API key (JELLYFIN_API_KEY)", error.getMessage());
+                })
+                .verify();
+    }
+
+    @Test
+    void anotherHttpErrorOrADeadHost_namesTheServer() throws IOException {
+        server.enqueue(new MockResponse().setResponseCode(500));
+        StepVerifier.create(client.rescan())
+                .expectErrorSatisfies(error -> {
+                    assertTrue(error.getMessage().startsWith("Jellyfin at http://"), error.getMessage());
+                    assertTrue(error.getMessage().endsWith("did not answer: HTTP 500"), error.getMessage());
+                })
+                .verify();
+
+        server.shutdown();
+        StepVerifier.create(client.rescan())
+                .expectErrorSatisfies(error -> assertTrue(error.getMessage().contains("did not answer"), error.getMessage()))
+                .verify();
+    }
+
+    @Test
+    void configuredAndCredentials_followTheSettings() {
+        assertTrue(client.isConfigured());
+        assertTrue(client.hasCredentials());
+        JellyfinClient unset = new JellyfinClient(MediaServerConfig.http("", Duration.ofSeconds(1)).build(), "", "", Duration.ofSeconds(1));
+        assertFalse(unset.isConfigured());
+        JellyfinClient noKey = new JellyfinClient(MediaServerConfig.http("http://nas:8096/", Duration.ofSeconds(1)).build(),
+                "http://nas:8096/", " ", Duration.ofSeconds(1));
+        assertTrue(noKey.isConfigured());
+        assertFalse(noKey.hasCredentials());
+        assertEquals("http://nas:8096", noKey.url());
+    }
+
+    private static MockResponse json(int status, String body) {
+        return new MockResponse().setResponseCode(status)
+                .addHeader("Content-Type", "application/json")
+                .setBody(body);
+    }
+}

@@ -191,6 +191,29 @@ library:
   # Where the organised library goes: <root>/<Artist>/<Album or Title>/<file>.
   root: ${LIBRARY_ROOT:}
 
+# Music servers (19-10-2026): once a download has been filed into the library, naviseerr tells each
+# configured server to look again (Navidrome: Subsonic startScan, incremental; Jellyfin: its library
+# refresh), the way Lidarr's "Update Library" connections do. Their own folder watchers see nothing over
+# a NAS share, from another machine or under Docker Desktop. OFF unless a URL is set; a server is
+# ignored (one WARN at start) when its URL is set without its login. Use the address naviseerr can
+# reach, e.g. the LAN http one. See docs/decisions/media-server-rescan-19-10-2026.md.
+media-servers:
+  navidrome:
+    url: ${NAVIDROME_URL:}
+    # A Navidrome ADMIN account: Navidrome only lets admins start a scan (Scanner.AdminOnly). Sent as a
+    # Subsonic token (md5 of password + salt), never as the password itself.
+    username: ${NAVIDROME_USER:}
+    password: ${NAVIDROME_PASSWORD:}
+  jellyfin:
+    url: ${JELLYFIN_URL:}
+    # Jellyfin: Dashboard -> API Keys -> +. Sent in the Authorization header, never in a URL.
+    api-key: ${JELLYFIN_API_KEY:}
+  # At most one rescan request per server this often; a change inside the gap is sent when it ends.
+  # Navidrome drops a scan request while it is already scanning, which the trailing send covers.
+  rescan-gap-ms: 30000
+  # Per-request timeout. A dead host must never hold up a download pass.
+  timeout-ms: 10000
+
 # Playlist curator: the separate croissant service (in both compose files) builds a fresh "suggested
 # playlists" edition per category. naviseerr owns the clock: once a week it tells the curator to start,
 # then checks back every poll-interval until the run is done. OFF unless BOTH url and token are set -- an

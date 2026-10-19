@@ -76,8 +76,16 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
      imported by themselves. They belong to the first admin account. Admin accounts see them; other
      accounts only if you start Navidrome with `ND_DEFAULTPLAYLISTPUBLICVISIBILITY=true`.
    - **Jellyfin:** add `LIBRARY_DIR` to a library of type Music. Playlists appear for everyone who can
-     see that library. Tested with Jellyfin 12.1.0. If a playlist shows up empty on your version, see
+     see that library. Tested with Jellyfin 12.1.0 and 12.2.0. If a playlist shows up empty on your version, see
      [issue #18169](https://github.com/jellyfin/jellyfin/issues/18169).
+   - **Optional: have it rescan the moment a download is filed.** Music apps notice new files by
+     themselves only when they run on the same Linux host; over a NAS share, from another machine or on
+     Docker Desktop they see nothing until they scan. Put the app's address and login in `.env`
+     (`NAVIDROME_URL` + `NAVIDROME_USER` + `NAVIDROME_PASSWORD`, an admin account, since Navidrome only
+     lets admins start a scan; `JELLYFIN_URL` + `JELLYFIN_API_KEY` from Dashboard -> API Keys), then
+     `docker compose up -d`. Each finished download then triggers one rescan (at most one every 30 s).
+     A wrong address or login shows once in `docker compose logs naviseerr` ("Could not ask Navidrome to
+     rescan the library: ...") and in `GET /api/status` under `library.mediaServers`; nothing else breaks.
 7. Optional, but you get more search results and fewer failed downloads: on your router's "port
    forwarding" page, forward TCP port 50300 to this computer. That is the door other Soulseek users
    knock on; slskd cannot open it by itself. **Do not forward port 5056 on your router: the web app
@@ -182,7 +190,9 @@ leave it. Your existing playlists stay.
      its songs is in the library.
   2. The file is there: `LIBRARY_DIR/Playlists/<playlist name>.m3u8`.
   3. Your music app's library covers the whole `LIBRARY_DIR` (not just one artist folder) and has
-     scanned since.
+     scanned since. With `NAVIDROME_URL` / `JELLYFIN_URL` set, `docker compose logs naviseerr` shows
+     `Asked Navidrome to rescan the library` right after the playlist was written; a `Could not ask ...`
+     line there says what is wrong with the address or login.
   4. Navidrome: you are logged in as an admin, or `ND_DEFAULTPLAYLISTPUBLICVISIBILITY=true`.
   5. Jellyfin: the library type is Music (and see issue #18169 if a playlist is there but empty).
   6. Playlists downloaded before this install are not added afterwards.

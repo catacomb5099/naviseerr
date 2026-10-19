@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.services;
 
 import com.catacomb5099.naviseerr.download.LibraryOrganiser;
+import com.catacomb5099.naviseerr.mediaserver.MediaServerNotifier;
 import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.SlskdOptions;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
@@ -11,6 +12,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 
+import java.time.Instant;
+import java.util.List;
+
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -19,7 +23,8 @@ class StatusControllerTest {
     private final SlskdService slskdService = mock(SlskdService.class);
     private final LibraryOrganiser organiser = mock(LibraryOrganiser.class);
     private final YtMusicService ytMusicService = mock(YtMusicService.class);
-    private final WebTestClient http = WebTestClient.bindToController(new StatusController(slskdService, organiser, ytMusicService)).build();
+    private final MediaServerNotifier mediaServers = mock(MediaServerNotifier.class);
+    private final WebTestClient http = WebTestClient.bindToController(new StatusController(slskdService, organiser, ytMusicService, mediaServers)).build();
 
     /** YouTube Music reachable unless a test says otherwise: the Soulseek and library cases are about their own leg. */
     @BeforeEach
@@ -154,6 +159,40 @@ class StatusControllerTest {
                 .jsonPath("$.soulseek.state").isEqualTo(StatusController.UNREACHABLE)
                 .jsonPath("$.library.enabled").isEqualTo(true)
                 .jsonPath("$.library.problem").isEqualTo("naviseerr cannot write into the library folder /library.");
+    }
+
+    @Test
+    void libraryFine_listsNoMediaServers_whenNoneIsConfigured() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+        when(mediaServers.status()).thenReturn(List.of());
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.library.mediaServers").isArray()
+                .jsonPath("$.library.mediaServers.length()").isEqualTo(0);
+    }
+
+    @Test
+    void eachConfiguredMediaServer_isListed_withItsLastOutcome() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+        when(mediaServers.status()).thenReturn(List.of(
+                new MediaServerNotifier.MediaServerStatus("Navidrome", "http://nas:4533", null, Instant.parse("2026-10-19T12:00:00Z")),
+                new MediaServerNotifier.MediaServerStatus("Jellyfin", "http://nas:8096",
+                        "Jellyfin rejected the API key (JELLYFIN_API_KEY)", null)));
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.library.mediaServers[0].name").isEqualTo("Navidrome")
+                .jsonPath("$.library.mediaServers[0].url").isEqualTo("http://nas:4533")
+                .jsonPath("$.library.mediaServers[0].problem").isEmpty()
+                .jsonPath("$.library.mediaServers[0].lastRescanAt").isEqualTo("2026-10-19T12:00:00Z")
+                .jsonPath("$.library.mediaServers[1].name").isEqualTo("Jellyfin")
+                .jsonPath("$.library.mediaServers[1].problem").isEqualTo("Jellyfin rejected the API key (JELLYFIN_API_KEY)")
+                .jsonPath("$.library.mediaServers[1].lastRescanAt").isEmpty();
     }
 
     @Test
