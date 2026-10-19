@@ -267,4 +267,82 @@ class SearchQueryTiersTest {
                 SearchQueryTiers.titleAndArtist("Neon Indian - Polish Girl - toomainstream"));
         assertEquals(new SearchQueryTiers.TitleAndArtist("Wonderwall", ""), SearchQueryTiers.titleAndArtist("Wonderwall"));
     }
+
+    // ---- 19-10-2026: tags written inline, no brackets ("Poetic Justice Explicit Version, Closed Captioned") ----
+
+    @Test
+    void inlineExplicitVersionAndClosedCaptioned_neverReachTheSearch_thePickerKeepsTheVersion() {
+        // The owner's row of 19-10-2026: YouTube's own title for the official video yyr2gEouEMM. Before this
+        // rule the four wordings were "Poetic Justice Explicit Version, Closed Captioned", the same " - Kendrick
+        // Lamar", "Justice Explicit Version, Closed Captioned Kendrick" and "Poetic Justice Explicit Version,
+        // Closed - Kendrick Lamar"; Soulseek matches every word, so all four found nothing.
+        List<String> expected = List.of("Poetic Justice", "Poetic Justice - Kendrick Lamar", "Justice Kendrick");
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Explicit Version, Closed Captioned - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Poetic Justice Explicit Version, Closed Captioned - Kendrick Lamar"));
+        // the tag behind a guest credit is cut too
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Explicit Version, Closed Captioned ft. Drake - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Poetic Justice Explicit Version, Closed Captioned ft. Drake - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Explicit Version, Closed Captioned (feat. Drake) - Kendrick Lamar"));
+        assertEquals("Poetic Justice (feat. Drake) (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Poetic Justice Explicit Version, Closed Captioned (feat. Drake) - Kendrick Lamar"));
+        // YouTube's "Artist - Title" shape with the artist appended
+        assertEquals(expected, SearchQueryTiers.of("Kendrick Lamar - Poetic Justice Explicit Version, Closed Captioned - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Kendrick Lamar - Poetic Justice Explicit Version, Closed Captioned - Kendrick Lamar"));
+        // the same tags as their own dash segment, behind a comma (with or without a space), or before the version phrase
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice - Explicit - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit) - Kendrick Lamar", SearchQueryTiers.pickerName("Poetic Justice - Explicit - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice, Explicit Version - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Poetic Justice, Explicit Version - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Explicit Version,Closed Captioned - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Closed Captioned Explicit Version - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Poetic Justice Closed Captioned Explicit Version - Kendrick Lamar"));
+        assertEquals(List.of("Wonderwall", "Wonderwall - Oasis"), SearchQueryTiers.of("Wonderwall, Remastered 2009 - Oasis"));
+        // a bare trailing "Explicit" and "Clean Version" are version qualifiers too
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Explicit - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit) - Kendrick Lamar", SearchQueryTiers.pickerName("Poetic Justice Explicit - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Clean Version - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Clean Version) - Kendrick Lamar", SearchQueryTiers.pickerName("Poetic Justice Clean Version - Kendrick Lamar"));
+    }
+
+    @Test
+    void closedCaptioned_isNoise_withOrWithoutTheHyphen_inBracketsOrInline() {
+        assertEquals(List.of("If You Could Only See", "If You Could Only See - Tonic", "If Could Only See Tonic"),
+                SearchQueryTiers.of("If You Could Only See Closed Captioned - Tonic"));
+        assertEquals("If You Could Only See - Tonic", SearchQueryTiers.pickerName("If You Could Only See Closed Captioned - Tonic"));
+        // the lab fixture's one case, hyphenated and in brackets: the search is unchanged, the picker no longer sees a qualifier
+        assertEquals(List.of("If You Could Only See", "If You Could Only See - Tonic", "If Could Only See Tonic"),
+                SearchQueryTiers.of("If You Could Only See (Closed-Captioned) - Tonic"));
+        assertEquals("If You Could Only See - Tonic", SearchQueryTiers.pickerName("If You Could Only See (Closed-Captioned) - Tonic"));
+        // a version phrase before the tag survives as the picker's qualifier
+        assertEquals(List.of("Wonderwall", "Wonderwall - Oasis"), SearchQueryTiers.of("Wonderwall Live at Wembley, Closed Captioned - Oasis"));
+        assertEquals("Wonderwall (Live at Wembley) - Oasis", SearchQueryTiers.pickerName("Wonderwall Live at Wembley, Closed Captioned - Oasis"));
+    }
+
+    @Test
+    void explicitAndClean_areTitlesWhenTheyAreNotATrailingVersionPhrase() {
+        assertEquals(List.of("Explicit", "Explicit - Artist"), SearchQueryTiers.of("Explicit - Artist"));
+        assertEquals("Explicit - Artist", SearchQueryTiers.pickerName("Explicit - Artist"));
+        assertEquals(List.of("Explicit Content", "Explicit Content - Some Band", "Explicit Band"),
+                SearchQueryTiers.of("Explicit Content - Some Band"));
+        assertEquals(List.of("Clean", "Clean - Taylor Swift", "Clean Taylor"), SearchQueryTiers.of("Clean - Taylor Swift"));
+        assertEquals(List.of("Mr. Clean", "Mr. Clean - Yung Gravy", "Clean Gravy"), SearchQueryTiers.of("Mr. Clean - Yung Gravy"));
+        // a bare trailing "Clean" is a title word ("Mr. Clean"); only "Clean Version" is a version phrase
+        assertEquals(List.of("Lose Yourself Clean", "Lose Yourself Clean - Eminem", "Yourself Clean Eminem"),
+                SearchQueryTiers.of("Lose Yourself Clean - Eminem"));
+        assertEquals("Lose Yourself Clean - Eminem", SearchQueryTiers.pickerName("Lose Yourself Clean - Eminem"));
+        // "Clean" before another version word is still a title word: only the phrase "Clean Version" is peeled
+        assertEquals(List.of("Come Clean", "Come Clean - Hilary Duff", "Clean Hilary"), SearchQueryTiers.of("Come Clean Remix - Hilary Duff"));
+        assertEquals("Come Clean (Remix) - Hilary Duff", SearchQueryTiers.pickerName("Come Clean Remix - Hilary Duff"));
+        assertEquals(List.of("Mr. Clean", "Mr. Clean - Yung Gravy", "Clean Gravy"), SearchQueryTiers.of("Mr. Clean Remix - Yung Gravy"));
+        // the bracketed shapes most official videos use are unchanged
+        assertEquals(List.of("Smack That", "Smack That - Akon", "Smack Akon"), SearchQueryTiers.of("Smack That (Clean) (feat. Eminem) - Akon"));
+        assertEquals("Smack That (Clean) (feat. Eminem) - Akon", SearchQueryTiers.pickerName("Smack That (Clean) (feat. Eminem) - Akon"));
+        assertEquals(List.of("Boulevard of Broken Dreams", "Boulevard of Broken Dreams - Green Day", "Boulevard Broken Dreams Green"),
+                SearchQueryTiers.of("Boulevard of Broken Dreams - Single Album Version - Green Day"));
+    }
 }

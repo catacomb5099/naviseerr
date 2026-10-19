@@ -39,11 +39,13 @@ import java.util.regex.Pattern;
  * picker does the discriminating; see {@link #of}.
  *
  * <p><b>The search is version-blind, the picker is version-aware.</b> No wording ever carries a
- * version word -- "(Live)", "- Remastered -", "Live at Wembley", "Radio Edit", "'95 version" -- whether
- * it sat in brackets, in its own dash segment or inline at the end of the title. Soulseek matches every
- * word, so a version word in the search only ever loses files. {@link #pickerName} keeps every one of
- * those qualifiers, in brackets, because the picker grades each file by them: the requested version
- * first, any other version as a fallback (see {@code TrackMatchingService.grade}).
+ * version word -- "(Live)", "- Remastered -", "Live at Wembley", "Radio Edit", "'95 version", "Explicit
+ * Version" -- whether it sat in brackets, in its own dash segment or inline at the end of the title,
+ * even behind a comma-separated tag ("Poetic Justice Explicit Version, Closed Captioned" searches as
+ * "Poetic Justice"). Soulseek matches every word, so a version word in the search only ever loses
+ * files. {@link #pickerName} keeps every one of those qualifiers, in brackets, because the picker
+ * grades each file by them: the requested version first, any other version as a fallback (see
+ * {@code TrackMatchingService.grade}).
  *
  * <p>Pure and re-derived on every call, never stored: {@code download_tasks} keeps only the index of
  * the tier in use (see {@link DownloadTask#searchTier}), so these rules can change without a data
@@ -61,7 +63,7 @@ public final class SearchQueryTiers {
             "\\b(official hd remastered video|official hd music video|official music video|official lyric video"
                     + "|official hd video|official 4k video|official video|original video|video oficial|official audio"
                     + "|remastered video|music video|lyric video|full video song|video song|visuali[sz]er|lyrics|lyrical"
-                    + "|closed-captioned|official|audio|video|song|hd|hq|4k)\\b",
+                    + "|closed[ -]captioned|official|audio|video|song|hd|hq|4k)\\b",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -83,12 +85,15 @@ public final class SearchQueryTiers {
     private static final int MAX_TIERS = 4;
 
     /**
-     * "Such Great Heights Lyrics", "Anyone Else But You w/ Lyrics", "Sweetest Thing Video": uploads
-     * that tag the title itself, no brackets. The lab's 771 songs had three "... Video" titles (U2, The
-     * Police), the only ones whose first search was not the bare song name.
+     * "Such Great Heights Lyrics", "Anyone Else But You w/ Lyrics", "Sweetest Thing Video", "Poetic
+     * Justice Explicit Version, Closed Captioned": uploads that tag the title itself, no brackets. The
+     * lab's 771 songs had three "... Video" titles (U2, The Police), the only ones whose first search
+     * was not the bare song name; the owner's 19-10-2026 row added the comma-separated caption tag
+     * YouTube puts on official videos, which no shared file is named by.
      */
     private static final Pattern TRAILING_TAG = Pattern.compile(
-            "\\s+(?:(?:w/|with)?\\s*lyrics|(?:official\\s+)?(?:music\\s+|lyric\\s+)?video|official\\s+audio)$",
+            "(?:\\s*,\\s*|\\s+)(?:(?:w/|with)?\\s*lyrics|(?:official\\s+)?(?:music\\s+|lyric\\s+)?video|official\\s+audio"
+                    + "|closed[ -]captioned)$",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -100,25 +105,30 @@ public final class SearchQueryTiers {
 
     /**
      * A middle part that names a version rather than a song: "Radio Edit", "Remastered",
-     * "Live At The Florida Theatre". Decides which way a three-part name is read.
+     * "Live At The Florida Theatre", "Explicit". Decides which way a three-part name is read.
      */
     private static final Pattern QUALIFIER = Pattern.compile(
             "\\b(remaster(?:ed)?|version|edit|mix|remix|live|acoustic|unplugged|instrumental|demo|session"
-                    + "|radio|single|album|extended|mono|stereo|cover|karaoke)\\b",
+                    + "|radio|single|album|extended|mono|stereo|cover|karaoke|explicit)\\b",
             Pattern.CASE_INSENSITIVE);
 
     /**
      * A version phrase written inline at the end of a title, no punctuation: "Wonderwall Live at
-     * Wembley", "Wonderwall Remastered 2009", "Kiss Me Radio Edit", "Song '95 Version". Peeled off the
-     * end repeatedly ("Wonderwall Acoustic Live"). A title that is nothing but such a word ("Live")
-     * is left alone.
+     * Wembley", "Wonderwall Remastered 2009", "Kiss Me Radio Edit", "Song '95 Version", "Poetic Justice
+     * Explicit Version". Peeled off the end repeatedly ("Wonderwall Acoustic Live"). A title that is nothing
+     * but such a word ("Live") is left alone. "Explicit Version", "Clean Version" and a bare trailing
+     * "Explicit" are the labels YouTube's official uploads carry; Spotify, Apple Music and YouTube Music
+     * show them as a badge, never as title text. "Clean" is peeled only as the phrase "Clean Version":
+     * "Mr. Clean" and "Come Clean Remix" are titles, and files flagged "Clean" are DJ-pool edits the
+     * picker already rejects.
      */
     private static final Pattern INLINE_VERSION = Pattern.compile(
-            "\\s+(?:live\\s+(?:at|from|in)\\s+.+"
+            "\\s+(?:live\\s+(?:at|from|in)\\s+.+|clean\\s+version"
                     + "|(?:'?\\d{2,4}\\s+)?"
-                    + "(?:(?:radio|club|single|album|extended|original|dub|vocal|acoustic|live|stripped|piano|slowed|full)\\s+)?"
+                    + "(?:(?:radio|club|single|album|extended|original|dub|vocal|acoustic|live|stripped|piano|slowed|full"
+                    + "|explicit)\\s+)?"
                     + "(?:remaster(?:ed)?|version|remix|rmx|mix|edit|acoustic|unplugged|stripped|demo|instrumental"
-                    + "|karaoke|session|live)(?:\\s+'?\\d{2,4})?)$",
+                    + "|karaoke|session|live|explicit)(?:\\s+'?\\d{2,4})?)$",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -303,7 +313,8 @@ public final class SearchQueryTiers {
 
     /**
      * Every bracket gone (kept as qualifiers when more than platform noise), straight quotes gone
-     * (they kill a Soulseek search outright), noise-only middle parts gone, a trailing "Lyrics", "Video" or "Official Audio" tag gone,
+     * (they kill a Soulseek search outright), noise-only middle parts gone, a trailing "Lyrics", "Video",
+     * "Official Audio" or "Closed Captioned" tag gone (also when it hides behind a guest credit),
      * a "by Artist" credit made the artist, a "ft. Guest" credit gone from the title, the artist's
      * channel suffix gone, the artist's echo removed from the title, and every version phrase moved
      * out of the title into the qualifiers. One part when there is no artist; empty when nothing
@@ -334,15 +345,10 @@ public final class SearchQueryTiers {
             return new Cleaned(withoutInlineVersions(segments, qualifiers), qualifiers, false);
         }
         for (int i = 0; i < segments.size() - 1; i++) {
+            // "... Closed Captioned ft. Drake": the tag sits behind the credit, so it is cut again here.
             String uncredited = CREDIT.matcher(segments.get(i)).replaceFirst("");
             if (!uncredited.isBlank()) {
-                segments.set(i, uncredited);
-            }
-        }
-        for (int i = 0; i < segments.size() - 1; i++) {
-            String uncredited = CREDIT.matcher(segments.get(i)).replaceFirst("");
-            if (!uncredited.isBlank()) {
-                segments.set(i, uncredited);
+                segments.set(i, withoutTrailingTag(uncredited));
             }
         }
         String artist = collapse(CHANNEL_SUFFIX.matcher(segments.getLast()).replaceFirst(""));
@@ -372,17 +378,18 @@ public final class SearchQueryTiers {
         return new Cleaned(titles, qualifiers, artistTitleChannel);
     }
 
-    /** Peels "Live at Wembley", "Remastered 2009", "Radio Edit" off the end of each title part. */
+    /** Peels "Live at Wembley", "Remastered 2009", "Radio Edit" off the end of each title part, and the comma before it. */
     private static List<String> withoutInlineVersions(List<String> titles, List<String> qualifiers) {
         List<String> out = new ArrayList<>();
         for (String title : titles) {
             Matcher m = INLINE_VERSION.matcher(title);
             while (m.find() && m.start() > 0) {
                 qualifiers.add("(" + title.substring(m.start()).strip() + ")");
-                title = title.substring(0, m.start()).strip();
+                title = title.substring(0, m.start()).replaceAll("[,;:]+$", "").strip();
                 m = INLINE_VERSION.matcher(title);
             }
-            out.add(title);
+            // "Title Closed Captioned Explicit Version": the tag comes to light once the phrase is gone.
+            out.add(withoutTrailingTag(title));
         }
         return out;
     }
