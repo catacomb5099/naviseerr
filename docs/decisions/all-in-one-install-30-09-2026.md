@@ -112,9 +112,13 @@ and keep the compose file to folders and ports. So the account moves into the ap
 
 Checked: unit tests on the two files (setup-shaped content, quote doubling, owner-only mode kept) and
 the controller (rules, 202, disconnect-then-connect, slskd refusing); the page against a sealed slskd
-on the laptop, where every login fails, which is the "did not accept this login" flow. Not checked: a
-real login after a change (no Soulseek from here), and slskd's reload of an externally edited yml
-(documented behaviour, `no_config_watch: false` by default; the 2 s grace is a guess).
+on the laptop, where every login fails, which is the "did not accept this login" flow. Seen in that
+slskd's log, within a second of the write: "Options changed, restarting (re)connection process",
+"Options reconfigured successfully", then a fresh attempt #1 with the new name, so slskd 0.26.0
+reloads an edited yml and, while not logged in, restarts the connection by itself; the
+disconnect-then-connect call covers the other case, a client still logged in with the old account
+(there slskd only flags `PendingReconnect`). Not checked: a real login after a change (no Soulseek
+from here).
 
 ### Revisited 09-10-2026: the library folder is required, must exist, and is checked
 
