@@ -126,3 +126,44 @@ in `download_tasks.last_error` (the exception's class name when it carries no me
 timeout does), which was empty for all four SEARCH_FAILED rows today. If the row already holds files kept
 from the title-only search, a search that cannot be started, errors or times out downloads those instead of
 failing.
+
+## Addendum 19-10-2026: tags written inline, without brackets
+
+The owner pressed download on the official video of "Poetic Justice (feat. Drake)" and saw Soulseek asked for
+"Poetic Justice Explicit Version, Closed - Kendrick Lamar" and "Justice Explicit Version, Closed Captioned
+Kendrick". The video's own YouTube title is `Poetic Justice Explicit Version, Closed Captioned` (the search page
+appends "(feat. Drake)", the song endpoint does not), so the stored name was `Poetic Justice Explicit Version,
+Closed Captioned - Kendrick Lamar` and the four wordings were, in order: that title alone; the title with
+" - Kendrick Lamar"; the blocked-phrase dodge "Justice Explicit Version, Closed Captioned Kendrick" (title and
+artist each minus their shortest word); and the five-word short title "Poetic Justice Explicit Version, Closed -
+Kendrick Lamar". The two the owner noticed are the last two (slskd lists newest first). Every one carried words no
+shared file is named by, so the row ended `NO_CANDIDATES`; the owner's "downloaded a song" was most likely a press
+of the button, not a finished download.
+
+Why the cleaner missed it: it knew platform noise only inside brackets or as a whole dash segment, a trailing
+inline tag only for "Lyrics", "Video" and "Official Audio", and an inline version phrase only at the very end of
+the title. Here the tags sit inline, the version phrase is followed by a comma and a caption tag, and "Explicit"
+was not a version word at all.
+
+The rule, extending the lists rather than adding a wording (the order of the wordings is unchanged):
+
+- "Explicit Version", "Clean Version" and a bare trailing "Explicit" are version qualifiers: gone from every
+  wording, kept in brackets for the picker ("Poetic Justice (Explicit Version) - Kendrick Lamar"). Spotify, Apple
+  Music and YouTube Music all show "Explicit" as a badge beside the title, never as title text, so the song's name
+  is "Poetic Justice". A bare trailing "Clean" is NOT peeled ("Mr. Clean" is a title; files flagged "Clean" are
+  DJ-pool edits the picker already rejects unless the request says so, PR #101).
+- "Closed Captioned", with a space or a hyphen, is noise like "Official Video": gone from the search and not a
+  picker qualifier either, whether in brackets or inline, and a comma may sit before any trailing tag.
+- A trailing tag that hides behind a guest credit ("... Closed Captioned ft. Drake") is cut once the credit is.
+
+Checked on the real titles: "Explicit - Artist", "Explicit Content - Some Band", "Clean - Taylor Swift",
+"Lose Yourself Clean - Eminem" and the bracketed shapes ("Smack That (Clean) (feat. Eminem) - Akon") search as
+before. No title among the lab's 765 or the owner's 1,297 rows ends in a bare "Explicit", so nothing real loses a
+word. No stored data changes: `song_name` is kept raw and the wordings are re-derived on every read, so a row that
+failed for this reason searches correctly on its next Retry.
+
+The picker's half, in its own PR: "(Explicit)" in a YouTube title is a label, not a recording, so the picker no
+longer demands the word in a file's name ("explicit" joins `QUALIFIER_NOISE`). Before, "Kendrick Lamar - Poetic
+Justice (Explicit) ft. Drake" graded the album file `09 - Poetic Justice (feat. Drake).flac` as another version,
+which made the title-only wording never "enough" and cost every "(Explicit)" video one extra search and a download
+marked "another version".
