@@ -2,11 +2,13 @@
 
 This file is the primary project guide for AI agents working in this repository. Read it before making changes.
 
+When the owner works through their `/naviseerr` command, that command decides how to plan, demo, open PRs and merge, and it wins over this file on those points. This file covers the code.
+
 For detailed, agent-oriented subsystem context (how the slskd pipeline, download manager, persistence, YouTube Music search, and reactive patterns actually work today, plus testing and known gotchas), see the deep-dive guides in [docs/architecture/](docs/architecture/README.md).
 
 ## Project Identity
 
-Naviseerr is the backend/server for "Jellyseerr, but for music." The goal is a FOSS service that helps users search for music and download individual songs or collections through free sources such as slskd/Soulseek, torrent indexers, and other future providers.
+Naviseerr is the backend/server for "Seerr plus Radarr/Sonarr, but for music": find music and get it, then keep the library it lands in in order. The goal is a FOSS service that helps users search for music and download individual songs or collections through free sources such as slskd/Soulseek, torrent indexers, and other future providers.
 
 This repository is not the visual client. Do not assume frontend code lives here; `naviseerr-client` is a separate project.
 
@@ -282,6 +284,6 @@ Cancellation should be treated as a first-class action. Prefer correctness and e
 ## Agent Workflow
 
 - Before broad changes, inspect the current package structure and tests.
-- Keep edits scoped to `naviseerr`; do not modify `naviseerr-client` unless the user explicitly asks.
+- Keep edits scoped to `naviseerr` unless the ask needs another repo of the family.
 - Do not overwrite unrelated local changes.
 - Prefer small, reviewable increments and update this guide when durable project decisions change.
