@@ -26,16 +26,20 @@ import java.util.List;
  * @param type     albums only: {@code "Album"}, {@code "EP"} or {@code "Single"}, as YouTube words it.
  * @param trackCount nullable; YouTube's own count, which can exceed {@code songs.size()} (unavailable
  *                 tracks are dropped from {@code songs}, and a playlist can be longer than one page).
+ * @param views    nullable; how often a user-made playlist was viewed, in YouTube Music's own wording
+ *                 ({@code "6.9M views"}), passed through unparsed like a track's {@code plays}. Null
+ *                 for albums, radios and YouTube Music's own editorial playlists, where it shows none.
  */
 public record YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, Integer year,
                                     String name, List<String> authorNames, List<String> authorIds,
-                                    String imageUrl, String playlistId, String type, Integer trackCount) {
+                                    String imageUrl, String playlistId, String type, Integer trackCount,
+                                    String views) {
 
-    /** Not read from YouTube: nothing to play it as there, no type, no count of YouTube's own. */
+    /** Not read from YouTube: nothing to play it as there, no type, no count or views of YouTube's own. */
     public YoutubeCollectionInfo(String id, List<YoutubeSongInfo> songs, Integer year,
                                  String name, List<String> authorNames, List<String> authorIds,
                                  String imageUrl) {
-        this(id, songs, year, name, authorNames, authorIds, imageUrl, null, null, null);
+        this(id, songs, year, name, authorNames, authorIds, imageUrl, null, null, null, null);
     }
 
     /** Names without ids, for a caller that has none to give. */

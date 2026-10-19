@@ -242,6 +242,11 @@ the same shape:
 - **A track with `isAvailable: false` is dropped.** It is region-blocked or deleted, so a task row
   for it would spend a whole search budget to fail. Only an explicit `false` counts — album
   responses omit the field entirely, and treating null as unavailable would drop every album track.
+- **A playlist's `views` is a display string, like a track's `plays`.** The adapter sends YouTube
+  Music's own header wording (`"6.9M views"`) because the library underneath only offers a lossy
+  number for it (`to_int("6.9M views")` is 69). It rides on `YoutubeCollectionInfo.views()` to
+  `CollectionView.views` unparsed; nothing stores it. Null for albums, radios and YouTube Music's own
+  editorial playlists, where YouTube shows no count.
 
 Every one of them goes through the same `execute` pipeline as search — one timeout, typed error translation,
 retry on availability failures only — rather than reimplementing it. That pipeline was extracted from
@@ -365,6 +370,9 @@ it was given through to both `/collections/{id}` and `/download/collection/{id}`
   an adapter image older than that field (28-09-2026) leaves them `""`, no error. Because YouTube
   supplies one for every related artist, `ArtistController` logs a WARN when all of them are blank,
   naming the stale adapter as the cause. Rebuild the adapter image (`docker compose up -d --build`).
+- A playlist's own view count (`CollectionView.views`) needs an adapter image from 19-10-2026 or
+  later; an older one sends none and the client shows the header without it, no error, no WARN
+  (editorial playlists legitimately have none, so "all null" proves nothing).
 - Top songs' play counts (`Track.plays` on `/artists/{id}`) are filled by the adapter from each
   song's album (adapter PR #8, 30-09-2026); an older adapter sends none. YouTube has a count for
   nearly every song, so `ArtistController` logs the same kind of WARN when every top song arrives

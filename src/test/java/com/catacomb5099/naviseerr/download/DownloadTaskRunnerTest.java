@@ -986,7 +986,7 @@ class DownloadTaskRunnerTest {
                         new YoutubeSongInfo("h7-BHdjeEY0", List.of("Oasis"), List.of("UC-o"),
                                 "Cigarettes & Alcohol (Sawmills Outtake)", null, 307, null, 24)),
                         2024, "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"),
-                        List.of("UC-o"), null, null, "Album", 27)));
+                        List.of("UC-o"), null, null, "Album", 27, null)));
 
         runner.pass().block();
 
