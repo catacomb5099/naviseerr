@@ -100,7 +100,7 @@ public class SearchService {
             .doOnSubscribe(subscription -> log.debug("Starting YtMusic general search for query='{}' (subscription={})", query, subscription))
             .doOnSuccess(result -> log.info("Completed YtMusic general search for query='{}': tracks={}, albums={}, artists={}, playlists={}",
                     query, size(result.getTracks()), size(result.getAlbums()), size(result.getArtists()), size(result.getPlaylists())))
-            .doOnError(error -> log.error("YtMusic general search failed for query='{}'", query, error));
+            .doOnError(error -> logUnexpected("general", query, error));
     }
 
     @GetMapping("/search/{query}/tracks")
@@ -109,7 +109,7 @@ public class SearchService {
         return withTries(ytMusicService.getResults(query, YtMusicSearchType.SONGS, clamp(limit)), tryFor(clamp(limit)), 1)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic track search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic track search for query='{}': tracks={}", query, size(result.getTracks())))
-                .doOnError(error -> log.error("YtMusic track search failed for query='{}'", query, error));
+                .doOnError(error -> logUnexpected("track", query, error));
     }
 
     @GetMapping("/search/{query}/albums")
@@ -118,7 +118,7 @@ public class SearchService {
         return withTries(ytMusicService.getResults(query, YtMusicSearchType.ALBUMS, clamp(limit)), tryFor(clamp(limit)), 1)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic album search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic album search for query='{}': albums={}", query, size(result.getAlbums())))
-                .doOnError(error -> log.error("YtMusic album search failed for query='{}'", query, error));
+                .doOnError(error -> logUnexpected("album", query, error));
     }
 
     @GetMapping("/search/{query}/artists")
@@ -127,7 +127,7 @@ public class SearchService {
         return withTries(ytMusicService.getResults(query, YtMusicSearchType.ARTISTS, clamp(limit)), tryFor(clamp(limit)), 1)
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic artist search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic artist search for query='{}': artists={}", query, size(result.getArtists())))
-                .doOnError(error -> log.error("YtMusic artist search failed for query='{}'", query, error));
+                .doOnError(error -> logUnexpected("artist", query, error));
     }
 
     /**
@@ -147,7 +147,7 @@ public class SearchService {
                 .map(playlists -> new SearchResponse(List.of(), List.of(), List.of(), playlists))
                 .doOnSubscribe(subscription -> log.debug("Starting YtMusic playlist search for query='{}' (subscription={})", query, subscription))
                 .doOnSuccess(result -> log.info("Completed YtMusic playlist search for query='{}': playlists={}", query, size(result.getPlaylists())))
-                .doOnError(error -> log.error("YtMusic playlist search failed for query='{}'", query, error));
+                .doOnError(error -> logUnexpected("playlist", query, error));
     }
 
     /**
@@ -239,20 +239,24 @@ public class SearchService {
         return list == null ? 0 : list.size();
     }
 
+    /**
+     * A YouTube Music outage is one WARN line from {@code YtMusicUnavailableAdvice}, which answers
+     * it; only a failure nobody expected keeps its stack trace here.
+     */
+    private static void logUnexpected(String what, String query, Throwable error) {
+        if (!(error instanceof YtMusicUnavailableException)) {
+            log.error("YtMusic {} search failed for query='{}'", what, query, error);
+        }
+    }
+
     // AGENTS.md: "report 'no good match' distinctly from provider errors, timeouts, and
     // cancellations." An empty result set already reaches the client as 200 with empty lists
-    // (see YtMusicSearchResponseMapper); these two handlers give the remaining two cases their
-    // own status codes instead of falling through to WebFlux's default 500.
+    // (see YtMusicSearchResponseMapper); this handler gives a bad request its own status code
+    // instead of falling through to WebFlux's default 500, and a provider outage is the 502 with a
+    // body that YtMusicUnavailableAdvice gives every route.
     @ExceptionHandler(YtMusicBadRequestException.class)
     ResponseEntity<Void> handleBadRequest(YtMusicBadRequestException ex) {
         log.warn("Rejecting search request: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
     }
-
-    @ExceptionHandler(YtMusicUnavailableException.class)
-    ResponseEntity<Void> handleUnavailable(YtMusicUnavailableException ex) {
-        log.error("ytmusic-adapter unavailable: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).build();
-    }
-
 }

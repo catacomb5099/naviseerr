@@ -3,7 +3,6 @@ package com.catacomb5099.naviseerr.services;
 import com.catacomb5099.naviseerr.download.DownloadType;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
-import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -61,11 +60,5 @@ public class CollectionController {
     ResponseEntity<Void> handleNotFound(YtMusicBadRequestException ex) {
         log.warn("Collection lookup rejected by ytmusic-adapter (answered 404): {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-    }
-
-    @ExceptionHandler(YtMusicUnavailableException.class)
-    ResponseEntity<Void> handleUnavailable(YtMusicUnavailableException ex) {
-        log.error("ytmusic-adapter unavailable: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).build();
     }
 }

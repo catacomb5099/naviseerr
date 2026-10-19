@@ -3,6 +3,7 @@ package com.catacomb5099.naviseerr.services;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableAdvice;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import org.junit.jupiter.api.Test;
@@ -24,7 +25,7 @@ class RadioControllerTest {
     private final YtMusicService ytMusicService = mock(YtMusicService.class);
     private final RadioRepository repository = mock(RadioRepository.class);
     private final WebTestClient client = WebTestClient
-            .bindToController(new RadioController(ytMusicService, repository)).build();
+            .bindToController(new RadioController(ytMusicService, repository)).controllerAdvice(new YtMusicUnavailableAdvice()).build();
 
     private static YoutubeCollectionInfo radio(String title) {
         return new YoutubeCollectionInfo("7CTJcHjkq0E", List.of(
@@ -79,11 +80,13 @@ class RadioControllerTest {
     }
 
     @Test
-    void start_whenTheAdapterIsDown_is502() {
+    void start_whenTheAdapterIsDown_is502_namingYouTubeMusic() {
         when(ytMusicService.getRadioInfo("7CTJcHjkq0E"))
                 .thenReturn(Mono.error(new YtMusicUnavailableException("timeout")));
 
-        client.post().uri("/radios?seed=7CTJcHjkq0E").exchange().expectStatus().isEqualTo(502);
+        client.post().uri("/radios?seed=7CTJcHjkq0E").exchange()
+                .expectStatus().isEqualTo(502)
+                .expectBody().jsonPath("$.reason").isEqualTo("YOUTUBE_MUSIC_UNAVAILABLE");
     }
 
     @Test

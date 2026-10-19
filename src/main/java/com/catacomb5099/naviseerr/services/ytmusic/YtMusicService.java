@@ -359,8 +359,9 @@ public class YtMusicService {
             return new YtMusicUnavailableException(
                     "ytmusic-adapter has no route for this request; is the sidecar image up to date?");
         }
-        // 429/502/504 and any other unlisted status: provider failed or is unreachable.
-        return new YtMusicUnavailableException(message);
+        // 429/502/504 and any other unlisted status: provider failed or is unreachable. A 429 is
+        // remembered as such, so the web app can say "rate-limited" rather than "not answering".
+        return new YtMusicUnavailableException(message, statusCode == 429);
     }
 
     /**

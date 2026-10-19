@@ -6,6 +6,7 @@ import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicSearchType;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableAdvice;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicDetailResponse;
@@ -43,7 +44,7 @@ class ArtistControllerTest {
     private static final String PIXIES = "UCRt5ckI8kNVMFr-jyj1IIVg";
 
     private final YtMusicService ytMusicService = mock(YtMusicService.class);
-    private final WebTestClient client = WebTestClient.bindToController(new ArtistController(ytMusicService)).build();
+    private final WebTestClient client = WebTestClient.bindToController(new ArtistController(ytMusicService)).controllerAdvice(new YtMusicUnavailableAdvice()).build();
 
     /** The adapter's real answer for Pixies, trimmed — see src/test/resources/ytmusic/artist-pixies.json. */
     static YtMusicDetailResponse.Artist pixies() {
@@ -417,9 +418,13 @@ class ArtistControllerTest {
     }
 
     @Test
-    void adapterDown_is502() {
+    void adapterDown_is502_namingYouTubeMusic() {
         when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.error(new YtMusicUnavailableException("down")));
 
-        client.get().uri("/artists/{id}", PIXIES).exchange().expectStatus().isEqualTo(502);
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isEqualTo(502)
+                .expectBody()
+                .jsonPath("$.reason").isEqualTo("YOUTUBE_MUSIC_UNAVAILABLE")
+                .jsonPath("$.message").isEqualTo("YouTube Music is not answering right now. Try again in a minute.");
     }
 }

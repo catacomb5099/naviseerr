@@ -8,10 +8,12 @@ import com.catacomb5099.naviseerr.schema.response.Track;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicSearchType;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableAdvice;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -451,9 +453,21 @@ class SearchServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }
 
+    /**
+     * The owner's own route, end to end through the shared advice: a controller-local handler for the
+     * type added to this class would win over the advice and bring back the empty 502 unnoticed.
+     */
     @Test
-    void handleUnavailable_mapsTo502() {
-        ResponseEntity<Void> response = searchService.handleUnavailable(new YtMusicUnavailableException("down"));
-        assertEquals(HttpStatus.BAD_GATEWAY, response.getStatusCode());
+    void search_whenYouTubeMusicIsAway_answers502NamingIt() {
+        stubEveryCategory("oasis");
+        when(ytMusicService.getResults("oasis", YtMusicSearchType.SONGS, 20))
+                .thenReturn(Mono.error(new YtMusicUnavailableException("ytmusic-adapter request failed: Connection refused")));
+
+        WebTestClient.bindToController(searchService).controllerAdvice(new YtMusicUnavailableAdvice()).build()
+                .get().uri("/search/oasis").exchange()
+                .expectStatus().isEqualTo(502)
+                .expectBody()
+                .jsonPath("$.reason").isEqualTo("YOUTUBE_MUSIC_UNAVAILABLE")
+                .jsonPath("$.message").isEqualTo("YouTube Music is not answering right now. Try again in a minute.");
     }
 }
