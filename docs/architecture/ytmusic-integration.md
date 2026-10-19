@@ -117,6 +117,21 @@ Configured via `yt-music-service.timeout-ms` (default `15000` — deliberately a
 `YTM_TIMEOUT_SECONDS=10`, since every adapter call also queues behind a `threading.Semaphore(8)` per
 worker process), `retry-count`, and `first-back-off-duration-ms`.
 
+## Readiness (`GET /status`)
+
+Since 19-10-2026 `StatusController` asks `YtMusicService.readiness()` beside the slskd calls: the
+adapter's own `GET /health/ready`, which runs one `search("test", limit=1)` and caches the verdict
+for `YTM_READY_CACHE_SECONDS` (60 s) per worker, so a web app polling `/status` every few seconds
+costs YouTube about one tiny call a minute per adapter worker (the compose image runs two). Not
+through `execute()`: no retry, no exception translation, a 3 s budget set by the controller. The
+answer tells the two outages apart that the error path deliberately does not: `reachable` false with
+`detail` "ytmusic-adapter not reachable: …" (the sidecar is down or hung) or "YouTube Music not
+reachable from the adapter (it answered 503 to /health/ready)" (the 12-10-2026 shape: the container
+is up and has no way to YouTube). The web app shows an amber strip while `reachable` is false; it
+can linger up to a minute after YouTube is back because of that cache. Flip: a passive status (the
+last real adapter outcome, remembered in `YtMusicService`) would cost no probe traffic but could not
+clear itself until somebody searched again.
+
 ## Response mapping
 
 [YtMusicSearchResponseMapper.java](../../src/main/java/com/catacomb5099/naviseerr/util/YtMusicSearchResponseMapper.java)

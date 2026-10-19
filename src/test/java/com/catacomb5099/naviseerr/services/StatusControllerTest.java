@@ -4,6 +4,9 @@ import com.catacomb5099.naviseerr.download.LibraryOrganiser;
 import com.catacomb5099.naviseerr.schema.slskd.ServerState;
 import com.catacomb5099.naviseerr.schema.slskd.SlskdOptions;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService.Readiness;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
@@ -15,7 +18,14 @@ class StatusControllerTest {
 
     private final SlskdService slskdService = mock(SlskdService.class);
     private final LibraryOrganiser organiser = mock(LibraryOrganiser.class);
-    private final WebTestClient http = WebTestClient.bindToController(new StatusController(slskdService, organiser)).build();
+    private final YtMusicService ytMusicService = mock(YtMusicService.class);
+    private final WebTestClient http = WebTestClient.bindToController(new StatusController(slskdService, organiser, ytMusicService)).build();
+
+    /** YouTube Music reachable unless a test says otherwise: the Soulseek and library cases are about their own leg. */
+    @BeforeEach
+    void youtubeMusicUp() {
+        when(ytMusicService.readiness()).thenReturn(Mono.just(Readiness.OK));
+    }
 
     private static ServerState state(String state, boolean connected, boolean loggedIn) {
         return new ServerState("vps.slsknet.org:2271", "1.2.3.4:2271", state, connected, false, loggedIn, false, false);
@@ -162,5 +172,62 @@ class StatusControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.soulseek.username").isEmpty();
+    }
+
+    @Test
+    void youtubeMusicReachable_isReported_withNoDetail() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.youtubeMusic.reachable").isEqualTo(true)
+                .jsonPath("$.youtubeMusic.detail").isEmpty();
+    }
+
+    @Test
+    void adapterDown_isStill200_sayingTheAdapterIsAway_besideAFineSoulseek() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+        when(ytMusicService.readiness()).thenReturn(Mono.error(new RuntimeException("Connection refused: ytmusic-adapter/172.18.0.4:8000")));
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.soulseek.loggedIn").isEqualTo(true)
+                .jsonPath("$.youtubeMusic.reachable").isEqualTo(false)
+                .jsonPath("$.youtubeMusic.detail").isEqualTo("ytmusic-adapter not reachable: Connection refused: ytmusic-adapter/172.18.0.4:8000");
+    }
+
+    /** The 12-10-2026 shape: the adapter container is up but has no way to YouTube (DNS); its probe says so. */
+    @Test
+    void adapterUpButYouTubeAway_isReported_withTheAdaptersOwnVerdict() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+        when(ytMusicService.readiness()).thenReturn(Mono.just(new Readiness(false, "YouTube Music not reachable from the adapter (it answered 503 to /health/ready)")));
+
+        http.get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.youtubeMusic.reachable").isEqualTo(false)
+                .jsonPath("$.youtubeMusic.detail").isEqualTo("YouTube Music not reachable from the adapter (it answered 503 to /health/ready)");
+    }
+
+    /** A stalled probe (adapter hung) is "not reachable" after the 3 s budget, never a hung /status. */
+    @Test
+    void adapterStalling_isNotReachable_afterTheBudget_andSoulseekIsStillReported() {
+        when(slskdService.getServerState()).thenReturn(Mono.just(state("Connected, LoggedIn", true, true)));
+        when(slskdService.getOptions()).thenReturn(Mono.just(options("naviseerr-ab12cd")));
+        when(ytMusicService.readiness()).thenReturn(Mono.never());
+
+        http.mutate().responseTimeout(java.time.Duration.ofSeconds(10)).build()
+                .get().uri("/status").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.soulseek.loggedIn").isEqualTo(true)
+                .jsonPath("$.youtubeMusic.reachable").isEqualTo(false)
+                .jsonPath("$.youtubeMusic.detail").value(d -> org.junit.jupiter.api.Assertions.assertTrue(
+                        d.toString().startsWith("ytmusic-adapter not reachable: "), d.toString()));
     }
 }

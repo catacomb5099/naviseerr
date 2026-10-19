@@ -148,6 +148,15 @@ leave it. Your existing playlists stay.
   slskd never shares it, and Navidrome and Jellyfin ignore it. Leave it there. The check only fires
   when the folder is completely empty: a mount point that still holds something (a `lost+found`
   folder, say) is not caught.
+- **"YouTube Music isn't answering" strip** across the web app (search and new downloads wait while it
+  shows). The YouTube Music helper is down or cannot reach YouTube from inside its container; the
+  server's own search just before it will have logged one "YouTube Music is not answering" warning.
+  `docker compose logs ytmusic-adapter` says which: "Could not reach YouTube Music
+  (NameResolutionError)" is DNS inside the container (check Docker's DNS, or
+  `docker compose exec ytmusic-adapter python -c "import socket; print(socket.gethostbyname('music.youtube.com'))"`),
+  "Upstream rate limit exceeded" is YouTube itself asking for a pause (wait a few minutes; nothing
+  to fix), and no answer at all means the container is not running (`docker compose up -d`). The
+  strip clears by itself within about a minute of YouTube Music answering again.
 - **"Username taken".** The web app keeps its "Not connected to Soulseek" strip, and
   `docker compose logs slskd` says "invalid username or password": someone
   else already has that name. Choose another `SOULSEEK_USERNAME` in `.env`, run `docker compose up -d`,

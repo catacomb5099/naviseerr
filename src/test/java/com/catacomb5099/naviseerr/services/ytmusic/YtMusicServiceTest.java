@@ -383,6 +383,46 @@ class YtMusicServiceTest {
                 .verify();
     }
 
+    // ---- readiness (GET /status's third leg) -----------------------------------------------------
+
+    @Test
+    void readiness_200_isReachable_andAsksTheAdaptersReadyRoute() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .addHeader("Content-Type", "application/json").setBody("{\"status\":\"ok\"}"));
+
+        StepVerifier.create(service.readiness())
+                .expectNext(YtMusicService.Readiness.OK)
+                .verifyComplete();
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("/health/ready", request.getPath());
+        assertEquals(1, server.getRequestCount());
+    }
+
+    @Test
+    void readiness_503_isNotReachable_withTheAdaptersVerdict_andIsNotRetried() {
+        server.enqueue(new MockResponse().setResponseCode(503)
+                .addHeader("Content-Type", "application/json").setBody("{\"detail\":\"Upstream not reachable\"}"));
+
+        StepVerifier.create(service.readiness())
+                .assertNext(readiness -> {
+                    assertFalse(readiness.reachable());
+                    assertEquals("YouTube Music not reachable from the adapter (it answered 503 to /health/ready)", readiness.detail());
+                })
+                .verifyComplete();
+
+        assertEquals(1, server.getRequestCount());
+    }
+
+    @Test
+    void readiness_adapterDown_isAnError_forTheCallerToWord() throws IOException {
+        server.shutdown();
+
+        StepVerifier.create(service.readiness())
+                .expectError()
+                .verify();
+    }
+
     // ---- metadata lookups (the download pipeline's only use of this provider) -------------------
 
     /** {@code GET /v1/songs/{videoId}}: `author` is a single string, not a list. */

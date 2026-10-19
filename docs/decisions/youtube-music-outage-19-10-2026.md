@@ -59,3 +59,19 @@ Known ceiling: only the in-call retry is gone. The download loop still asks the 
 pass (up to `download-task.batch-size` calls every pass; the rows stay PENDING), and the `/status` probe below keeps
 about one tiny search a minute going; both carry on through a rate limit. Skipping a pass while the last admission
 failure was a 429 is the next step, if a real one is ever observed.
+## Addendum, same day: `/status` says whether YouTube Music can be reached
+
+The web app already shows a persistent amber strip for the two things a download waits on that the user cannot see
+from a page (Soulseek login, the library folder), fed by `GET /status`. YouTube Music is the third such thing: search
+and the admission of every new download wait on it, and a download requested during an outage sits at "Waiting" with
+nothing to say why. `/status` now carries `youtubeMusic: {reachable, detail}` from the adapter's own cached
+`GET /health/ready` (one tiny search per minute per adapter worker), with the same 3 s budget as the slskd calls and
+always 200. The strip is one wording for every cause ("YouTube Music isn't answering — search and new downloads will
+wait until it is back"): the probe cannot tell a rate limit from an outage, and a strip that guesses is worse than one
+that is plain; `detail` keeps the distinction for the person reading the status by hand. This is the Sonarr / Radarr /
+Lidarr shape (System → Health: "Indexers are unavailable due to failures", cleared by the next periodic check).
+
+Rejected: a passive status (remember the last real adapter outcome in `YtMusicService`, no probe traffic). It cannot
+clear itself until somebody searches again, so it needs a "probe when stale" branch anyway: more code than the probe,
+not less. Known ceiling: the adapter caches a failed probe for 60 s, so the strip can linger up to about a minute after
+YouTube Music is back (Sonarr's health warnings "will not always disappear immediately" either).
