@@ -213,6 +213,10 @@ media-servers:
   rescan-gap-ms: 30000
   # Per-request timeout. The download loop does not wait for these calls; this only bounds one attempt.
   timeout-ms: 10000
+  # Jellyfin reads no picture file for playlists: after its rescan, naviseerr asks it every this often
+  # whether it has imported the new playlist (36 tries, 3 minutes) and then sends the playlist's picture
+  # through its image API. Navidrome reads the picture file next to the playlist by itself.
+  cover-poll-ms: 5000
 
 # Playlist curator: the separate croissant service (in both compose files) builds a fresh "suggested
 # playlists" edition per category. naviseerr owns the clock: once a week it tells the curator to start,

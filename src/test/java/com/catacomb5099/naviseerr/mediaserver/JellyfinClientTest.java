@@ -113,6 +113,53 @@ class JellyfinClientTest {
                 .verify();
     }
 
+    /** As 12.2.0 answers the playlist search (fields trimmed); the Path is Jellyfin's own mount, not ours. */
+    private static final String PLAYLIST_ITEMS = """
+            {"Items":[
+              {"Name":"Heavy Metal Workout (old)","Id":"0ld","Path":"/music/Playlists/Heavy Metal Workout (old).m3u8","Type":"Playlist"},
+              {"Name":"Heavy Metal Workout","Id":"1d3a","Path":"/music/Playlists/Heavy Metal Workout.m3u8","Type":"Playlist"}
+            ],"TotalRecordCount":2,"StartIndex":0}
+            """;
+
+    @Test
+    void findPlaylist_asksByTitle_andPicksTheItemWhosePathIsOurFile() throws InterruptedException {
+        server.enqueue(json(200, PLAYLIST_ITEMS));
+
+        StepVerifier.create(client.findPlaylist("Heavy Metal Workout.m3u8")).expectNext("1d3a").verifyComplete();
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("/Items", request.getRequestUrl().encodedPath());
+        assertEquals("Playlist", request.getRequestUrl().queryParameter("includeItemTypes"));
+        assertEquals("true", request.getRequestUrl().queryParameter("recursive"));
+        assertEquals("Heavy Metal Workout", request.getRequestUrl().queryParameter("searchTerm"));
+        assertEquals("Path", request.getRequestUrl().queryParameter("fields"));
+        assertEquals("MediaBrowser Token=\"k3y\"", request.getHeader("Authorization"));
+    }
+
+    @Test
+    void findPlaylist_isEmptyWhileJellyfinHasNotImportedTheFile_evenWhenAJellyfinMadePlaylistSharesTheTitle() {
+        server.enqueue(json(200, "{\"Items\":[],\"TotalRecordCount\":0}"));
+        StepVerifier.create(client.findPlaylist("New.m3u8")).verifyComplete();
+
+        // A playlist the user made inside Jellyfin (its own Path, never our file) must keep its own picture.
+        server.enqueue(json(200, "{\"Items\":[{\"Name\":\"New\",\"Id\":\"n4tive\",\"Path\":\"/config/data/playlists/New/playlist.xml\",\"Type\":\"Playlist\"}]}"));
+        StepVerifier.create(client.findPlaylist("New.m3u8")).verifyComplete();
+    }
+
+    @Test
+    void setPrimaryImage_postsThePictureAsBase64Text_withTheImageContentType() throws InterruptedException {
+        server.enqueue(new MockResponse().setResponseCode(204));
+        byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 7, 8, 9};
+
+        StepVerifier.create(client.setPrimaryImage("1d3a", jpeg)).verifyComplete();
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("POST", request.getMethod());
+        assertEquals("/Items/1d3a/Images/Primary", request.getPath());
+        assertEquals("image/jpeg", request.getHeader("Content-Type"));
+        assertEquals(java.util.Base64.getEncoder().encodeToString(jpeg), request.getBody().readUtf8());
+    }
+
     @Test
     void configuredAndCredentials_followTheSettings() {
         assertTrue(client.isConfigured());

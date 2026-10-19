@@ -310,8 +310,10 @@ class DownloadTaskRunnerTest {
 
         runner.pass().block();
 
-        // The picture the playlist had in the app goes with the file: the organiser writes it beside the .m3u8.
+        // The picture the playlist had in the app goes with the file: the organiser writes it beside the .m3u8,
+        // and the written file is handed to the notifier, which sends the picture to Jellyfin after its rescan.
         verify(organiser).writePlaylist("Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", List.of(entry));
+        verify(mediaServers).playlistWritten(java.nio.file.Path.of("/music/Playlists/Alt Nation 1989.m3u8"));
         verify(repository).setOrganisedAt(playlistId, T0);
         verify(mediaServers).libraryChanged();
         verify(mediaServers).flush(T0);
@@ -370,6 +372,7 @@ class DownloadTaskRunnerTest {
 
         verify(repository, never()).setOrganisedAt(any(), any());
         verify(mediaServers, never()).libraryChanged();
+        verify(mediaServers, never()).playlistWritten(any());
     }
 
     private static Flux<DownloadTaskRepository.TransferInFlight> transfersWith(String sharer, int count) {

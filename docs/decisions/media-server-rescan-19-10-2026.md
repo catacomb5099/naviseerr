@@ -72,6 +72,21 @@ ever refuses the per-library refresh with an API key.
   notifier's flush is the place for it (one more target), left out because nobody asked and it would make
   `SlskdService` collide with the install work of the same sweep.
 
+## Addendum, same day: the playlist's picture reaches Jellyfin after the rescan
+
+Jellyfin reads no picture file for playlists (`library-organiser-27-09-2026.md`, addendum 19-10-2026), so
+the notifier does one more thing for it: FINALISE tells it which playlist file was just written
+(`playlistWritten`); once Jellyfin's rescan has been accepted, the notifier reads `<title>.jpg` beside
+the file (none: nothing to do), polls `GET /Items?includeItemTypes=Playlist&searchTerm=<title>` every
+`media-servers.cover-poll-ms` (5 s, 36 tries) until Jellyfin lists the playlist (measured: 6 s after the
+per-library refresh), then `POST /Items/{id}/Images/Primary` with the JPEG as base64 (204; served back
+byte-identical). Only the item whose `Path` is our file: never by name, since the search also lists
+playlists made inside Jellyfin and one sharing the title must keep its own picture. Fire and forget, off
+the download pass. Flippable: the poll interval and count (`cover-poll-ms`, `MediaServerNotifier.COVER_POLLS`);
+a playlist Jellyfin never lists keeps its collage until the next finalise, one WARN; a push that fails
+because Jellyfin went away is kept for its next rescan; no retry column (deliberately in memory). Side effect to know about:
+Jellyfin saves its own `<title>-poster.jpg` and `<title>.xml` beside the playlist file.
+
 ## Consequences
 
 - No schema change. The notifier's state (pending flag, last outcome per server) is in memory and lost on

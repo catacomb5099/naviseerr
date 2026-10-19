@@ -10,8 +10,11 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import tools.jackson.databind.JsonNode;
 
+import org.springframework.http.MediaType;
+
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 /**
@@ -77,6 +80,48 @@ public class JellyfinClient {
                                 .then())
                 .timeout(timeout)
                 .onErrorMap(error -> !(error instanceof MediaServerException), this::translate);
+    }
+
+    /**
+     * The id of the playlist Jellyfin made from the playlist file {@code fileName} ({@code <title>.m3u8}):
+     * {@code GET /Items?includeItemTypes=Playlist&recursive=true&searchTerm=<title>&fields=Path}, the item
+     * whose {@code Path} ends in that file name (Jellyfin's own path to it, whatever its mount). Never by
+     * name: with an API key the search also lists playlists made inside Jellyfin, and one that shares the
+     * title must keep its own picture. Empty while Jellyfin has not imported the file yet. An API key needs
+     * no {@code userId} here.
+     */
+    public Mono<String> findPlaylist(String fileName) {
+        String title = fileName.endsWith(".m3u8") ? fileName.substring(0, fileName.length() - 5) : fileName;
+        return http.get()
+                .uri(b -> b.path("/Items").queryParam("includeItemTypes", "Playlist").queryParam("recursive", "true")
+                        .queryParam("searchTerm", "{q}").queryParam("fields", "Path").build(title))
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .flatMap(body -> Mono.justOrEmpty(playlistId(body, fileName)))
+                .timeout(timeout)
+                .onErrorMap(error -> !(error instanceof MediaServerException), this::translate);
+    }
+
+    /** {@code POST /Items/{id}/Images/Primary}: Jellyfin takes the picture as base64 text with the image's content type. */
+    public Mono<Void> setPrimaryImage(String itemId, byte[] jpeg) {
+        return http.post().uri("/Items/{id}/Images/Primary", itemId)
+                .contentType(MediaType.IMAGE_JPEG)
+                .bodyValue(Base64.getEncoder().encodeToString(jpeg))
+                .retrieve()
+                .toBodilessEntity()
+                .then()
+                .timeout(timeout)
+                .onErrorMap(error -> !(error instanceof MediaServerException), this::translate);
+    }
+
+    static String playlistId(JsonNode body, String fileName) {
+        for (JsonNode item : body.path("Items")) {
+            String path = item.path("Path").asString("").replace('\\', '/');
+            if (path.endsWith("/" + fileName)) {
+                return item.path("Id").asString(null);
+            }
+        }
+        return null;
     }
 
     /** The ids of the libraries of type music, or of no type ("Mixed"), in a {@code GET /Library/MediaFolders} answer. */

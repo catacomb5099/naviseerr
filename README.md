@@ -82,7 +82,9 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
      see that library. Tested with Jellyfin 12.1.0 and 12.2.0. If a playlist shows up empty on your version, see
      [issue #18169](https://github.com/jellyfin/jellyfin/issues/18169). Jellyfin reads no picture file
      for playlists; it shows a collage of the songs' covers unless naviseerr is connected to it (next bullet),
-     in which case it gets the playlist's own picture.
+     in which case naviseerr sends the playlist's own picture (the same playlists as above) through Jellyfin's
+     API a few seconds after the rescan (Jellyfin then saves its own copy, `<playlist name>-poster.jpg`, next
+     to the file).
    - **Optional: have it rescan the moment a download is filed.** Music apps notice new files by
      themselves only when they run on the same Linux host; over a NAS share, from another machine or on
      Docker Desktop they see nothing until they scan. Put the app's address and login in `.env`
