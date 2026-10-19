@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.services;
 
 import com.catacomb5099.naviseerr.download.LibraryOrganiser;
+import com.catacomb5099.naviseerr.mediaserver.MediaServerNotifier;
 import com.catacomb5099.naviseerr.schema.slskd.SlskdOptions;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -21,6 +23,8 @@ import java.util.Optional;
  * the web app said "Downloaded". Since 19-10-2026 also whether YouTube Music can be reached
  * ({@code youtubeMusic}): search and new downloads both wait on it, and until then the web app could
  * only say "Couldn't load" page by page, never why.
+ * Since 19-10-2026 {@code library.mediaServers} also says whether each configured music server
+ * (Navidrome, Jellyfin) could be asked to rescan.
  */
 @RestController
 public class StatusController {
@@ -33,11 +37,14 @@ public class StatusController {
     private final SlskdService slskdService;
     private final LibraryOrganiser organiser;
     private final YtMusicService ytMusicService;
+    private final MediaServerNotifier mediaServers;
 
-    public StatusController(SlskdService slskdService, LibraryOrganiser organiser, YtMusicService ytMusicService) {
+    public StatusController(SlskdService slskdService, LibraryOrganiser organiser, YtMusicService ytMusicService,
+                            MediaServerNotifier mediaServers) {
         this.slskdService = slskdService;
         this.organiser = organiser;
         this.ytMusicService = ytMusicService;
+        this.mediaServers = mediaServers;
     }
 
     /** Always 200: a down slskd is an answer, not an error, so the strip never has to guess. */
@@ -61,7 +68,8 @@ public class StatusController {
                 .onErrorResume(e -> Mono.just(new Readiness(false, "ytmusic-adapter not reachable: " + reason(e))));
         return Mono.zip(soulseek, youtubeMusic)
                 .map(t -> new StatusView(t.getT1(),
-                        new LibraryStatus(organiser.isEnabled(), organiser.libraryRoot(), organiser.libraryProblem()),
+                        new LibraryStatus(organiser.isEnabled(), organiser.libraryRoot(), organiser.libraryProblem(),
+                                mediaServers.status()),
                         t.getT2()));
     }
 
@@ -75,8 +83,11 @@ public class StatusController {
     /**
      * {@code enabled} false when no library is configured or its paths overlap slskd's folders (then
      * {@code root} and {@code problem} are null; the log says why); {@code problem} one plain sentence while the folder is missing or cannot be written to.
+     * {@code mediaServers}: one entry per configured music server ({@code {name, url, problem, lastRescanAt}}),
+     * empty when none is set up.
      */
-    public record LibraryStatus(boolean enabled, String root, String problem) {}
+    public record LibraryStatus(boolean enabled, String root, String problem,
+                                List<MediaServerNotifier.MediaServerStatus> mediaServers) {}
 
     /**
      * {@code state} is slskd's own word: "None" before it has ever tried to connect, "Disconnected",
