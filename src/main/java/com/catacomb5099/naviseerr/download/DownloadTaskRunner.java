@@ -34,6 +34,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /** Every pass asks the database what is due and acts on the answer; nothing is held in memory between passes. */
@@ -373,6 +374,7 @@ public class DownloadTaskRunner {
             return Mono.empty();
         }
         Instant cutoff = organiser.cutoff(now);
+        AtomicInteger filedThisPass = new AtomicInteger();
         // Copies of one song ready in the same pass are filed one after the other, and once one is
         // filed the rest wait a pass: then they see its file (filed_copy) and are not filed twice.
         return repository.tasksToOrganise(batchSize, cutoff, organiser.albumCutoff(now))
@@ -386,13 +388,15 @@ public class DownloadTaskRunner {
                     AtomicBoolean filed = new AtomicBoolean();
                     return Flux.fromIterable(copies).concatMap(job -> filed.get() ? Mono.empty() : organiser.file(job, now)
                             .flatMap(path -> repository.setLibraryPath(job.taskId(), path.toString()))
-                            .doOnNext(written -> filed.set(true))
+                            .doOnNext(written -> { filed.set(true); filedThisPass.incrementAndGet(); })
                             .onErrorResume(error -> {
                                 log.warn("Could not file song {} ('{}') into the library; will retry "
                                         + "next pass", job.taskId(), job.slskdFilename(), error);
                                 return Mono.empty();
                             }));
                 }, batchSize)
+                // Only a pass that filed something can have made a waiting song's copy appear.
+                .then(Mono.defer(() -> filedThisPass.get() > 0 ? markWaitingSongsDone(now) : Mono.empty()))
                 .then(repository.downloadsToFinalise(batchSize, cutoff)
                         .flatMap(collection -> finalise(collection)
                                 // Deferred: the stamp must only be built once the file is written.
@@ -403,6 +407,57 @@ public class DownloadTaskRunner {
                                     return Mono.empty();
                                 }), batchSize)
                         .then());
+    }
+
+    /**
+     * Songs and playlist tracks still on their way whose song the library now has (a playlist requested
+     * while its album was still downloading; admission could not know) are marked done with that file
+     * instead of searching or transferring on (19-10-2026). A transfer slskd is still running for one
+     * is stopped, best effort, and its partial files removed. Then finished downloads are concluded
+     * once more, so a playlist whose last song was just marked closes on this tick and gets its file
+     * below. An album download's held songs are never swept: each album gets its own copy.
+     */
+    private Mono<Void> markWaitingSongsDone(Instant now) {
+        return repository.waitingCopies(now)
+                .collectList()
+                .filter(copies -> !copies.isEmpty())
+                .flatMap(copies -> {
+                    List<DownloadTaskRepository.WaitingCopy> songs = copies.stream()
+                            .filter(distinctBy(DownloadTaskRepository.WaitingCopy::taskId)).toList();
+                    Map<UUID, Integer> position = new LinkedHashMap<>();
+                    songs.forEach(song -> position.put(song.taskId(), position.size() + 1));
+                    return organiser.stillFiled(songs.size(), copies.stream()
+                                    .map(copy -> new LibraryOrganiser.FiledCopy(position.get(copy.taskId()), copy.libraryPath()))
+                                    .toList())
+                            .flatMapMany(paths -> Flux.range(0, songs.size())
+                                    .filter(i -> paths.get(i) != null)
+                                    .concatMap(i -> repository.markFiled(songs.get(i).taskId(), paths.get(i), now)
+                                            .doOnNext(was -> {
+                                                log.info("Song {} of download {} is already in the library as {}; not "
+                                                        + "fetching it", was.taskId(), was.downloadId(), paths.get(i));
+                                                stopInSlskd(was);
+                                            })))
+                            .count()
+                            .flatMap(marked -> marked > 0 ? repository.concludeDownloads().then() : Mono.empty());
+                });
+    }
+
+    /** Same shape as DownloadService.stopInSlskd: the row is written; slskd is told after, best effort. */
+    private void stopInSlskd(DownloadTask was) {
+        if (was.slskdTransferId() != null) {
+            Mono.defer(() -> slskdService.cancelDownload(was.slskdUsername(), was.slskdTransferId()))
+                    .subscribe(ignored -> { },
+                            error -> log.warn("Could not cancel transfer {} from '{}' for song {}; it stays in slskd's list",
+                                    was.slskdTransferId(), was.slskdUsername(), was.taskId(), error),
+                            () -> log.info("Cancelled transfer {} from '{}' for song {}: the library has the song",
+                                    was.slskdTransferId(), was.slskdUsername(), was.taskId()));
+        }
+        organiser.deletePartials(was).subscribe();
+    }
+
+    private static <T, K> java.util.function.Predicate<T> distinctBy(java.util.function.Function<T, K> key) {
+        Set<K> seen = new HashSet<>();
+        return item -> seen.add(key.apply(item));
     }
 
     /** A playlist gets its .m3u8; a song or an album needs nothing more than its files in place. */

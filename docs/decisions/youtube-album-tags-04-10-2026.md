@@ -274,6 +274,15 @@ title and artist, was never consulted as a song's identity.
    with the album file's `library_path`, no search, and the `.m3u8` lists that path, as Apple Music's
    library does (a playlist is a list of references to library items, never a second copy); the same
    as Navidrome and Jellyfin read our playlist files.
+6. **A waiting song is marked done when its copy lands.** Admission cannot match a song whose album is
+   still downloading. So a pass that filed something sweeps the live, unleased song and playlist rows
+   (`WAITING_COPIES_SQL`, the same `SAME_SONG`), and `MARK_FILED_SQL` finishes each whose file is still
+   there with that path, in one statement guarded like the claim (a step that leased the row meanwhile
+   keeps it; its later save finds the row terminal and writes nothing). A transfer slskd was still
+   running for the song is cancelled best effort and its partial files removed; a search still running
+   is simply orphaned. Finished downloads are concluded again on the same tick. Only two searches run
+   at a time, so most of a playlist's rows are still waiting when its album lands: this is where the
+   transfers are saved. An album download's held songs are never swept: each album gets its own copy.
 
 **Flip:** the title-and-artist arm: drop arm (c) from `SAME_SONG` (then only ids and album answers match,
 as before 19-10-2026). The version guard: drop the `COALESCE(f.album_title, '') !~* VERSION_ALBUM` line.
