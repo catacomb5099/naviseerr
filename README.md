@@ -64,8 +64,9 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
 5. Open the web app at `http://<this computer's address>:5056`, or http://localhost:5056 on the same
    computer. The first open asks you to create your account: choose a username and a password (at
    least 8 characters), and type the **setup code** the server printed at start in a banner in its log
-   (`docker compose logs naviseerr`; it is also saved as `config/setup-code.txt` in naviseerr's data
-   folder). Only whoever can read that log can make the account, so nobody else can claim your install
+   (`docker compose logs naviseerr`; on TrueNAS, Apps → naviseerr → Logs). An install that tells the
+   server its data folder (`NAVISEERR_DATA_DIR`, as the copy-paste install file does) also finds it in
+   `config/setup-code.txt` there; the log always has it. Only whoever can read that log can make the account, so nobody else can claim your install
    first; the code works once and is then deleted, and a restart before you use it prints a new one.
    That is the only account, and you stay logged in for 30 days on each device.
    The round button with your initial, top right, has "Log out". Is it working? `docker compose ps`
@@ -108,29 +109,40 @@ address, or start downloads until the disk is full). What the app does for you, 
   own network or Docker network). The web app's own answers carry the usual browser hardening headers
   (no type sniffing, no framing by other sites, no camera or location prompts); add HSTS at your proxy
   if you want it.
-- **Guessing is slow, for one name and for everyone.** Five wrong passwords for one username in 20
+- **Guessing is slow, for one name and for one address.** Five wrong passwords for one username in 20
   seconds answer `429 Too many attempts, wait a moment` for the rest of those 20 seconds (Navidrome's
-  rule); thirty failed logins or setup codes in a minute, under any names, answer
-  `429 Too many attempts, wait a minute` to everyone, so a bot cycling through names gets nowhere
-  either. While that is happening you may see the minute's wait yourself; that is the price, and
-  Authentik in front (below) is the way to never pay it. Nothing else of the API answers without a
-  login: a bot cannot search or download at all.
+  rule); thirty failed logins or setup codes in a minute from one address, under any names, answer
+  `429 Too many attempts, wait a minute` to that address for the rest of the minute, so a bot cycling
+  through names gets nowhere either, and only locks itself out: you, on another address, log in as
+  usual, and devices already logged in never notice. (A bot on your own network, or on the same
+  address as you, makes you wait its minute too.) Nothing else of the API answers without a login: a
+  bot cannot search or download at all.
 - **Every failure is in the log.** `docker compose logs naviseerr | grep "Login failed"` shows one line
   per wrong password or setup code, with who tried it:
   ```
-  WARN ... Login failed for "admin" from 203.0.113.9 (7 of 30 failures this minute for everyone)
-  WARN ... Too many failed logins from everyone: refusing every login and setup attempt for the rest of the minute
+  WARN ... Login failed for "admin" from 203.0.113.9 (7 of 30 failures this minute from this address)
+  WARN ... Too many failed logins from 203.0.113.9: refusing its login and setup attempts for the rest of the minute
   ```
-  The address is the real caller's as your proxy passed it on (`X-Forwarded-For`, trusted only from a
-  proxy on a private address); a caller on the internet is never believed about who it is. A fail2ban
-  rule on that line is the natural next step if you want to ban addresses at your firewall.
+  The address is the real caller's as your proxy passed it on in `X-Forwarded-For` (believed only from
+  a proxy on a private address, and read from the right: the last address that is not on a private
+  network, so whatever a caller writes in that header itself is ignored); a caller on the internet
+  talking to the server directly is never believed about who it is. Two things your own proxy must do
+  for this to hold: **set or append `X-Forwarded-For` itself** (Nginx Proxy Manager, Traefik, Caddy and
+  Cloudflare do; plain nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`), or
+  the logged and throttled address is whatever the caller claims; and **pass the `Host` header through
+  unchanged** (nginx: `proxy_set_header Host $host;`; the others do by default), or the web app's own
+  calls look cross-origin to the server and every login fails with "Forbidden". A fail2ban rule on the
+  `Login failed` line is the natural next step if you want to ban addresses at your firewall.
 - **Never `AUTH_REQUIRED=false` on an install the internet can reach**, unless Authentik or another
   login proxy stands in front of the whole web app. With Authentik in front, bots are stopped before
   they reach naviseerr at all; you may then switch the built-in login off (one login) or keep it on as a
-  second lock (two logins, one after the other). Either way, never leave neither.
+  second lock (two logins, one after the other; each half has been tried on its own, not yet the two
+  together). Either way, never leave neither.
 - **Only the web app's own address may call the API from a browser** with your login cookie. The
-  install needs nothing for that (the web app and the API share one address, through your proxy too).
-  Developers running the web app on another port list it in `AUTH_ALLOWED_ORIGINS` (`.env.example`).
+  install needs nothing for that (the web app and the API share one address, through your proxy too),
+  and the Docker image allows no other address at all. Developers running the web app on another port
+  have `http://localhost:5173` allowed by the jar's default, or list theirs in `AUTH_ALLOWED_ORIGINS`
+  (`.env.example`).
 
 ### Updating
 
@@ -284,7 +296,9 @@ and you bring your own slskd. Copy `.env.example` to `.env` and fill in the deve
 bottom: `SLSKD_URL` and `SLSKD_API_KEY` (both required; the app fails fast at startup without them).
 `LASTFM_API_KEY` is no longer needed — search runs through YouTube Music and nothing calls Last.fm, so
 it has a placeholder default. `.env` is gitignored and loaded automatically by Spring — see
-`spring.config.import` in [application.yaml](src/main/resources/application.yaml).
+`spring.config.import` in [application.yaml](src/main/resources/application.yaml). The first start
+with an empty database prints a setup code in the console (the Run window in IntelliJ, the terminal for
+`bootRun`); the web app on :5173 asks for it once, on its "Create your account" screen.
 
 ## ytmusic-adapter
 
