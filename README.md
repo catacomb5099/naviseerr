@@ -132,7 +132,8 @@ then **Client ID** and **Client secret**, press **Save and test**. It reads Auth
 the Client ID, secret and Redirect URL against it, and says "Authentik answered at ... and accepted the
 Client ID, secret and Redirect URL", or what to fix in plain words (a wrong slug answers 404; a Client ID
 or secret Authentik does not accept, or a Redirect URL not yet in its Redirect URIs, is named and nothing
-is saved; "could not reach" means this server cannot see Authentik's address: both your browser and the
+is saved, as is a token endpoint that answers an error page instead of refusing the test code (Authentik
+unhealthy, or a proxy in the way); "could not reach" means this server cannot see Authentik's address: both your browser and the
 naviseerr container must be able to reach it, so `localhost` will not do in Docker). **A successful Save
 and test turns the login on at once:** from that moment every visitor sees "Continue with Authentik"
 first, and `https://<your address>/api/...` answers 401 without a session. The page says "The login is
