@@ -12,7 +12,8 @@ import java.util.Set;
  * (V19), null until chosen. Lowest first, so the order of the values is the order of the tiers.
  *
  * <p>A preference, not a floor: the picker takes the chosen tier first and the nearest tier when that has
- * nothing, ties going up ({@link #distance}), and the Downloads page's Quality column shows what was taken.
+ * nothing, ties going up ({@link #distance}); the song's Choose-a-file pop-up ({@code GET /downloads/{id}/candidates},
+ * the person icon on a Downloads row) shows every file's quality and marks the one taken.
  */
 public enum DownloadQuality {
     /** About 128 kbit/s. */

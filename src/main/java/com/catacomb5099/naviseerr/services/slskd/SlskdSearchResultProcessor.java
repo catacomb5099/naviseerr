@@ -49,7 +49,8 @@ public class SlskdSearchResultProcessor {
      * other version of the song (the candidate list is walked in order, so a live take or remix is only
      * downloaded once every exact option has failed), then within each grade the chosen quality tier first
      * and the nearest tier after it ({@link DownloadQuality#distance}, ties going up), then the length most
-     * files share, then who can serve fastest. A lossy file whose bit rate slskd did not report has no tier
+     * files share, then who can serve fastest; then spread so that no sharer's second file comes before
+     * every other sharer's first within the same grade and tier ({@link #spreadAcrossSharers}). A lossy file whose bit rate slskd did not report has no tier
      * and is not tried (2.7% of files, mostly m4a and opus); it stays on the manual list. Capped at
      * {@code maxFilesPerDownload}: other versions take whatever places the exact ones leave, which is all
      * of them when none is exact and none when ten are.
@@ -125,7 +126,7 @@ public class SlskdSearchResultProcessor {
                     query, wording, responses.size(), state.getFileCount(), candidates.size(), exact,
                     candidates.size() - exact - Math.min(unverified, candidates.size()), Math.min(unverified, candidates.size()),
                     unverified < candidates.size() || unverified == 0 ? "" : ", no file names the artist", maxFilesPerDownload);
-            return spreadAcrossSharers(candidates).stream().limit(maxFilesPerDownload).toList();
+            return spreadAcrossSharers(candidates, chosen).stream().limit(maxFilesPerDownload).toList();
         });
     }
 
@@ -179,18 +180,23 @@ public class SlskdSearchResultProcessor {
      * (27-09-2026: songs with three to five files all from one stalling sharer waited 30-50 minutes
      * before running out). Spreading the list means a sharer that stalls or throttles costs one
      * candidate, not the whole list. Within a round the ranking above still decides who goes first.
-     * Done grade by grade, so every file in the requested version still comes before any other
-     * version: the spread never promotes a fallback above an exact match.
+     * Done within each run of files that share the ranking's first three keys (grade, overloaded, tier
+     * distance), so every file in the requested version still comes before any other version, and every
+     * file in the nearest tier before any file of the next one: the spread never promotes a fallback above
+     * an exact match, nor (review of 20-10-2026; until 19-10 the list held lossless and 320 kbps files
+     * only, so a spread per grade never cost a tier) another sharer's 128 kbps file above the first
+     * sharer's second lossless copy. The price: a sharer alone in its run keeps its files in a row, so
+     * one that stalls with the only copies in your tier costs one budget per file before the next tier.
      */
-    static List<Pick> spreadAcrossSharers(List<Pick> ranked) {
+    List<Pick> spreadAcrossSharers(List<Pick> ranked, DownloadQuality chosen) {
         List<Pick> spread = new java.util.ArrayList<>(ranked.size());
-        for (TrackMatchingService.Match grade : TrackMatchingService.Match.values()) {
-            Map<String, java.util.ArrayDeque<Pick>> bySharer = new java.util.LinkedHashMap<>();
-            for (Pick pick : ranked) {
-                if (pick.grade() == grade) {
-                    bySharer.computeIfAbsent(pick.peer().getUsername(), k -> new java.util.ArrayDeque<>()).add(pick);
-                }
-            }
+        // ranked is sorted by these three keys first, so the runs come out in the ranking's order.
+        Map<Run, Map<String, java.util.ArrayDeque<Pick>>> runs = new java.util.LinkedHashMap<>();
+        for (Pick pick : ranked) {
+            runs.computeIfAbsent(new Run(pick.grade(), isOverloaded(pick.peer()), tierDistance(pick.file(), chosen)), k -> new java.util.LinkedHashMap<>())
+                    .computeIfAbsent(pick.peer().getUsername(), k -> new java.util.ArrayDeque<>()).add(pick);
+        }
+        for (Map<String, java.util.ArrayDeque<Pick>> bySharer : runs.values()) {
             int remaining = bySharer.values().stream().mapToInt(java.util.ArrayDeque::size).sum();
             while (remaining > 0) {
                 for (java.util.ArrayDeque<Pick> queue : bySharer.values()) {
@@ -203,6 +209,9 @@ public class SlskdSearchResultProcessor {
         }
         return spread;
     }
+
+    /** The ranking's first three keys: the spread above never moves a file across a change in them. */
+    private record Run(TrackMatchingService.Match grade, boolean overloaded, int tierDistance) {}
 
     /**
      * How far a file's length may be from the YouTube track's and still be the same recording:

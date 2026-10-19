@@ -67,12 +67,25 @@ class AlbumFolderPickerTest {
                 definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS);
 
         // The FLAC folders first (the chooser is Lossless), among them free slot, then queue, then extra files,
-        // then speed; niccage has no free slot and 52 queued (past max-sharer-queue), so it goes last of the
-        // FLAC ones. fennyfom's whole folder is MP3 at 320 kbps: after every FLAC one. raphyduck's folder
-        // (320 kbps too) lacks Live Forever: 10 of 11, last.
-        assertEquals(List.of("noochieplexMatt", "ComputerYeti", "TheDrewCareyShow", "niccage", "fennyfom", "raphyduck"),
+        // then speed. fennyfom's whole folder is MP3 at 320 kbps: after every free FLAC one. raphyduck's folder
+        // (320 kbps too) lacks Live Forever: 10 of 11. niccage has no free slot and 52 queued (past
+        // max-sharer-queue): a sharer that never serves goes last whatever its tier, as for a song.
+        assertEquals(List.of("noochieplexMatt", "ComputerYeti", "TheDrewCareyShow", "fennyfom", "raphyduck", "niccage"),
                 whole.stream().map(f -> f.peer().getUsername()).toList());
         assertEquals(0, whole.getFirst().extras());
+    }
+
+    @Test
+    void definitelyMaybe_withTheFreeFlacSharersStalling_aLosslessChooserGetsTheFree320Folder_notTheOverloadedFlacOne() {
+        // Review of 20-10-2026: with the tier ranked before the overloaded term, every song of a Lossless chooser's
+        // album was pointed at niccage (no slot, 52 queued) first and waited out its budget before fennyfom, who
+        // could have started at once. Overloaded is the first key now, as in the song picker.
+        Predicate<String> freeFlacSharersStalling = List.of("noochieplexMatt", "ComputerYeti", "TheDrewCareyShow")::contains;
+
+        List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-definitely-maybe.json"),
+                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), freeFlacSharersStalling, LOSSLESS);
+
+        assertEquals(List.of("fennyfom", "raphyduck", "niccage"), whole.stream().map(f -> f.peer().getUsername()).toList());
     }
 
     @Test

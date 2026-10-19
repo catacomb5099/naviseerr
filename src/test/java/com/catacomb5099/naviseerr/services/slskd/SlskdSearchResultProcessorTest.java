@@ -472,8 +472,26 @@ class SlskdSearchResultProcessorTest {
                 new SlskdSearchResultProcessor.Pick(a, a3, exact), new SlskdSearchResultProcessor.Pick(b, b1, exact),
                 new SlskdSearchResultProcessor.Pick(c, c1, exact));
 
-        List<SlskdSearchResultProcessor.Pick> spread = SlskdSearchResultProcessor.spreadAcrossSharers(ranked);
+        List<SlskdSearchResultProcessor.Pick> spread = processor.spreadAcrossSharers(ranked, LOSSLESS);
 
         assertEquals(List.of(a1, b1, c1, a2, a3), spread.stream().map(SlskdSearchResultProcessor.Pick::file).toList());
+    }
+
+    @Test
+    void selectBestFiles_spreadsAcrossSharersWithinATier_neverPromotingAFartherTierAboveASecondCopy() {
+        // Review of 20-10-2026: a spread per grade put another sharer's 128 kbps file second, ahead of the first
+        // sharer's second lossless copy; one failed file and a Lossless chooser got 128 kbps.
+        when(trackMatchingService.grade(anyString(), anyString(), anyString())).thenReturn(Match.EXACT);
+        SearchFile rip1 = file("a\\rip1\\song.flac", 213), rip2 = file("a\\rip2\\song.flac", 213);
+        SearchResponseItem a = peer("a", 1_000_000, true, 0, rip1);
+        when(a.getFiles()).thenReturn(List.of(rip1, rip2));
+        SearchResponseItem b = peer("b", 1_000_000, true, 0, file("b\\song.mp3", 213, 128));
+        SearchResponseItem c = peer("c", 1_000_000, true, 0, file("c\\song.flac", 213));
+
+        assertEquals(List.of("a", "a", "b"), names(pick(state(a, b), LOSSLESS)), "the second lossless copy before the 128 kbps file");
+        assertEquals(List.of("a", "a", "b"), names(pick(state(a, b), VERY_HIGH)));
+        assertEquals(List.of("a", "c", "a", "b"), names(pick(state(a, b, c), LOSSLESS)),
+                "within the tier the spread still holds: c's copy before a's second");
+        assertEquals(List.of("b", "a", "a"), names(pick(state(a, b), LOW)), "a Low chooser: the 128 first, then the lossless pair");
     }
 }

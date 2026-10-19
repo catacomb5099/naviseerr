@@ -47,10 +47,17 @@ a song shared only below 320 kbps failed with `NO_CANDIDATES` (1 of 718 in the l
 - **Where the tier sits in the song order**: grade → overloaded sharer last → tier distance → the length most files
   share → availability. Measured 97.8% lossless picks with the tier before the length vote against 95.9% after it, same
   exactness; the tier never overrides the version protection (grade) or the never-serves protection (overloaded).
-  Flip: tier after the length vote.
+  Flip: tier after the length vote. The sharer round-robin that follows the sort (no sharer's second file before every
+  other sharer's first, so a stalling sharer costs one candidate) runs within a run of equal grade, overloaded-ness and
+  tier distance (review of 20-10-2026: per grade, as before, it put another sharer's 128 kbps file ahead of the first
+  sharer's second lossless copy; until 19-10 the list held lossless and 320 only, so the spread never cost a tier).
+  Price: a sharer alone in your tier keeps its files in a row. Flip: spread per grade again.
 - **Album folders**: usable = every audio file with a known tier (the floor goes here too); a folder is as far from
-  the choice as its farthest matched file; `bestFirst` = tier distance → most tracks → overloaded → free slot → queue
-  → fewer extras → speed. Tier before "most tracks" on purpose: with the floor gone a 128 kbps whole folder exists for
+  the choice as its farthest matched file; `bestFirst` = overloaded → tier distance → most tracks → free slot → queue
+  → fewer extras → speed (review of 20-10-2026: the overloaded term sat after "most tracks", so with the three free FLAC
+  sharers of the Definitely Maybe fixture stalling, a Lossless chooser's eleven songs all went first to niccage, no slot
+  and 52 queued, and waited out their budget before fennyfom's free 320 kbps whole folder; the never-serves protection
+  comes first for albums as it does for songs). Tier before "most tracks" on purpose: with the floor gone a 128 kbps whole folder exists for
   popular albums (Discovery fixture: 14 MP3@128 in one folder), and a Lossless chooser should get the FLAC 13-of-14 and
   one own search, not 14 songs at 128. Price: a FLAC part beats a 320 whole folder (Laughing Stock fixture: Nilkse's
   6 FLAC and moburma's 5 FLAC now rank above Baron53's 6 MP3@320). Flip: tier after "most tracks".

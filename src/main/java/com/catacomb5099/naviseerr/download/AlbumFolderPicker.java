@@ -22,8 +22,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * P5 and P6: which sharers' folders hold the album, the ones nearest the chosen download quality first
- * ({@link DownloadQuality}), then whole ones before the ones holding the most of it. Pure apart from its
+ * P5 and P6: which sharers' folders hold the album, a sharer that never serves last (as for a song), the ones
+ * nearest the chosen download quality first ({@link DownloadQuality}), then whole ones before the ones holding
+ * the most of it. Pure apart from its
  * two collaborators, which supply the rules a single song is already judged by: {@link TrackMatchingService#grade}
  * must call a file the requested version (EXACT) of one track, and the file must have a quality tier
  * ({@link DownloadQuality#of}: a lossless suffix or a reported bit rate), as the song picker asks.
@@ -85,14 +86,18 @@ public class AlbumFolderPicker {
 
     /**
      * Every folder that holds all of {@code tracks}, or at least half of them and at least two (P6: a part
-     * album from one sharer beats a song from each of many), best first: nearest the chosen quality (a
-     * folder is as far from the choice as its farthest matched file; ties go up, as for a song), then the
-     * most tracks, so within a tier every whole folder comes before any part; then the song picker's order
-     * -- an overloaded sharer (no free slot and a queue past {@code max-sharer-queue}) last, a sharer that
-     * can start now, the shortest queue -- with the fewest extra files slotted in before the sharer's own
-     * speed claim. The tier sits before "most tracks" on purpose: with no bit-rate floor a 128 kbps whole
-     * folder exists for a popular album, and a Lossless chooser should get the FLAC 13-of-14 plus one own
-     * search, not 14 songs at 128 kbps. Stalling sharers are left out.
+     * album from one sharer beats a song from each of many), best first: an overloaded sharer (no free slot
+     * and a queue past {@code max-sharer-queue}, the profile of one that never serves) last whatever its
+     * tier, as the song picker does -- every song the best folder holds is pointed at that sharer first, so
+     * one that never answers would cost the whole album its download budget before the next folder (review
+     * of 20-10-2026: the term sat after "most tracks", and a Lossless chooser's eleven songs went to the one
+     * overloaded FLAC sharer before a free 320 kbps whole folder); then nearest the chosen quality (a folder
+     * is as far from the choice as its farthest matched file; ties go up, as for a song), then the most
+     * tracks, so within a tier every whole folder comes before any part; then a sharer that can start now,
+     * the shortest queue, the fewest extra files, and only then the sharer's own speed claim. The tier sits
+     * before "most tracks" on purpose: with no bit-rate floor a 128 kbps whole folder exists for a popular
+     * album, and a Lossless chooser should get the FLAC 13-of-14 plus one own search, not 14 songs at
+     * 128 kbps. Stalling sharers are left out.
      *
      * @param tracks       the album's songs still waiting, in track order (the last may run long: a
      *                     hidden track)
@@ -144,12 +149,12 @@ public class AlbumFolderPicker {
         return found;
     }
 
-    /** Nearest the chosen quality, the most tracks, then the song picker's order (overloaded last, a free slot, the shortest queue), the fewest extras, speed. */
+    /** An overloaded sharer last (the song picker's never-serves protection, never overridden by the tier), nearest the chosen quality, the most tracks, a free slot, the shortest queue, the fewest extras, speed. */
     private Comparator<Folder> bestFirst(DownloadQuality chosen) {
         return Comparator
-                .comparingInt((Folder f) -> tierDistance(f, chosen))
+                .comparing((Folder f) -> files.isOverloaded(f.peer()))
+                .thenComparingInt(f -> tierDistance(f, chosen))
                 .thenComparingInt(f -> -f.files().size())
-                .thenComparing(f -> files.isOverloaded(f.peer()))
                 .thenComparing(f -> !Boolean.TRUE.equals(f.peer().getHasFreeUploadSlot()))
                 .thenComparingInt(f -> f.peer().getQueueLength())
                 .thenComparingInt(Folder::extras)
