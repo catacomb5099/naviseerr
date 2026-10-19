@@ -142,3 +142,38 @@ Decisions, server side (the client words them):
 
 The companion change makes the log name slskd's search id when an album search starts and warn when
 one never starts (`AlbumSearchStep`), so the question is answerable from the log too.
+
+## Addendum of 19-10-2026: search Soulseek with your own words
+
+The owner: "change manual import to allow users to search for a certain text." Until now the pop-up could only
+show what the loop's own wordings found (the title alone, then "title - artist", ...), and "Try again" replayed
+those same wordings. When they miss (an artist phrase Soulseek drops, an odd title, a remaster shared under another
+name) nothing let a person say what to search.
+
+Decisions:
+
+1. **One synchronous route per list** (`POST /downloads/{id}/tasks/{taskId}/search {text}`; the album variant
+   follows in its own change): one `POST /searches` with the text exactly as typed (trimmed, at most 200 characters),
+   polled with its responses every `search-poll-interval-ms` until slskd says complete or
+   `download-task.manual-search-budget-ms` (30 s) is spent, then the answers received so far are used. The request
+   is held open for that long at most (slskd's own 10 s inactivity timeout plus a queued slot fit inside; a
+   self-hoster's reverse proxy with a 60 s default is fine). This is the Sonarr "interactive search" shape: a spinner
+   while the indexers are asked, then the same table. Flip: `manual-search-budget-ms`.
+2. **Decision 10 of the manual-pick design ("no search is started from the request thread") is relaxed for this one
+   person-initiated search**, and only this one. The lists still come from the loop's searches otherwise.
+3. **The result REPLACES the song's remembered list** (`saveSearchResults`, written over; an empty result leaves the
+   old list in place, the SQL's own guard), so the existing pick route accepts any row of it with no change. Each
+   search is its own result, as slskd's own search page shows one search at a time. Flip: union by (username,
+   filename) before saving, about five lines.
+4. **Every audio file is kept and graded** by the existing matcher with the text as the wording (`allFiles`; the
+   all-options rule of 08-10-2026): a text that does not name the artist marks files the path does not name the
+   artist in as `UNVERIFIED`, a text about a different song marks everything `NONE`, and the person may still pick.
+5. **The loop respects the person's search**: `DownloadTaskRunner` subtracts `ManualSearch.inFlight()` from the free
+   search slots, so no third search is piled onto slskd behind it (slskd runs two at a time and queues the rest,
+   27-09-2026). slskd's own refusals come through worded: 409 `SOULSEEK_OFFLINE`, 429 `SOULSEEK_BUSY` (an overlapping
+   search), 502 `SLSKD_UNREACHABLE`. Flip: refuse up front when the table already counts two running searches (one
+   extra query, an instant but colder answer); the default waits in slskd's queue inside the 30 s.
+6. **Not done (ponytail)**: storing the typed text. `search_results_at` moves to the manual search's time and the
+   response names the text and slskd's new id, but a reopened pop-up re-derives the loop's own wording and the row's
+   old `search_id`. A `search_results_query` (and `search_results_search_id`) column written by `saveSearchResults`
+   and read by `CACHED_SEARCH_SQL` is the fix; the next migration slot belongs to another change this sweep.

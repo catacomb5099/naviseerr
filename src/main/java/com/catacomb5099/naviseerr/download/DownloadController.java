@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.reactive.function.client.WebClientException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 import java.time.Clock;
@@ -29,19 +31,24 @@ public class DownloadController {
      * size themselves.
      */
     static final int MAX_RESOLVE_IDS = 100;
+    /** Longest text a person may search Soulseek for; a search wording is a few words, not a paragraph. */
+    static final int MAX_SEARCH_TEXT = 200;
 
     private final DownloadService downloadService;
+    private final ManualSearch manualSearch;
     private final ActiveDownloadRepository activeDownloadRepository;
     private final Clock clock;
     private final long pollIntervalMs;
     private final Duration terminalRetention;
 
     public DownloadController(DownloadService downloadService,
+                              ManualSearch manualSearch,
                               ActiveDownloadRepository activeDownloadRepository,
                               Clock clock,
                               @Value("${download-task.download-poll-interval-ms:5000}") Duration pollInterval,
                               @Value("${download-task.terminal-retention-ms:600000}") Duration terminalRetention) {
         this.downloadService = downloadService;
+        this.manualSearch = manualSearch;
         this.activeDownloadRepository = activeDownloadRepository;
         this.clock = clock;
         this.pollIntervalMs = pollInterval.toMillis();
@@ -288,6 +295,58 @@ public class DownloadController {
                         .map(card -> ResponseEntity.status(n > 0 ? HttpStatus.ACCEPTED : HttpStatus.CONFLICT).<Object>body(card))
                         .defaultIfEmpty(notFound(missing)))
                 .defaultIfEmpty(notFound(missing));
+    }
+
+    /** Body of the two manual-search routes: the words to ask Soulseek for, verbatim. */
+    public record SearchRequest(String text) {}
+
+    /**
+     * A person types their own Soulseek search for one song (manual import, 19-10-2026) and waits for it:
+     * one slskd search with the text as typed, up to {@code download-task.manual-search-budget-ms}. 200
+     * with the same view as {@code GET .../candidates}, now listing what THAT search found (stored as the
+     * song's list, so any row can be picked); 400 {@code {message}} for blank text or more than
+     * {@value #MAX_SEARCH_TEXT} characters; 404 {@code {message}} for unknown ids; 409 {@code {reason:
+     * SOULSEEK_OFFLINE, message}} when slskd is not logged in (its own 409); 429 {@code {reason: SOULSEEK_BUSY,
+     * message}} when slskd refuses a third concurrent search (its own 429); 502 {@code {reason: SLSKD_UNREACHABLE,
+     * message}} when slskd cannot be reached or does not answer.
+     */
+    @PostMapping("/downloads/{id}/tasks/{taskId}/search")
+    Mono<ResponseEntity<Object>> search(@PathVariable UUID id, @PathVariable UUID taskId, @RequestBody SearchRequest body) {
+        String text = searchText(body);
+        if (text == null) {
+            return Mono.just(badRequest("text is required, at most " + MAX_SEARCH_TEXT + " characters"));
+        }
+        return manualSearch.song(id, taskId, text)
+                .map(view -> ResponseEntity.<Object>ok(view))
+                .defaultIfEmpty(notFound("No song " + taskId + " in download " + id))
+                .onErrorResume(WebClientException.class, error -> Mono.just(searchRefused(error)));
+    }
+
+    /** The trimmed text, or null when there is nothing to search for or too much. */
+    private static String searchText(SearchRequest body) {
+        String text = body == null || body.text() == null ? "" : body.text().strip();
+        return text.isEmpty() || text.length() > MAX_SEARCH_TEXT ? null : text;
+    }
+
+    /**
+     * slskd's answer, in a sentence the pop-up can print: its 409 is "not logged in to Soulseek" (the same
+     * reading as {@code DownloadStateMachine.onSearchCallFailed}), its 429 "a third search at once" (slskd
+     * runs two and queues the rest; an overlapping POST can still be refused); anything else is slskd
+     * itself not answering. slskd's own words follow after a colon so the log and the screen agree.
+     */
+    private static ResponseEntity<Object> searchRefused(WebClientException error) {
+        String detail = DownloadStateMachine.describe(error);
+        if (error instanceof WebClientResponseException.Conflict) {
+            return refused(HttpStatus.CONFLICT, "SOULSEEK_OFFLINE", "Soulseek is offline right now, so the search could not run: " + detail);
+        }
+        if (error instanceof WebClientResponseException.TooManyRequests) {
+            return refused(HttpStatus.TOO_MANY_REQUESTS, "SOULSEEK_BUSY", "Soulseek is busy with other searches; try again in a moment: " + detail);
+        }
+        return refused(HttpStatus.BAD_GATEWAY, "SLSKD_UNREACHABLE", "slskd did not answer, so the search could not run: " + detail);
+    }
+
+    private static ResponseEntity<Object> refused(HttpStatus status, String reason, String message) {
+        return ResponseEntity.status(status).body(Map.of("reason", reason, "message", message));
     }
 
     private static boolean isBlank(String value) {
