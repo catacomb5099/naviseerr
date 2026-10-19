@@ -62,7 +62,7 @@ class ArtistControllerTest {
     }
 
     private static Playlist playlist(String id, String title) {
-        return new Playlist(id, "https://img/" + id + ".jpg", title, List.of("YouTube Music"), List.of(), 20);
+        return new Playlist(id, "https://img/" + id + ".jpg", title, List.of("YouTube Music"), List.of(), 20, null);
     }
 
     private static List<String> ids(List<Playlist> playlists) {

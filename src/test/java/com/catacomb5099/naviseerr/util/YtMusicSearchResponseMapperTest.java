@@ -280,6 +280,19 @@ class YtMusicSearchResponseMapperTest {
     }
 
     @Test
+    void playlists_views_isYouTubesOwnWording_passedThrough_neverRelabelledPlays() {
+        // The row's "375K views" (noun and all) reaches the client as-is; a playlist is viewed, not
+        // played, so plays()'s " plays" suffix must not touch it. Null stays null (editorial rows,
+        // the Top result card, an older adapter).
+        YtMusicSearchResponse.Item item = playlistItem().toBuilder().views("375K views").build();
+        SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item, playlistItem())).build());
+
+        assertEquals("375K views", result.getPlaylists().get(0).getViews());
+        assertNull(result.getPlaylists().get(1).getViews());
+    }
+
+    @Test
     void playlists_nullPlaylistId_fallsBackToBrowseId() {
         YtMusicSearchResponse.Item item = playlistItem().toBuilder().playlistId(null).build();
         SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(

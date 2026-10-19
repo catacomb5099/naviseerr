@@ -45,7 +45,7 @@ class SearchServiceTest {
     }
 
     private static Playlist playlist() {
-        return new Playlist("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", "https://example.com/p.jpg", "Britpop Essentials", List.of("YouTube Music"), List.of(), 42);
+        return new Playlist("PLK1PkWQlWtnNfovRdGWpKffO1Wdi2kvDx", "https://example.com/p.jpg", "Britpop Essentials", List.of("YouTube Music"), List.of(), 42, null);
     }
 
     private static SearchResponse only(List<Track> tracks, List<Album> albums, List<Artist> artists, List<Playlist> playlists) {
@@ -343,7 +343,7 @@ class SearchServiceTest {
     }
 
     private static Playlist playlist(String id, String name) {
-        return new Playlist(id, "https://example.com/p.jpg", name, List.of("someone"), List.of(), 0);
+        return new Playlist(id, "https://example.com/p.jpg", name, List.of("someone"), List.of(), 0, null);
     }
 
     private static SearchResponse playlistsOnly(Playlist... playlists) {
