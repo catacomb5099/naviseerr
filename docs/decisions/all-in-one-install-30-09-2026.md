@@ -106,7 +106,15 @@ and keep the compose file to folders and ports. So the account moves into the ap
   web password, not an API key.
 - The compose file keeps `SOULSEEK_USERNAME: ""`/`SOULSEEK_PASSWORD: ""` as two optional values on one
   line, for carrying an account over from an older install; set there, they win over the app at the
-  next start (setup's rule since 30-09).
+  next start (setup's rule since 30-09). The app can tell (setup then leaves `secrets.env`'s
+  `SOULSEEK_USERNAME` empty, or behind the yml's name) and says so on the page, with the two values
+  to clear; the answer to a change carries the same flag, so the sentence survives the Save.
+- Until the login work of the same day is merged, the API answers anyone on the LAN, and `GET
+  /settings/soulseek` is the first route to return a secret (the made-up password; before, it sat in
+  a root-only container log and a mode-600 file). The rule from the library-rescan decision holds ("a
+  screen must wait for the login, or it shows a Navidrome admin password to the LAN"): this PR merges
+  after the auth PR, so the route is behind the session from its first published image. The
+  alternative, never returning the password, is one `null` in `SoulseekAccountController.get()`.
 - Off unless `install.data-dir` (`NAVISEERR_DATA_DIR`, `/data` in the install) is set and the files
   are there: a developer run, or an install that mounts only `/config`, keeps today's behaviour.
 

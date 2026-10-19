@@ -53,13 +53,16 @@ public class SoulseekAccountController {
         return Mono.fromCallable(files::read).subscribeOn(Schedulers.boundedElastic())
                 .zipWith(loggedIn())
                 .map(t -> ResponseEntity.ok(new AccountView(t.getT1().username(), t.getT1().generated(),
-                        t.getT1().generated() ? t.getT1().password() : null, t.getT2().orElse(null))));
+                        t.getT1().generated() ? t.getT1().password() : null, t.getT2().orElse(null),
+                        t.getT1().setInComposeFile())));
     }
 
     /**
      * 202: the files are rewritten and slskd is being asked to log in again; whether Soulseek accepts
      * the account shows up on {@code GET /status} within about half a minute. 400 with one plain
-     * sentence when the name breaks Soulseek's rules (setup.sh's three checks) or the password is empty.
+     * sentence when the name breaks Soulseek's rules (setup.sh's three checks) or the password is empty
+     * or has a control character. {@code setInComposeFile} in the answer is the state before the write
+     * (the files agree afterwards), so the page can still say the compose file will undo this.
      */
     @PutMapping("/settings/soulseek")
     Mono<ResponseEntity<?>> put(@RequestBody Change change) {
@@ -68,14 +71,21 @@ public class SoulseekAccountController {
         String password = change.password() == null ? "" : change.password();
         String problem = problemWith(username, password);
         if (problem != null) return Mono.just(ResponseEntity.badRequest().body(Map.of("message", problem)));
-        return Mono.fromCallable(() -> { files.write(username, password); return username; })
+        return Mono.fromCallable(() -> {
+                    boolean pinned = files.read().setInComposeFile();
+                    files.write(username, password);
+                    return pinned;
+                })
                 .subscribeOn(Schedulers.boundedElastic())
-                .doOnSuccess(written -> reconnect().subscribe())
-                .thenReturn(ResponseEntity.status(HttpStatus.ACCEPTED)
-                        .body(new AccountView(username, false, null, null)));
+                .doOnSuccess(pinned -> reconnect().subscribe())
+                .map(pinned -> ResponseEntity.status(HttpStatus.ACCEPTED)
+                        .body(new AccountView(username, false, null, null, pinned)));
     }
 
-    /** Soulseek's own rules on a name, as docker/setup.sh checks them; the password only has to be there. */
+    /**
+     * Soulseek's own rules on a name, as docker/setup.sh checks them; the password only has to be there
+     * and fit on one line (a line break would split the env line and break the yml scalar).
+     */
     static String problemWith(String username, String password) {
         if (username.isEmpty()) return "Enter a Soulseek username.";
         if (!username.chars().allMatch(c -> c >= 0x20 && c <= 0x7E)) {
@@ -84,6 +94,7 @@ public class SoulseekAccountController {
         if (username.length() > 30) return "The username is longer than 30 characters.";
         if (username.startsWith(" ") || username.endsWith(" ")) return "The username starts or ends with a space.";
         if (password.isEmpty()) return "Enter the password.";
+        if (password.chars().anyMatch(Character::isISOControl)) return "The password has a line break or control character in it.";
         return null;
     }
 
@@ -108,6 +119,9 @@ public class SoulseekAccountController {
 
     public record Change(String username, String password) {}
 
-    /** {@code loggedIn} null when slskd cannot be reached (same meaning as on {@code GET /status}). */
-    public record AccountView(String username, boolean generated, String password, Boolean loggedIn) {}
+    /**
+     * {@code loggedIn} null when slskd cannot be reached (same meaning as on {@code GET /status});
+     * {@code setInComposeFile} when the compose file sets the account and will put it back at the next start.
+     */
+    public record AccountView(String username, boolean generated, String password, Boolean loggedIn, boolean setInComposeFile) {}
 }

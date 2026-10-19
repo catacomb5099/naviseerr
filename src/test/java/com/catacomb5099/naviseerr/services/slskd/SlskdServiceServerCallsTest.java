@@ -3,8 +3,10 @@ package com.catacomb5099.naviseerr.services.slskd;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.http.client.reactive.MockClientHttpRequest;
 import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
@@ -45,11 +47,15 @@ class SlskdServiceServerCallsTest {
 
     @Test
     void disconnect_deletesTheServerResource_withTheReasonAsJson() {
-        StepVerifier.create(serviceAnswering(HttpStatus.NO_CONTENT).disconnect("account changed")).verifyComplete();
+        StepVerifier.create(serviceAnswering(HttpStatus.NO_CONTENT).disconnect("account \"changed\"")).verifyComplete();
 
         assertEquals(HttpMethod.DELETE, sent.get().method());
         assertEquals("http://slskd.test/api/v0/server", sent.get().url().toString());
         assertEquals("application/json", sent.get().headers().getFirst("Content-Type"));
+        // A JSON string, quotes escaped: slskd binds [FromBody] string from JSON and gets null from bare text.
+        var written = new MockClientHttpRequest(HttpMethod.DELETE, sent.get().url());
+        sent.get().writeTo(written, ExchangeStrategies.withDefaults()).block();
+        assertEquals("\"account \\\"changed\\\"\"", written.getBodyAsString().block());
     }
 
     @Test

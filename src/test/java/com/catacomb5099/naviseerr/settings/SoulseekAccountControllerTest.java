@@ -47,7 +47,28 @@ class SoulseekAccountControllerTest {
                 .jsonPath("$.username").isEqualTo("naviseerr-ab12cd")
                 .jsonPath("$.generated").isEqualTo(true)
                 .jsonPath("$.password").isEqualTo("Pw0Generated")
-                .jsonPath("$.loggedIn").isEqualTo(true);
+                .jsonPath("$.loggedIn").isEqualTo(true)
+                .jsonPath("$.setInComposeFile").isEqualTo(false);
+    }
+
+    @Test
+    void anAccountTheComposeFileSets_isFlagged_onGetAndOnTheChangeItWillUndo(@TempDir Path data) throws IOException {
+        SoulseekAccountFilesTest.setupShaped(data);
+        // How setup leaves the files when SOULSEEK_USERNAME is set in the compose file (docker/setup.sh).
+        Files.writeString(data.resolve("config/secrets.env"), SoulseekAccountFilesTest.SECRETS.replace("naviseerr-ab12cd", ""));
+        Files.writeString(data.resolve("slskd/slskd.yml"), SoulseekAccountFilesTest.YML.replace("naviseerr-ab12cd", "from-compose"));
+        when(slskd.getServerState()).thenReturn(Mono.just(state(true)));
+        when(slskd.disconnect(anyString())).thenReturn(Mono.empty());
+        when(slskd.connect()).thenReturn(Mono.empty());
+        var http = http(data.toString());
+
+        http.get().uri("/settings/soulseek").exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.setInComposeFile").isEqualTo(true);
+        http.put().uri("/settings/soulseek").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("username", "alex", "password", "s3cret")).exchange()
+                .expectStatus().isAccepted()
+                .expectBody().jsonPath("$.setInComposeFile").isEqualTo(true);
     }
 
     @Test
@@ -107,6 +128,10 @@ class SoulseekAccountControllerTest {
                 .bodyValue(Map.of("username", "fine", "password", "")).exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.message").isEqualTo("Enter the password.");
+        http.put().uri("/settings/soulseek").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("username", "fine", "password", "two\nlines")).exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.message").isEqualTo("The password has a line break or control character in it.");
 
         assertEquals("naviseerr-ab12cd", new SoulseekAccountFiles(data).read().username());
         verify(slskd, never()).connect();

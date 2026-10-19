@@ -88,7 +88,9 @@ public class SlskdService {
                 .method(HttpMethod.DELETE)
                 .uri(SERVER_ENDPOINT)
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(reason)
+                // Quoted by hand: WebClient writes a String as plain text whatever the content type, and
+                // slskd's [FromBody] string wants a JSON string (unquoted it arrives as null).
+                .bodyValue("\"" + reason.replace("\\", "\\\\").replace("\"", "\\\"") + "\"")
                 .retrieve()
                 .toBodilessEntity()
                 .then();

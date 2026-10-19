@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -37,7 +38,11 @@ public final class SoulseekAccountFiles {
         return Files.isRegularFile(secrets) && Files.isRegularFile(slskdYml);
     }
 
-    /** The account slskd logs in with (from slskd.yml, the one file that always holds the effective one). */
+    /**
+     * The account slskd logs in with (from slskd.yml, the one file that always holds the effective one).
+     * secrets.env's name is read too: setup leaves it empty, or behind, when the compose file sets
+     * {@code SOULSEEK_USERNAME} itself, and the compose value wins again at the next start.
+     */
     public Account read() throws IOException {
         String username = null;
         String password = null;
@@ -48,7 +53,13 @@ public final class SoulseekAccountFiles {
             // Two-space indent: slskd.yml's other password (web.authentication) sits four deep.
             if (p.matches() && password == null) password = unquote(p.group(1));
         }
-        return new Account(username == null ? "" : username, password == null ? "" : password);
+        String stored = "";
+        for (String line : Files.readAllLines(secrets)) {
+            var m = ENV_USERNAME.matcher(line);
+            if (m.matches()) { stored = m.group(1); break; }
+        }
+        username = username == null ? "" : username;
+        return new Account(username, password == null ? "" : password, !stored.equals(username));
     }
 
     /** Rewrites the account in both files; the yml first, since slskd reads that one. */
@@ -69,14 +80,17 @@ public final class SoulseekAccountFiles {
         if (!sawA) out.add(lineA);
         if (!sawB) out.add(lineB);
         // Whole file at once under a temporary name, then an atomic move: a crash mid-write never
-        // leaves slskd half a config. The owner-only mode setup gave the file is carried over.
+        // leaves slskd half a config. The temporary file is created (never opened through a link
+        // slskd could have planted: createFile is O_EXCL) with the owner-only mode setup gave the
+        // real one, before a byte of secrets is written to it.
         Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-        Files.write(tmp, out);
+        Files.deleteIfExists(tmp);
         try {
-            Files.setPosixFilePermissions(tmp, Files.getPosixFilePermissions(file));
-        } catch (UnsupportedOperationException ignored) {
-            // Not a POSIX file system (Windows): the default mode stands.
+            Files.createFile(tmp, PosixFilePermissions.asFileAttribute(Files.getPosixFilePermissions(file)));
+        } catch (UnsupportedOperationException notPosix) {
+            Files.createFile(tmp); // Windows: the default mode stands.
         }
+        Files.write(tmp, out);
         Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
@@ -92,8 +106,13 @@ public final class SoulseekAccountFiles {
         return v;
     }
 
-    /** The account; {@code generated} when the name is one setup makes up, so the password may be shown. */
-    public record Account(String username, String password) {
+    /**
+     * The account; {@code generated} when the name is one setup makes up, so the password may be shown;
+     * {@code setInComposeFile} when secrets.env does not carry the name slskd uses, which is how setup
+     * leaves the files when the compose file's own {@code SOULSEEK_USERNAME} won: a change made in the
+     * app then lasts only until the next start.
+     */
+    public record Account(String username, String password, boolean setInComposeFile) {
         public boolean generated() {
             return GENERATED_NAME.matcher(username).matches();
         }

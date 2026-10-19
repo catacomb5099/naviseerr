@@ -57,6 +57,7 @@ class SoulseekAccountFilesTest {
         assertEquals("naviseerr-ab12cd", account.username());
         assertEquals("Pw0Generated", account.password());
         assertTrue(account.generated());
+        assertFalse(account.setInComposeFile());
     }
 
     @Test
@@ -100,6 +101,21 @@ class SoulseekAccountFilesTest {
         var account = files.read();
         assertEquals("my-own-name", account.username());
         assertFalse(account.generated());
+        assertTrue(account.setInComposeFile(), "setup leaves the stored name empty when the compose file's own wins");
+    }
+
+    @Test
+    void aLeftoverTmpLink_isNotFollowed_andTheTmpIsGoneAfterwards(@TempDir Path data) throws IOException {
+        var files = setupShaped(data);
+        Path elsewhere = data.resolve("elsewhere.txt");
+        Files.writeString(elsewhere, "untouched");
+        Files.createSymbolicLink(data.resolve("slskd/slskd.yml.tmp"), elsewhere);
+
+        files.write("me", "secret");
+
+        assertEquals("untouched", Files.readString(elsewhere));
+        assertFalse(Files.exists(data.resolve("slskd/slskd.yml.tmp")));
+        assertEquals("me", files.read().username());
     }
 
     @Test
