@@ -181,6 +181,12 @@ auth:
   # How long a login lasts on one device. Spotify and YouTube Music keep you signed in for good,
   # Navidrome for two days; 30 days is the compromise.
   session-days: 30
+  # While no account exists, the server prints a one-time setup code in its log at start (as Jupyter
+  # and Grafana print a first-run token); the first-run screen needs it, so the first visitor to an
+  # internet-facing install cannot make themselves the owner. Optional: a file to save it in as well,
+  # owner-only, deleted once the account exists. Empty = <install.data-dir>/config/setup-code.txt
+  # when the install's data folder is known (NAVISEERR_DATA_DIR), else the log only.
+  setup-code-file: ${AUTH_SETUP_CODE_FILE:}
 
 # Library organiser: moves each finished song out of slskd's downloads folder into an organised music
 # library that Navidrome / Jellyfin can scan. OFF unless BOTH slskd-downloads-dir and root are set --

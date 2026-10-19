@@ -36,6 +36,11 @@ public class AuthController {
 
     static final String WRONG_LOGIN = "Wrong username or password";
     static final String ACCOUNT_EXISTS = "An account already exists. Log in instead.";
+    static final String WRONG_CODE = "Wrong setup code";
+    /** A web app from before the setup code sends none: refused with words, so nothing silently opens. */
+    static final String OLD_CLIENT = "This web app is older than the server: update it";
+    /** Wrong setup codes count in this login-throttle bucket (an account named "setup" would share it; harmless). */
+    static final String SETUP_BUCKET = "setup";
     static final int MIN_PASSWORD = 8;
     /** bcrypt hashes the first 72 bytes only, and spring-security-crypto refuses a longer one outright. */
     static final int MAX_PASSWORD_BYTES = 72;
@@ -49,20 +54,22 @@ public class AuthController {
     private final AuthRepository repository;
     private final AuthFilter filter;
     private final LoginThrottle throttle;
+    private final SetupCode setupCode;
     private final Clock clock;
     private final Duration sessionLength;
 
-    public AuthController(AuthRepository repository, AuthFilter filter, LoginThrottle throttle, Clock clock,
-                          @Value("${auth.session-days:30}") int sessionDays) {
+    public AuthController(AuthRepository repository, AuthFilter filter, LoginThrottle throttle, SetupCode setupCode,
+                          Clock clock, @Value("${auth.session-days:30}") int sessionDays) {
         this.repository = repository;
         this.filter = filter;
         this.throttle = throttle;
+        this.setupCode = setupCode;
         this.clock = clock;
         this.sessionLength = Duration.ofDays(sessionDays);
     }
 
-    /** {@code {username, password}} for setup and login. */
-    public record Credentials(String username, String password) {}
+    /** {@code {username, password}} for login; setup adds {@code setupCode}, the one printed in the server log. */
+    public record Credentials(String username, String password, String setupCode) {}
 
     /** What the web app asks first. Always 200 (it is also the Docker health check). */
     public record SessionView(boolean authRequired, boolean setupRequired, boolean authenticated, String username) {}
@@ -75,17 +82,35 @@ public class AuthController {
         return repository.anyUser().map(any -> new SessionView(true, !any, false, null));
     }
 
-    /** The first account, once: 201 with the session started; 409 once one exists; 400 for a name or password that will not do. */
+    /**
+     * The first account, once, with the setup code from the server log: 201 with the session started;
+     * 401 {@link #WRONG_CODE} (counted by the login throttle, so guessing it is as slow as guessing a
+     * password); 409 once an account exists, whatever the code; 400 for a missing code (an old web app)
+     * or a name or password that will not do.
+     */
     @PostMapping("/setup")
     Mono<ResponseEntity<?>> setup(@RequestBody Credentials body, ServerWebExchange exchange) {
+        if (body == null || body.setupCode() == null) return Mono.just(ResponseEntity.badRequest().body(Map.of("message", OLD_CLIENT)));
+        if (throttle.blocked(SETUP_BUCKET)) return Mono.just(tooMany());
+        if (!setupCode.matches(body.setupCode())) {
+            // A spent code means the account exists: say so, and the web app shows the login instead.
+            return repository.anyUser().map(any -> {
+                if (any) return accountExists();
+                throttle.failed(SETUP_BUCKET);
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", WRONG_CODE));
+            });
+        }
         String problem = validate(body);
         if (problem != null) return Mono.just(ResponseEntity.badRequest().body(Map.of("message", problem)));
         String username = body.username().trim();
         return hash(body.password())
                 .flatMap(hash -> repository.createFirstUser(UUID.randomUUID(), username, hash))
-                .flatMap(created -> created
-                        ? repository.findByUsername(username).flatMap(user -> startSession(user, exchange, HttpStatus.CREATED))
-                        : Mono.just(ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", ACCOUNT_EXISTS))));
+                .flatMap(created -> {
+                    if (!created) return Mono.just(accountExists());
+                    setupCode.consumed();
+                    throttle.succeeded(SETUP_BUCKET);
+                    return repository.findByUsername(username).flatMap(user -> startSession(user, exchange, HttpStatus.CREATED));
+                });
     }
 
     /**
@@ -96,9 +121,7 @@ public class AuthController {
     Mono<ResponseEntity<?>> login(@RequestBody Credentials body, ServerWebExchange exchange) {
         if (body == null || body.username() == null || body.password() == null) return Mono.just(wrongLogin());
         String name = body.username().trim();
-        if (throttle.blocked(name)) {
-            return Mono.just(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY)));
-        }
+        if (throttle.blocked(name)) return Mono.just(tooMany());
         // Exactly one bcrypt check per attempt, against the dummy hash for an unknown name, so the time
         // taken does not say whether the name exists.
         return repository.findByUsername(name)
@@ -147,6 +170,14 @@ public class AuthController {
 
     private static ResponseEntity<?> wrongLogin() {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", WRONG_LOGIN));
+    }
+
+    private static ResponseEntity<?> tooMany() {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY));
+    }
+
+    private static ResponseEntity<?> accountExists() {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", ACCOUNT_EXISTS));
     }
 
     /** One sentence saying what will not do, or null when the credentials are fine. */

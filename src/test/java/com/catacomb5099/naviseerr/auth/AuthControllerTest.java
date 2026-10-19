@@ -27,8 +27,11 @@ class AuthControllerTest {
     private final AtomicReference<UserRow> account = new AtomicReference<>();
     private final Map<String, UserRow> sessions = new HashMap<>();
     private final AuthFilter filter = new AuthFilter(repository, CLOCK, true);
-    private final WebTestClient http = WebTestClient.bindToController(new AuthController(repository, filter, new LoginThrottle(CLOCK), CLOCK, 30))
+    private final SetupCode setupCode = new SetupCode(repository, true, "", "");
+    private final WebTestClient http = WebTestClient.bindToController(new AuthController(repository, filter, new LoginThrottle(CLOCK), setupCode, CLOCK, 30))
             .webFilter(filter).build();
+    /** The code the server "printed in its log" at start. */
+    private final String code;
 
     AuthControllerTest() {
         when(repository.anyUser()).thenAnswer(i -> Mono.just(account.get() != null));
@@ -45,10 +48,12 @@ class AuthControllerTest {
         when(repository.findBySession(any(), any())).thenAnswer(i -> Mono.justOrEmpty(sessions.get(i.<String>getArgument(0))));
         when(repository.deleteSession(any())).thenAnswer(i -> { sessions.remove(i.<String>getArgument(0)); return Mono.empty(); });
         when(repository.deleteExpired(any())).thenReturn(Mono.empty());
+        setupCode.onReady();
+        code = setupCode.current();
     }
 
     private String setup(String username, String password) {
-        return http.post().uri("/auth/setup").bodyValue(Map.of("username", username, "password", password)).exchange()
+        return http.post().uri("/auth/setup").bodyValue(Map.of("username", username, "password", password, "setupCode", code)).exchange()
                 .expectStatus().isCreated()
                 .expectBody().jsonPath("$.username").isEqualTo(username)
                 .returnResult().getResponseHeaders().getFirst("Set-Cookie");
@@ -84,24 +89,57 @@ class AuthControllerTest {
         assertFalse(cookie.contains("Secure"), "plain HTTP: " + cookie);
         assertEquals(43, sessionId(cookie).length(), "32 random bytes, base64url, no padding");
 
-        http.post().uri("/auth/setup").bodyValue(Map.of("username", "bob", "password", "another one")).exchange()
-                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
-                .expectBody().jsonPath("$.message").isEqualTo(AuthController.ACCOUNT_EXISTS);
+        // Once the account exists the code is spent: a second attempt is a 409 with the right code, the old one, or any other.
+        for (String tried : java.util.List.of(code, "made-up")) {
+            http.post().uri("/auth/setup").bodyValue(Map.of("username", "bob", "password", "another one", "setupCode", tried)).exchange()
+                    .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                    .expectBody().jsonPath("$.message").isEqualTo(AuthController.ACCOUNT_EXISTS);
+        }
+        assertNull(setupCode.current(), "void after use");
         assertEquals("Alex", account.get().username());
     }
 
     @Test
+    void setup_withTheWrongCode_is401_fiveOfThemIs429_andNoAccountIsMade() {
+        for (int i = 0; i < 5; i++) {
+            http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", "guess-" + i)).exchange()
+                    .expectStatus().isUnauthorized()
+                    .expectHeader().doesNotExist("Set-Cookie")
+                    .expectBody().jsonPath("$.message").isEqualTo(AuthController.WRONG_CODE);
+        }
+        // The same throttle as the login: the sixth try is refused before the code is even looked at, the right one included.
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", code)).exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
+                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY);
+        assertNull(account.get());
+        assertNotNull(setupCode.current(), "still live: nobody used it");
+    }
+
+    @Test
+    void setup_theCodeIsForgivingAboutCaseAndDashes_andAnOldWebAppWithoutOneIs400() {
+        // A web app from before the code sends none: told to update, nothing is made, nothing is counted.
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "correct horse")).exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.message").isEqualTo(AuthController.OLD_CLIENT);
+        assertNull(account.get());
+
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "correct horse", "setupCode", " " + code.toUpperCase().replace("-", ""))).exchange()
+                .expectStatus().isCreated();
+    }
+
+    @Test
     void setup_refusesABlankOrLongName_andAShortOrOver72BytePassword() {
-        http.post().uri("/auth/setup").bodyValue(Map.of("username", "  ", "password", "long enough")).exchange()
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "  ", "password", "long enough", "setupCode", code)).exchange()
                 .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isEqualTo("Username: 1 to 30 characters.");
-        http.post().uri("/auth/setup").bodyValue(Map.of("username", "x".repeat(31), "password", "long enough")).exchange()
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "x".repeat(31), "password", "long enough", "setupCode", code)).exchange()
                 .expectStatus().isBadRequest();
-        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "short")).exchange()
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "short", "setupCode", code)).exchange()
                 .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isEqualTo("Password: at least 8 characters.");
         // bcrypt stops at 72 bytes and spring-security-crypto throws past it: a 400 with words, not a 500.
-        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "x".repeat(73))).exchange()
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "x".repeat(73), "setupCode", code)).exchange()
                 .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isEqualTo("Password: at most 72 characters.");
         assertNull(account.get());
+        assertNotNull(setupCode.current(), "a refused name or password does not spend the code");
     }
 
     @Test
@@ -188,7 +226,7 @@ class AuthControllerTest {
     @Test
     void authOff_sessionSaysSo_andNothingIs401() {
         AuthFilter off = new AuthFilter(repository, CLOCK, false);
-        WebTestClient open = WebTestClient.bindToController(new AuthController(repository, off, new LoginThrottle(CLOCK), CLOCK, 30)).webFilter(off).build();
+        WebTestClient open = WebTestClient.bindToController(new AuthController(repository, off, new LoginThrottle(CLOCK), setupCode, CLOCK, 30)).webFilter(off).build();
 
         open.get().uri("/auth/session").exchange()
                 .expectStatus().isOk()
