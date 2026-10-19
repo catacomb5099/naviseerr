@@ -112,7 +112,7 @@ three fields in naviseerr.
    `naviseerr` (the slug becomes part of the address below; keep it plain).
 2. Provider type **OAuth2/OpenID Provider**. Name it `naviseerr` too. Authorization flow:
    `default-provider-authorization-implicit-consent` (no "do you consent" page each time; the explicit
-   one works too).
+   one works too). Authentication flow and Invalidation flow: leave the pre-filled defaults.
 3. **Client type: Confidential.** Leave Client ID and Client Secret as generated and copy both
    somewhere for a minute.
 4. **Redirect URIs/Origins:** paste the **Redirect URL** that naviseerr shows under Settings -> Login
@@ -120,6 +120,7 @@ three fields in naviseerr.
    matches it strictly: connect from the address you will really use (your domain, behind HTTPS), not
    from `localhost`. Signing key: any (naviseerr trusts the connection to Authentik rather than the
    token's signature; OpenID Connect allows this when the token comes straight from the token endpoint).
+   Encryption key: leave empty (naviseerr reads the token; it cannot decrypt one).
 5. Finish the wizard. On the provider's page, copy **OpenID Configuration Issuer**
    (`https://auth.example.com/application/o/naviseerr/`).
 6. Open the application you just made -> **Policy / Group / User Bindings -> Bind existing policy/group/user**
@@ -127,10 +128,12 @@ three fields in naviseerr.
    this application gets in. With no binding, every Authentik user does.
 
 **In naviseerr:** Settings (the gear top right) -> Login. Paste the Issuer into **Authentik address**,
-then **Client ID** and **Client secret**, press **Save and test**. It reads Authentik's settings and
-says "Authentik answered at ...", or what to fix in plain words (a wrong slug answers 404; "could not
-reach" means this server cannot see Authentik's address: both your browser and the naviseerr
-container must be able to reach it, so `localhost` will not do in Docker). Then press **Continue with
+then **Client ID** and **Client secret**, press **Save and test**. It reads Authentik's settings, tries
+the Client ID, secret and Redirect URL against it, and says "Authentik answered at ... and accepted the
+Client ID, secret and Redirect URL", or what to fix in plain words (a wrong slug answers 404; a Client ID
+or secret Authentik does not accept, or a Redirect URL not yet in its Redirect URIs, is named and nothing
+is saved; "could not reach" means this server cannot see Authentik's address: both your browser and the
+naviseerr container must be able to reach it, so `localhost` will not do in Docker). Then press **Continue with
 Authentik**, sign in there, and you are back in naviseerr, signed in. **That first sign-in is what
 turns the login on:** from then on every visitor sees "Continue with Authentik" first, and
 `https://<your address>/api/...` answers 401 without a session. Until then nothing is enforced, so a
@@ -165,9 +168,11 @@ address, or start downloads until the disk is full). What the app does for you, 
   the Redirect URL and to tell the web app's own calls from another site's.
 - **Only the web app's own address may call the API from a browser** with your login cookie. The
   install needs nothing for that (the web app and the API share one address, through your proxy too),
-  and the Docker image allows no other address at all. Developers running the web app on another port
-  have `http://localhost:5173` allowed by the jar's default, or list theirs in `AUTH_ALLOWED_ORIGINS`
-  (`.env.example`).
+  and the Docker image allows no other address at all. Any other address is refused (a bodiless 403 on
+  every call, login on or off): the naviseerr Chrome extension needs `chrome-extension://<its id>` in
+  `AUTH_ALLOWED_ORIGINS` on the container, and host permissions in the extension do not help. Developers
+  running the web app on another port have `http://localhost:5173` allowed by the jar's default, or list
+  theirs in `AUTH_ALLOWED_ORIGINS` (`.env.example`).
 - **Authentik over plain HTTP on your LAN** is fine for a home network, but the trust in Authentik's
   answers rests on that connection; on the internet, Authentik itself must be behind HTTPS too.
 - **Nothing else of the API answers without a login** once it is on: a bot cannot search or download at
