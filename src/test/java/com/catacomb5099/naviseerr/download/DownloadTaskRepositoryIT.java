@@ -1733,6 +1733,21 @@ class DownloadTaskRepositoryIT {
                 .map(DownloadTask::songName).collectList().block());
     }
 
+    @Test
+    void songs_areEverySongOfTheDownload_finishedOnesToo_inTrackOrder() {
+        // A person's own album search (19-10-2026) matches folders against every song, so "11 of 11" counts the done ones.
+        UUID id = admitAlbum("b second", "a first", "c done");
+        List<UUID> tasks = taskIdsOf(id);   // ordered by song name: a first, b second, c done
+        finish(template, downloadService, tasks.get(2), DownloadStatus.SUCCEEDED, null, NOW);
+        setTask(tasks.get(0), "search_id = 's9'");
+
+        List<DownloadTask> songs = repository.songs(id).collectList().block();
+
+        assertEquals(List.of("b second", "a first", "c done"), songs.stream().map(DownloadTask::songName).toList());
+        assertEquals(tasks.get(1), songs.getFirst().taskId());
+        assertNull(songs.getFirst().phase(), "only the track columns are read; the phase is not needed to match a folder");
+    }
+
     // ---- retry ---------------------------------------------------------------------------------
 
     /** A finished single-song download whose song failed. */

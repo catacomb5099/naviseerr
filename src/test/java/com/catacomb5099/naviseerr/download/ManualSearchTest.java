@@ -36,8 +36,9 @@ class ManualSearchTest {
 
     private final SlskdService slskd = mock(SlskdService.class);
     private final SlskdSearchResultProcessor processor = mock(SlskdSearchResultProcessor.class);
+    private final AlbumFolderPicker picker = mock(AlbumFolderPicker.class);
     private final DownloadTaskRepository repository = mock(DownloadTaskRepository.class);
-    private final ManualSearch search = new ManualSearch(slskd, processor, repository, Clock.fixed(NOW, ZoneOffset.UTC), POLL, BUDGET);
+    private final ManualSearch search = new ManualSearch(slskd, processor, picker, repository, Clock.fixed(NOW, ZoneOffset.UTC), POLL, BUDGET);
 
     private final SearchFile file = new SearchFile("@@music\\Pulp\\Different Class\\06 - Common People.flac", 30_000_000L, 1L,
             false, "flac", Optional.empty(), Optional.of(350));
@@ -173,6 +174,98 @@ class ManualSearchTest {
                 .verify();
 
         verify(slskd, never()).getSearchWithResponses(any());
+    }
+
+    // ---- a whole album ----------------------------------------------------------------------------
+
+    private static DownloadTaskRepository.CachedAlbumSearch album(DownloadType type, String phase) {
+        return new DownloadTaskRepository.CachedAlbumSearch(type, phase, "NO_WHOLE_FOLDER", 0, "Definitely Maybe",
+                List.of("Oasis"), List.of(), null, "old-album-search", NOW.minusSeconds(900));
+    }
+
+    private AlbumFolderPicker.Folder folder(String username, String path, UUID... tasks) {
+        SearchResponseItem sharer = new SearchResponseItem(tasks.length, List.of(), true, 0, List.of(), 0, 1, 900, username);
+        java.util.Map<UUID, SearchFile> files = new java.util.LinkedHashMap<>();
+        for (UUID task : tasks) {
+            files.put(task, new SearchFile(path + "\\" + task + ".flac", 1L, 1L, false, "flac", Optional.empty(), Optional.of(300)));
+        }
+        return new AlbumFolderPicker.Folder(sharer, path, files, 0);
+    }
+
+    @Test
+    void album_matchesEverySongOfTheAlbum_finishedOnesToo_judgedFoldersFirst_andStoresThem() {
+        UUID done = UUID.randomUUID(), waiting = UUID.randomUUID();
+        DownloadTask songDone = DownloadTask.builder().taskId(done).songName("Live Forever - Oasis").trackNumber(3).build();
+        DownloadTask songWaiting = DownloadTask.builder().taskId(waiting).songName("Columbia - Oasis").trackNumber(5).build();
+        when(repository.cachedAlbumSearch(downloadId)).thenReturn(Mono.just(album(DownloadType.ALBUM, "DONE")));
+        when(repository.songs(downloadId)).thenReturn(reactor.core.publisher.Flux.just(songDone, songWaiting));
+        when(repository.songPicks(downloadId)).thenReturn(reactor.core.publisher.Flux.just(
+                new DownloadTaskRepository.SongPick(done, 3, "Live Forever", "SUCCEEDED", null),
+                new DownloadTaskRepository.SongPick(waiting, 5, "Columbia", "FAILED", null)));
+        when(repository.saveAlbumFolders(eq(downloadId), any(), eq(NOW))).thenReturn(Mono.just(1L));
+        when(slskd.searchResults("Definitely Maybe 1994 flac")).thenReturn(Mono.just(SlskdFixtures.searchState("new-2", false, "InProgress")));
+        SearchState doneState = SlskdFixtures.searchStateWithResponses("new-2", true, "Completed, TimedOut", List.of(peer));
+        when(slskd.getSearchWithResponses("new-2")).thenReturn(Mono.just(doneState));
+        AlbumFolderPicker.Folder whole = folder("vinyl", "@@music\\Oasis\\(1994) Definitely Maybe", done, waiting);
+        AlbumFolderPicker.Folder part = folder("mp3mike", "Music\\Oasis - Discography\\Definitely Maybe", waiting);
+        when(picker.folders(eq(List.of(peer)), eq(List.of(songDone, songWaiting)), eq("Definitely Maybe"), eq(List.of("Oasis")), any()))
+                .thenReturn(List.of(whole));
+        when(picker.allFolders(List.of(peer), List.of(songDone, songWaiting), "Definitely Maybe", List.of("Oasis")))
+                .thenReturn(List.of(whole, part));
+
+        StepVerifier.withVirtualTime(() -> search.album(downloadId, "Definitely Maybe 1994 flac"))
+                .expectSubscription()
+                .thenAwait(Duration.ofSeconds(1))
+                .assertNext(view -> {
+                    assertEquals(PickListStatus.READY, view.status());
+                    assertEquals("Definitely Maybe 1994 flac", view.query());
+                    assertEquals("new-2", view.searchId());
+                    assertEquals(NOW, view.searchedAt());
+                    assertEquals(2, view.songCount());
+                    assertEquals(List.of("vinyl", "mp3mike"), view.folders().stream().map(AlbumCandidatesView.Folder::username).toList());
+                    assertTrue(view.folders().get(0).judged() && !view.folders().get(1).judged(), "judged first, the rest Not judged");
+                    assertEquals(2, view.folders().get(0).fileCount(), "the finished song's file counts too");
+                })
+                .verifyComplete();
+
+        verify(repository).saveAlbumFolders(eq(downloadId), argThat(folders -> folders.size() == 2
+                && folders.get(0).username().equals("vinyl") && Boolean.TRUE.equals(folders.get(0).judged())), eq(NOW));
+        // Every folder is shown, stalling sharer or not: the filter the album search applies is not applied here.
+        verify(picker).folders(any(), any(), any(), any(), argThat(stalling -> !stalling.test("anyone")));
+    }
+
+    @Test
+    void album_withNoFolderFound_isNoneWithNoResults_andWritesNothingOverTheOldFolders() {
+        when(repository.cachedAlbumSearch(downloadId)).thenReturn(Mono.just(album(DownloadType.ALBUM, "DONE")));
+        when(repository.songs(downloadId)).thenReturn(reactor.core.publisher.Flux.empty());
+        when(repository.songPicks(downloadId)).thenReturn(reactor.core.publisher.Flux.empty());
+        when(slskd.searchResults("xyzzy")).thenReturn(Mono.just(SlskdFixtures.searchState("new-3", false, "InProgress")));
+        when(slskd.getSearchWithResponses("new-3")).thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("new-3", true, "Completed, TimedOut", List.of())));
+        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(picker.allFolders(any(), any(), any(), any())).thenReturn(List.of());
+
+        StepVerifier.withVirtualTime(() -> search.album(downloadId, "xyzzy"))
+                .expectSubscription()
+                .thenAwait(Duration.ofSeconds(1))
+                .assertNext(view -> {
+                    assertEquals(PickListStatus.NONE, view.status());
+                    assertEquals("NO_RESULTS", view.reason());
+                    assertEquals("xyzzy", view.query());
+                })
+                .verifyComplete();
+
+        verify(repository, never()).saveAlbumFolders(any(), any(), any());
+    }
+
+    @Test
+    void album_refusesAnythingButAnAlbum_andAnAlbumWithNoSearchRow_withoutSearching() {
+        when(repository.cachedAlbumSearch(downloadId)).thenReturn(Mono.just(album(DownloadType.PLAYLIST, "DONE")));
+        StepVerifier.create(search.album(downloadId, "x")).expectError(DownloadService.NotAnAlbumException.class).verify();
+
+        when(repository.cachedAlbumSearch(downloadId)).thenReturn(Mono.just(album(DownloadType.ALBUM, null)));
+        StepVerifier.create(search.album(downloadId, "x")).expectError(ManualSearch.NoAlbumSearchException.class).verify();
+
+        verify(slskd, never()).searchResults(any());
     }
 
     @Test

@@ -325,6 +325,29 @@ public class DownloadController {
                         refused(HttpStatus.CONFLICT, "SEARCH_RUNNING", running.getMessage())));
     }
 
+    /**
+     * The same for a whole album: one slskd search with the text as typed, every folder it found holding any of the
+     * album's songs (the ones the album search itself would take first), stored as the album's folders so any can be
+     * taken with {@code POST .../album-pick}. 200 with the {@code GET .../album-candidates} shape, {@code query} the
+     * text; 400 / 404 / 409 {@code SOULSEEK_OFFLINE} / 429 / 502 as the song route; 409 {@code NOT_AN_ALBUM} for
+     * anything but an album; 409 {@code NO_ALBUM_SEARCH} for an album with no search row to keep folders on.
+     */
+    @PostMapping("/downloads/{id}/album-search")
+    Mono<ResponseEntity<Object>> albumSearch(@PathVariable UUID id, @RequestBody SearchRequest body) {
+        String text = searchText(body);
+        if (text == null) {
+            return Mono.just(badRequest("text is required, at most " + MAX_SEARCH_TEXT + " characters"));
+        }
+        return manualSearch.album(id, text)
+                .map(view -> ResponseEntity.<Object>ok(view))
+                .defaultIfEmpty(notFound("No download " + id))
+                .onErrorResume(WebClientException.class, error -> Mono.just(searchRefused(error)))
+                .onErrorResume(DownloadService.NotAnAlbumException.class, notAnAlbum -> Mono.just(
+                        refused(HttpStatus.CONFLICT, "NOT_AN_ALBUM", notAnAlbum.getMessage())))
+                .onErrorResume(ManualSearch.NoAlbumSearchException.class, noSearch -> Mono.just(
+                        refused(HttpStatus.CONFLICT, "NO_ALBUM_SEARCH", noSearch.getMessage())));
+    }
+
     /** The trimmed text, or null when there is nothing to search for, too much, or a control character (it is logged). */
     private static String searchText(SearchRequest body) {
         String text = body == null || body.text() == null ? "" : body.text().strip();
