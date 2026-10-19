@@ -32,8 +32,8 @@ class SuggestedPlaylistControllerTest {
     }
 
     @Test
-    void list_withNoCuratorConfigured_saysSoWithoutCallingIt() {
-        when(scheduler.isEnabled()).thenReturn(false);
+    void list_whileThePlaylistsAreOff_saysSoWithoutCallingTheCurator() {
+        when(scheduler.isOn()).thenReturn(Mono.just(false));
 
         StepVerifier.create(controller.list())
                 .assertNext(view -> {
@@ -47,7 +47,7 @@ class SuggestedPlaylistControllerTest {
 
     @Test
     void list_mapsTheCuratorsEditions() {
-        when(scheduler.isEnabled()).thenReturn(true);
+        when(scheduler.isOn()).thenReturn(Mono.just(true));
         when(scheduler.getRefreshDay()).thenReturn(DayOfWeek.MONDAY);
         when(client.getEditions()).thenReturn(Mono.just(List.of(
                 new CuratorEditionSummary("80s-indie-pop", "80s indie pop", "1980-1989", "2026-09-27", 40),
@@ -72,7 +72,7 @@ class SuggestedPlaylistControllerTest {
 
     @Test
     void list_withNoEditionsYet_isEnabledAndEmpty() {
-        when(scheduler.isEnabled()).thenReturn(true);
+        when(scheduler.isOn()).thenReturn(Mono.just(true));
         when(client.getEditions()).thenReturn(Mono.just(List.of()));
 
         StepVerifier.create(controller.list())
@@ -85,7 +85,7 @@ class SuggestedPlaylistControllerTest {
 
     @Test
     void one_mapsTracksInOrder_dropsIdlessOnes_andBuildsThumbnails() {
-        when(scheduler.isEnabled()).thenReturn(true);
+        when(scheduler.isOn()).thenReturn(Mono.just(true));
         when(client.getEdition("80s-indie-pop")).thenReturn(Mono.just(edition()));
 
         StepVerifier.create(controller.one("80s-indie-pop"))
@@ -122,8 +122,8 @@ class SuggestedPlaylistControllerTest {
     }
 
     @Test
-    void one_withNoCuratorConfigured_is503WithoutCallingIt() {
-        when(scheduler.isEnabled()).thenReturn(false);
+    void one_whileThePlaylistsAreOff_is503WithoutCallingTheCurator() {
+        when(scheduler.isOn()).thenReturn(Mono.just(false));
 
         StepVerifier.create(controller.one("80s-indie-pop"))
                 .assertNext(response -> assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode()))
@@ -141,7 +141,7 @@ class SuggestedPlaylistControllerTest {
 
     @Test
     void refresh_asksTheSchedulerAndAnswers202WithTheRun() {
-        when(scheduler.isEnabled()).thenReturn(true);
+        when(scheduler.isOn()).thenReturn(Mono.just(true));
         CuratorRun queued = new CuratorRun("r1", "queued", "2026-09-28T10:14:39Z", null, null, List.of(
                 new CuratorCategoryResult("80s-indie-pop", "queued", null, null, null)));
         when(scheduler.refreshNow()).thenReturn(Mono.just(queued));
@@ -158,8 +158,8 @@ class SuggestedPlaylistControllerTest {
     }
 
     @Test
-    void refresh_withNoCuratorConfigured_is503WithoutTriggering() {
-        when(scheduler.isEnabled()).thenReturn(false);
+    void refresh_whileThePlaylistsAreOff_is503WithoutTriggering() {
+        when(scheduler.isOn()).thenReturn(Mono.just(false));
 
         StepVerifier.create(controller.refresh())
                 .assertNext(response -> assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode()))
@@ -169,7 +169,7 @@ class SuggestedPlaylistControllerTest {
 
     @Test
     void latestRun_readsTheCuratorsLatestRun() {
-        when(scheduler.isEnabled()).thenReturn(true);
+        when(scheduler.isOn()).thenReturn(Mono.just(true));
         when(client.getLatestRun()).thenReturn(Mono.just(new CuratorRun("r2", "partial", "2026-09-28T10:14:39Z",
                 "2026-09-28T10:14:40Z", "2026-09-28T10:17:28Z", List.of(
                 new CuratorCategoryResult("90s-grime", "no_albums", "2026-09-28", null, "Discogs returned no albums")))));
@@ -184,8 +184,8 @@ class SuggestedPlaylistControllerTest {
     }
 
     @Test
-    void latestRun_withNoCuratorConfigured_is503() {
-        when(scheduler.isEnabled()).thenReturn(false);
+    void latestRun_whileThePlaylistsAreOff_is503() {
+        when(scheduler.isOn()).thenReturn(Mono.just(false));
 
         StepVerifier.create(controller.latestRun())
                 .assertNext(response -> assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode()))

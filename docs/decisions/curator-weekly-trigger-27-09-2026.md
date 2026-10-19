@@ -85,3 +85,22 @@ runs: the curator hands the active run back to a second trigger.
 The poll budget went from 30 minutes to 2 hours (`curator.run-budget-ms`): a full run over 49 categories
 takes about 80-90 minutes, so every real run used to end with a misleading "still running after PT30M"
 warning while the curator was still working.
+
+## Addendum 19-10-2026: opt-in, and `first-run-on-start` gated by the switch
+
+The owner's ask 13: suggested playlists are "opt in ... if you choose not to they won't happen", changeable
+in Settings. One stored boolean, `install_settings.suggested_playlists` (V18, the first-run setup's one-row
+table), default **false**. `CuratorScheduler.enabled` became `isConfigured()` (url + token, as before: "this
+install has a playlist maker") and `isOn()` = configured AND the switch, read from the row at each cron tick,
+at boot and on every `/suggested-playlists*` request (one SELECT; no restart to flip it). While off: no tick,
+no first run, `GET /suggested-playlists` answers `{enabled:false}` (the web app hides its "Made for you" shelf
+and its "Make this week's playlists now" button), the other routes 503, as for an unconfigured curator. The
+switch is `GET|PUT /settings/suggested-playlists` (`settings/SuggestedPlaylistsSettingsController`); switching
+on calls `firstRun(Duration.ZERO)`, the boot check without its two-minute grace, so the Home page gets its
+first set without waiting for Monday, and only when the curator holds no editions yet (an install that already
+has playlists starts no 90-minute run on a flip). Home Assistant's analytics screen is the shape: a switch, off
+by default, Next means no. Existing installs: V18 seeds the switch TRUE where the database already holds a
+`CURATED` download (the feature was in use), so the owner's weekly run does not stop at the upgrade; fresh
+installs start OFF. `CURATOR_FIRST_RUN_ON_START` keeps its job for the boot case but is now gated by the switch
+too (flip: delete the key and let the switch be the only first-run trigger). Flip: seed OFF everywhere (drop the
+`INSERT` in V18).

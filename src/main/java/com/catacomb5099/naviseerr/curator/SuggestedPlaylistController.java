@@ -11,15 +11,18 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
+import java.util.function.Supplier;
+
 /**
  * The client's view of the playlist curator's work: the weekly "suggested playlists". naviseerr reads
  * them from the curator on every request (the curator holds the files; naviseerr keeps no copy, so
  * there is nothing to go stale) and hands them over in the client's own vocabulary. The client never
  * talks to the curator itself: the curator needs the shared token, which belongs on the server.
  *
- * <p>Off unless the curator is configured, the same rule as the weekly refresh: the list then says
- * {@code enabled: false} and the detail route answers 503, so a client can tell "this install has no
- * curator" from "the curator is down" (502) and "no edition yet" (404).
+ * <p>Off unless the curator is configured AND the person switched weekly playlists on
+ * ({@link CuratorScheduler#isOn()}), the same rule as the weekly refresh: the list then says
+ * {@code enabled: false} (the web app hides its "Made for you" shelf) and the other routes answer 503, so
+ * a client can tell "no playlists here" from "the curator is down" (502) and "no edition yet" (404).
  */
 @Slf4j
 @RestController
@@ -28,13 +31,12 @@ public class SuggestedPlaylistController {
     private final CuratorClient client;
     private final CuratorScheduler scheduler;
 
-    /** The latest edition per category. Always 200 when the curator is off, with {@code enabled: false}. */
+    /** The latest edition per category. Always 200 when the playlists are off, with {@code enabled: false}. */
     @GetMapping("/suggested-playlists")
     Mono<SuggestedPlaylistsView> list() {
-        if (!scheduler.isEnabled()) {
-            return Mono.just(SuggestedPlaylistsView.off());
-        }
-        return client.getEditions().map(editions -> SuggestedPlaylistsView.of(scheduler.getRefreshDay(), editions));
+        return scheduler.isOn().flatMap(on -> on
+                ? client.getEditions().map(editions -> SuggestedPlaylistsView.of(scheduler.getRefreshDay(), editions))
+                : Mono.just(SuggestedPlaylistsView.off()));
     }
 
     /** One category's latest edition with every song. 404 when the curator has none for it yet. */
@@ -43,16 +45,13 @@ public class SuggestedPlaylistController {
         if (category == null || category.isBlank()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        if (!scheduler.isEnabled()) {
-            return Mono.just(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build());
-        }
-        return client.getEdition(category)
+        return whenOn(() -> client.getEdition(category)
                 .map(edition -> {
                     SuggestedPlaylistView view = SuggestedPlaylistView.from(category, edition);
                     log.info("Suggested playlist '{}' edition {}: {} songs", category, view.editionDate(),
                             view.trackCount());
                     return ResponseEntity.ok(view);
-                });
+                }));
     }
 
     /**
@@ -62,11 +61,7 @@ public class SuggestedPlaylistController {
      */
     @PostMapping("/suggested-playlists/refresh")
     Mono<ResponseEntity<CuratorRun>> refresh() {
-        if (!scheduler.isEnabled()) {
-            return Mono.just(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build());
-        }
-        return scheduler.refreshNow()
-                .map(run -> ResponseEntity.status(HttpStatus.ACCEPTED).body(run));
+        return whenOn(() -> scheduler.refreshNow().map(run -> ResponseEntity.status(HttpStatus.ACCEPTED).body(run)));
     }
 
     /**
@@ -76,10 +71,12 @@ public class SuggestedPlaylistController {
      */
     @GetMapping("/suggested-playlists/refresh")
     Mono<ResponseEntity<CuratorRun>> latestRun() {
-        if (!scheduler.isEnabled()) {
-            return Mono.just(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build());
-        }
-        return client.getLatestRun().map(ResponseEntity::ok);
+        return whenOn(() -> client.getLatestRun().map(ResponseEntity::ok));
+    }
+
+    /** 503 while the playlists are off (no curator, or the switch off), without touching the curator (hence the supplier). */
+    private <T> Mono<ResponseEntity<T>> whenOn(Supplier<Mono<ResponseEntity<T>>> answer) {
+        return scheduler.isOn().flatMap(on -> on ? answer.get() : Mono.just(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build()));
     }
 
     /**

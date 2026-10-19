@@ -247,7 +247,9 @@ install:
 # Playlist curator: the separate croissant service (in both compose files) builds a fresh "suggested
 # playlists" edition per category. naviseerr owns the clock: once a week it tells the curator to start,
 # then checks back every poll-interval until the run is done. OFF unless BOTH url and token are set -- an
-# install without a curator behaves exactly as before. See docs/decisions/curator-weekly-trigger-27-09-2026.md.
+# install without a curator behaves exactly as before. Since 19-10-2026 ALSO off until the person switches
+# "Make weekly playlists for me" on (the first-run setup or Settings; install_settings.suggested_playlists).
+# See docs/decisions/curator-weekly-trigger-27-09-2026.md.
 curator:
   # Where the curator is reachable. Default matches the port compose.dev.yaml publishes.
   url: ${CURATOR_URL:http://localhost:8010}
@@ -273,4 +275,5 @@ curator:
   # refresh right away. Off here on purpose: compose.yaml passes CURATOR_FIRST_RUN_ON_START=true to
   # the Docker install, while a jar started by hand (IntelliJ, `./gradlew test` with a dev .env that
   # holds a CURATOR_TOKEN) must never start a 90-minute Discogs/YouTube run on its own. Empty = off.
+  # Gated by the switch above too; switching it on in the app runs the same check at once.
   first-run-on-start: ${CURATOR_FIRST_RUN_ON_START:false}

@@ -108,4 +108,18 @@ class InstallSettingsRepositoryIT {
         assertNull(repository.find().block().jellyfinUrl());
         assertEquals(1L, rows(), "clearing keeps the row");
     }
+
+    @Test
+    void theWeeklyPlaylistsSwitch_isOffWithNoRow_andFlipsWithoutTouchingTheRest() {
+        assertEquals(Boolean.FALSE, repository.suggestedPlaylists().block(), "a fresh install makes no playlists");
+
+        repository.saveJellyfin("http://nas:8096", "k3y").block();
+        repository.setSuggestedPlaylists(true).block();
+        assertEquals(Boolean.TRUE, repository.suggestedPlaylists().block());
+        assertEquals("k3y", repository.find().block().jellyfinApiKey(), "the switch leaves the other answers alone");
+
+        repository.setSuggestedPlaylists(false).block();
+        assertEquals(Boolean.FALSE, repository.suggestedPlaylists().block());
+        assertEquals(1L, rows());
+    }
 }
