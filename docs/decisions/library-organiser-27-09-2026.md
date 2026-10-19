@@ -258,9 +258,11 @@ stem, rewritten whole on every finalise. About a quarter of a megabyte per playl
 | older servers | < 0.61: no sidecar, mosaic only (README says "0.61 or newer") | any version with the API |
 
 **Flippable choices (defaults first).** A playlist gets the picture it had in the app at download time,
-1200 px JPEG. CURATED and RADIO-with-video-seed downloads get **no** sidecar: their picture is a 4:3
-`i.ytimg.com` video frame, the wrong shape for a square tile, so the servers keep their mosaic (the better
-tile). Flip: let `SongTagger.coverUrl` accept `i.ytimg.com` (one regex) or build `maxresdefault.jpg`.
+1200 px JPEG. CURATED and RADIO-with-video-seed downloads get **no** sidecar: what the web app shows for a
+suggested playlist is a tile it draws itself (the title on a colour field, `SuggestedPlaylistCover.tsx`),
+which the server has no bytes for; what it stores is a 4:3 `i.ytimg.com` video frame, which is not what the
+user saw, so the servers keep their mosaic (the better tile). Follow-up: draw that same tile as a JPEG on
+the server. Flip: let `SongTagger.coverUrl` accept `i.ytimg.com` (one regex) or build `maxresdefault.jpg`.
 Picture unreachable: the playlist file is written as before, no sidecar, one INFO line; a retry's finalise
 tries again; an older sidecar is kept. Two playlists with one title share both files (known, above).
 
