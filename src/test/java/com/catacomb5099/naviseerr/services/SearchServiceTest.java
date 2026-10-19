@@ -450,10 +450,4 @@ class SearchServiceTest {
         ResponseEntity<Void> response = searchService.handleBadRequest(new YtMusicBadRequestException("bad"));
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }
-
-    @Test
-    void handleUnavailable_mapsTo502() {
-        ResponseEntity<Void> response = searchService.handleUnavailable(new YtMusicUnavailableException("down"));
-        assertEquals(HttpStatus.BAD_GATEWAY, response.getStatusCode());
-    }
 }

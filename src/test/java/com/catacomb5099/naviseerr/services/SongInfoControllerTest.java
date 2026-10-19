@@ -3,6 +3,7 @@ package com.catacomb5099.naviseerr.services;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableException;
+import com.catacomb5099.naviseerr.services.ytmusic.YtMusicUnavailableAdvice;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicDetailResponse;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YtMusicSearchResponse;
 import org.junit.jupiter.api.Test;
@@ -28,7 +29,7 @@ class SongInfoControllerTest {
 
     private final YtMusicService ytMusicService = mock(YtMusicService.class);
     private final SongInfoController controller = new SongInfoController(ytMusicService);
-    private final WebTestClient client = WebTestClient.bindToController(controller).build();
+    private final WebTestClient client = WebTestClient.bindToController(controller).controllerAdvice(new YtMusicUnavailableAdvice()).build();
 
     private static YtMusicDetailResponse.SongDetails albumTrack() {
         return YtMusicDetailResponse.SongDetails.builder()
@@ -141,13 +142,14 @@ class SongInfoControllerTest {
     }
 
     @Test
-    void adapterUnavailable_propagates_andHandlerMapsTo502() {
+    void adapterUnavailable_is502_namingYouTubeMusic() {
         when(ytMusicService.getSongDetails("vid1")).thenReturn(Mono.error(new YtMusicUnavailableException("down")));
 
-        StepVerifier.create(controller.song("vid1")).verifyError(YtMusicUnavailableException.class);
-
-        ResponseEntity<Void> response = controller.handleUnavailable(new YtMusicUnavailableException("down"));
-        assertEquals(HttpStatus.BAD_GATEWAY, response.getStatusCode());
+        client.get().uri("/songs/vid1").exchange()
+                .expectStatus().isEqualTo(502)
+                .expectBody()
+                .jsonPath("$.reason").isEqualTo("YOUTUBE_MUSIC_UNAVAILABLE")
+                .jsonPath("$.message").isEqualTo("YouTube Music is not answering right now. Try again in a minute.");
     }
 
     private WebTestClient.ResponseSpec views(String ids) {

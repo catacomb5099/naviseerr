@@ -88,6 +88,19 @@ Two-exception hierarchy, both extending `YtMusicException`
 | client-side timeout / connection refused / decode failure | `YtMusicUnavailableException` | Yes |
 | `500` whose body is not JSON (a stall: YouTube held the call 5-10 s, then sent an empty body, and the adapter's unhandled `JSONDecodeError` became FastAPI's plain-text 500) | `YtMusicUnavailableException` ("…unreadable error body") | Yes |
 
+`YtMusicUnavailableException` remembers one thing about its cause: `rateLimited`, true only when the
+adapter answered 429. Every route that reads YouTube Music live (`/search/**`, `/collections/{id}`,
+`/artists/{id}`, `/songs/{id}`, `POST /radios`) answers it through one `@RestControllerAdvice`,
+`YtMusicUnavailableAdvice`: 502 with `{"reason": "YOUTUBE_MUSIC_UNAVAILABLE" | "YOUTUBE_MUSIC_RATE_LIMITED",
+"message": "<the sentence the web app prints>"}`, logged once at WARN without a stack trace. Until
+19-10-2026 each controller had its own copy answering an empty 502, so the web app could only guess
+from the URL and never named YouTube Music; see
+[docs/decisions/youtube-music-outage-19-10-2026.md](../decisions/youtube-music-outage-19-10-2026.md).
+A controller's own `@ExceptionHandler` for the type would be resolved before the advice, so none
+may be added. The adapter's own `upstream_unreachable` (502, a DNS or connection failure between the
+adapter and YouTube, 19-10-2026) and `upstream_timeout` (504, a slow YouTube answer) both land in the
+"any other status" row: the server treats them alike, the adapter's log tells them apart.
+
 On top of this, every search route caps each try and asks again after a slow one; see "Stalls" below.
 
 Retries reuse [ReactivePoller.defaultBackoff](../../src/main/java/com/catacomb5099/naviseerr/util/networkcalls/ReactivePoller.java)
