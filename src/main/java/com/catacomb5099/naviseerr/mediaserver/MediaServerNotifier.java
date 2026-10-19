@@ -39,12 +39,13 @@ import java.util.function.Supplier;
  * beside a playlist file ({@link #playlistWritten}) is sent through Jellyfin's image API once Jellyfin
  * has imported the playlist (polled, up to {@link #COVER_POLLS} times): fire and forget, off the pass.
  *
- * <p>Off (nothing configured, nothing logged beyond one line at boot) unless {@code NAVIDROME_URL} or
- * {@code JELLYFIN_URL} is set. See docs/decisions/media-server-rescan-19-10-2026.md.
+ * <p>Off (nothing configured, nothing logged beyond one line at boot) unless a server is set, in the
+ * web app's Settings or by {@code NAVIDROME_URL} / {@code JELLYFIN_URL} in the install file. The settings
+ * controller calls {@link #reconfigure()} after it changed the clients (at boot from the saved row, and
+ * after every save), so no restart. See docs/decisions/media-server-rescan-19-10-2026.md.
  */
 // ponytail: the pending flag and the last outcomes live in memory and are lost on restart; the boot
-// mark covers the restart case. A settings table (and the in-app "Connect" screen Lidarr has) waits
-// for the login, since a Navidrome admin password must not be shown on an open LAN port.
+// mark covers the restart case.
 @Slf4j
 @Component
 public class MediaServerNotifier {
@@ -55,12 +56,15 @@ public class MediaServerNotifier {
     /** How many times, {@code cover-poll-ms} apart, to ask Jellyfin for a just-written playlist before giving up on its picture (36 x 5 s = 3 min). */
     static final int COVER_POLLS = 36;
 
-    private final List<Target> targets = new ArrayList<>();
+    /** Replaced whole by {@link #reconfigure()}, never edited in place, so a flush in progress keeps its own list. */
+    private volatile List<Target> targets = List.of();
+    private final NavidromeClient navidrome;
+    private final JellyfinClient jellyfin;
+    private final LibraryOrganiser organiser;
     private final Duration gap;
     private final Duration coverPoll;
-    /** Set when Jellyfin is configured with a key; the only server whose playlist pictures need pushing. */
-    private final JellyfinClient jellyfin;
-    private Target jellyfinTarget;
+    /** Set while Jellyfin is configured with a key: the only server whose playlist pictures need pushing. */
+    private volatile Target jellyfinTarget;
     /** Playlist files written since the last Jellyfin rescan, whose sidecar picture is still to push. */
     private final Set<Path> pendingCovers = ConcurrentHashMap.newKeySet();
     private volatile boolean pending = true;   // the boot check
@@ -69,34 +73,64 @@ public class MediaServerNotifier {
     public MediaServerNotifier(NavidromeClient navidrome, JellyfinClient jellyfin, LibraryOrganiser organiser,
                                @Value("${media-servers.rescan-gap-ms}") Duration gap,
                                @Value("${media-servers.cover-poll-ms}") Duration coverPoll) {
+        this.navidrome = navidrome;
+        this.jellyfin = jellyfin;
+        this.organiser = organiser;
         this.gap = gap;
         this.coverPoll = coverPoll;
+        reconfigure();
+    }
+
+    /**
+     * The clients point somewhere else now (the install file at boot, the saved row, a save in Settings):
+     * rebuild the list of servers to ask. A server whose name and address did not change keeps its last
+     * outcome, so one save does not blank the other server's status; everything is checked again at the
+     * next pass (the boot-check path, with the gap waived), so a stale "refused the password" on the server
+     * just saved lasts seconds, not until the next filed download.
+     */
+    public synchronized void reconfigure() {
+        List<Target> before = targets;
+        List<Target> next = new ArrayList<>();
+        Target jf = null;
         if (navidrome.isConfigured()) {
             if (navidrome.hasCredentials()) {
-                targets.add(new Target("Navidrome", navidrome.url(), navidrome::rescan));
+                next.add(keep(before, new Target("Navidrome", navidrome.url(), navidrome::rescan)));
             } else {
-                log.warn("NAVIDROME_URL is set but NAVIDROME_USER / NAVIDROME_PASSWORD are not; Navidrome is not told about new music");
+                log.warn("Navidrome's address is set but not its username and password; Navidrome is not told about new music");
             }
         }
         if (jellyfin.isConfigured()) {
             if (jellyfin.hasCredentials()) {
-                jellyfinTarget = new Target("Jellyfin", jellyfin.url(), jellyfin::rescan);
-                targets.add(jellyfinTarget);
+                jf = keep(before, new Target("Jellyfin", jellyfin.url(), jellyfin::rescan));
+                next.add(jf);
             } else {
-                log.warn("JELLYFIN_URL is set but JELLYFIN_API_KEY is not; Jellyfin is not told about new music");
+                log.warn("Jellyfin's address is set but not its API key; Jellyfin is not told about new music");
             }
         }
-        this.jellyfin = jellyfinTarget == null ? null : jellyfin;
-        if (targets.isEmpty()) {
-            log.info("Media servers: none configured (set NAVIDROME_URL or JELLYFIN_URL to have them rescan after a download)");
+        jellyfinTarget = jf;
+        targets = List.copyOf(next);
+        pending = true;
+        lastSentAt = null;
+        if (next.isEmpty()) {
+            log.info("Media servers: none configured (choose one in Settings, or set NAVIDROME_URL or JELLYFIN_URL, to have it rescan after a download)");
         } else {
             log.info("Media servers: {}; asked to rescan after each filed download, at most once every {} s",
-                    String.join(", ", targets.stream().map(t -> t.name + " " + t.url).toList()), gap.toSeconds());
+                    String.join(", ", next.stream().map(t -> t.name + " " + t.url).toList()), gap.toSeconds());
             if (!organiser.isEnabled()) {
                 log.warn("Media servers are configured but the library organiser is OFF: nothing is ever filed, so "
                         + "they are only asked to rescan once at start");
             }
         }
+    }
+
+    /** The same server as before (name and address): its last outcome stays; otherwise the fresh target. */
+    private static Target keep(List<Target> before, Target fresh) {
+        for (Target t : before) {
+            if (t.name.equals(fresh.name) && t.url.equals(fresh.url)) {
+                return t;
+            }
+        }
+        return fresh;
     }
 
     /** Something new is in the library (a download was stamped organised). Cheap; call it as often as you like. */
@@ -109,25 +143,27 @@ public class MediaServerNotifier {
      * after the next rescan. Nothing to do without Jellyfin.
      */
     public void playlistWritten(Path m3u8) {
-        if (jellyfin != null) {
+        if (jellyfinTarget != null) {
             pendingCovers.add(m3u8);
         }
     }
 
     /** Sends the pending rescan to every configured server when the gap since the last one has passed. */
     public Mono<Void> flush(Instant now) {
-        if (targets.isEmpty() || !pending || (lastSentAt != null && now.isBefore(lastSentAt.plus(gap)))) {
+        List<Target> current = targets;
+        if (current.isEmpty() || !pending || (lastSentAt != null && now.isBefore(lastSentAt.plus(gap)))) {
             return Mono.empty();
         }
         pending = false;
         lastSentAt = now;
-        return Flux.fromIterable(targets).flatMap(target -> target.send(now)).then()
+        return Flux.fromIterable(current).flatMap(target -> target.send(now)).then()
                 .then(Mono.fromRunnable(this::pushPendingCovers));
     }
 
     /** Off the pass: Jellyfin needs up to a minute or two to import a new playlist file. Kept for the next rescan when this one failed. */
     private void pushPendingCovers() {
-        if (jellyfin == null || pendingCovers.isEmpty() || jellyfinTarget.problem != null) {
+        Target jf = jellyfinTarget;
+        if (jf == null || pendingCovers.isEmpty() || jf.problem != null) {
             return;
         }
         List<Path> covers = new ArrayList<>(pendingCovers);

@@ -129,6 +129,33 @@ class MediaServerNotifierTest {
         assertEquals(1, jellyfinCalls.get());
     }
 
+    @Test
+    void reconfigure_replacesTheTargets_keepsTheUnchangedOnesOutcome_andChecksAgainAtTheNextFlush() {
+        when(jellyfin.rescan()).thenReturn(Mono.error(new MediaServerException("Jellyfin refused the API key.")));
+        MediaServerNotifier notifier = notifier();
+        notifier.flush(T0).block();                       // boot check: Navidrome fine, Jellyfin refused
+        assertEquals("Jellyfin refused the API key.", notifier.status().get(1).problem());
+
+        // Settings saved another Navidrome; Jellyfin is as it was.
+        when(navidrome.url()).thenReturn("http://nas:4534");
+        notifier.reconfigure();
+
+        List<MediaServerNotifier.MediaServerStatus> status = notifier.status();
+        assertEquals(new MediaServerNotifier.MediaServerStatus("Navidrome", "http://nas:4534", null, null), status.get(0),
+                "a changed server starts afresh");
+        assertEquals("Jellyfin refused the API key.", status.get(1).problem(), "an unchanged server keeps its outcome");
+        assertEquals(T0, status.get(1).lastRescanAt() == null ? T0 : status.get(1).lastRescanAt());
+
+        notifier.flush(T0.plusSeconds(1)).block();        // inside the old gap, still sent: the post-save check
+        assertEquals(2, navidromeCalls.get());
+        assertEquals(T0.plusSeconds(1), notifier.status().get(0).lastRescanAt());
+
+        when(jellyfin.isConfigured()).thenReturn(false);  // Settings forgot Jellyfin
+        notifier.reconfigure();
+        assertEquals(1, notifier.status().size());
+        assertEquals("Navidrome", notifier.status().getFirst().name());
+    }
+
     @TempDir Path tmp;
 
     private static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 1};

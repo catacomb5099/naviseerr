@@ -87,6 +87,26 @@ a playlist Jellyfin never lists keeps its collage until the next finalise, one W
 because Jellyfin went away is kept for its next rescan; no retry column (deliberately in memory). Side effect to know about:
 Jellyfin saves its own `<title>-poster.jpg` and `<title>.xml` beside the playlist file.
 
+## Addendum 19-10-2026 (evening): chosen in the app, not in the install file
+
+The owner's ask 13 (a first-run setup "like a new phone" and a Settings page) made the five env lines the
+fallback rather than the only way. `GET|PUT|DELETE /settings/media-servers` (`settings/MediaServerSettingsController`)
+is the Lidarr/Sonarr "Connect" shape: pick Navidrome or Jellyfin, fill address and login, **Save and test**.
+The test is ONE real `rescan()` with the typed values (`NavidromeClient.test`, `JellyfinClient.test`: proves
+address, login and, for Navidrome, that the account is an admin; an incremental scan is harmless); only then
+are the values written to `install_settings` (V18, the setup chain's one-row table) and the client repointed
+live (`reconfigure`; `reset` goes back to the install file's lines), and `MediaServerNotifier.reconfigure()`
+rebuilds its targets (a server whose name and address did not change keeps its last outcome; `pending` is set
+and the gap waived, so the next pass checks everything again). The saved row is applied at boot
+(`ApplicationReadyEvent`, after Flyway). **The app wins over the install file**: the reverse of the Soulseek
+files, where the compose value wins, because nothing re-renders these from env at start. The two `WebClient`
+beans fixed at boot are gone: each client builds its own from `MediaServerConfig.http` whenever its connection
+changes. The error sentences lost their env names ("Navidrome refused the username or password." instead of
+"... (NAVIDROME_USER / NAVIDROME_PASSWORD)"; "Could not reach nas:4533: Connection refused. Is Navidrome running,
+and can this server reach it?") since they are now screen text. Secrets are write-only (`passwordSet`,
+`apiKeySet`; an empty field keeps the stored one). Flips: env wins (then the section shows a "set in the install
+file" note); two servers at once in the app (today one PUT saves one server; the other can still come from env).
+
 ## Consequences
 
 - No schema change. The notifier's state (pending flag, last outcome per server) is in memory and lost on

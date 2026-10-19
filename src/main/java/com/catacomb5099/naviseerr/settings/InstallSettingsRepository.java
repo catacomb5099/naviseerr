@@ -26,6 +26,24 @@ public class InstallSettingsRepository {
             ON CONFLICT (one) DO UPDATE SET setup_completed_at = now(), updated_at = now()
             """;
 
+    private static final String SAVE_NAVIDROME_SQL = """
+            INSERT INTO install_settings (navidrome_url, navidrome_user, navidrome_password) VALUES (:url, :username, :password)
+            ON CONFLICT (one) DO UPDATE SET navidrome_url = EXCLUDED.navidrome_url, navidrome_user = EXCLUDED.navidrome_user,
+                                            navidrome_password = EXCLUDED.navidrome_password, updated_at = now()
+            """;
+
+    private static final String SAVE_JELLYFIN_SQL = """
+            INSERT INTO install_settings (jellyfin_url, jellyfin_api_key) VALUES (:url, :apiKey)
+            ON CONFLICT (one) DO UPDATE SET jellyfin_url = EXCLUDED.jellyfin_url, jellyfin_api_key = EXCLUDED.jellyfin_api_key,
+                                            updated_at = now()
+            """;
+
+    private static final String CLEAR_NAVIDROME_SQL = "UPDATE install_settings SET navidrome_url = NULL, navidrome_user = NULL, "
+            + "navidrome_password = NULL, updated_at = now()";
+
+    private static final String CLEAR_JELLYFIN_SQL = "UPDATE install_settings SET jellyfin_url = NULL, jellyfin_api_key = NULL, "
+            + "updated_at = now()";
+
     private final DatabaseClient client;
 
     public InstallSettingsRepository(R2dbcEntityTemplate entityTemplate) {
@@ -48,5 +66,24 @@ public class InstallSettingsRepository {
     /** Finish (or skip through) the first-run setup: from now on the app opens on its Home page. */
     public Mono<Void> markSetupDone() {
         return client.sql(MARK_SETUP_DONE_SQL).fetch().rowsUpdated().then();
+    }
+
+    /** The Navidrome the app tells about new music (after "Save and test" passed); wins over the install file's lines. */
+    public Mono<Void> saveNavidrome(String url, String username, String password) {
+        return client.sql(SAVE_NAVIDROME_SQL).bind("url", url).bind("username", username).bind("password", password)
+                .fetch().rowsUpdated().then();
+    }
+
+    public Mono<Void> saveJellyfin(String url, String apiKey) {
+        return client.sql(SAVE_JELLYFIN_SQL).bind("url", url).bind("apiKey", apiKey).fetch().rowsUpdated().then();
+    }
+
+    /** Back to the install file's lines (or to none) for that server. No row: nothing to clear. */
+    public Mono<Void> clearNavidrome() {
+        return client.sql(CLEAR_NAVIDROME_SQL).fetch().rowsUpdated().then();
+    }
+
+    public Mono<Void> clearJellyfin() {
+        return client.sql(CLEAR_JELLYFIN_SQL).fetch().rowsUpdated().then();
     }
 }

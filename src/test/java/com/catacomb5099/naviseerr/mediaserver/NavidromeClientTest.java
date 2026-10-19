@@ -28,8 +28,7 @@ class NavidromeClientTest {
         server = new MockWebServer();
         server.start();
         String url = server.url("/").toString();
-        client = new NavidromeClient(MediaServerConfig.http(url, Duration.ofSeconds(2)).build(),
-                url, "admin", "s3cret", Duration.ofSeconds(2));
+        client = new NavidromeClient(url, "admin", "s3cret", Duration.ofSeconds(2));
     }
 
     @AfterEach
@@ -72,7 +71,7 @@ class NavidromeClientTest {
         StepVerifier.create(client.rescan())
                 .expectErrorSatisfies(error -> {
                     assertInstanceOf(MediaServerException.class, error);
-                    assertTrue(error.getMessage().contains("rejected the username or password"), error.getMessage());
+                    assertEquals("Navidrome refused the username or password.", error.getMessage());
                     assertFalse(error.getMessage().contains("s3cret"));
                 })
                 .verify();
@@ -87,8 +86,7 @@ class NavidromeClientTest {
 
         StepVerifier.create(client.rescan())
                 .expectErrorSatisfies(error -> {
-                    assertTrue(error.getMessage().contains("only lets an admin start a scan"), error.getMessage());
-                    assertTrue(error.getMessage().contains("ND_SCANNER_ADMINONLY"), error.getMessage());
+                    assertEquals("Navidrome only lets an admin start a scan: use an admin account.", error.getMessage());
                 })
                 .verify();
     }
@@ -112,7 +110,7 @@ class NavidromeClientTest {
         StepVerifier.create(client.rescan())
                 .expectErrorSatisfies(error -> {
                     assertTrue(error.getMessage().startsWith("Navidrome at http://"), error.getMessage());
-                    assertTrue(error.getMessage().endsWith("did not answer: HTTP 502"), error.getMessage());
+                    assertTrue(error.getMessage().endsWith(" answered HTTP 502."), error.getMessage());
                     assertFalse(error.getMessage().contains("startScan"), "no URL (it carries the auth token)");
                 })
                 .verify();
@@ -121,7 +119,8 @@ class NavidromeClientTest {
         StepVerifier.create(client.rescan())
                 .expectErrorSatisfies(error -> {
                     assertInstanceOf(MediaServerException.class, error);
-                    assertTrue(error.getMessage().contains("did not answer"), error.getMessage());
+                    assertTrue(error.getMessage().startsWith("Could not reach "), error.getMessage());
+                    assertTrue(error.getMessage().endsWith(". Is Navidrome running, and can this server reach it?"), error.getMessage());
                     assertFalse(error.getMessage().contains("startScan"), error.getMessage());
                 })
                 .verify();
@@ -131,14 +130,33 @@ class NavidromeClientTest {
     void configuredAndCredentials_followTheSettings() {
         assertTrue(client.isConfigured());
         assertTrue(client.hasCredentials());
-        NavidromeClient unset = new NavidromeClient(MediaServerConfig.http("", Duration.ofSeconds(1)).build(),
-                "", "", "", Duration.ofSeconds(1));
+        NavidromeClient unset = new NavidromeClient("", "", "", Duration.ofSeconds(1));
         assertFalse(unset.isConfigured());
-        NavidromeClient noLogin = new NavidromeClient(MediaServerConfig.http("http://nas:4533/", Duration.ofSeconds(1)).build(),
-                "http://nas:4533/", "admin", "", Duration.ofSeconds(1));
+        NavidromeClient noLogin = new NavidromeClient("http://nas:4533/", "admin", "", Duration.ofSeconds(1));
         assertTrue(noLogin.isConfigured());
         assertFalse(noLogin.hasCredentials());
         assertEquals("http://nas:4533", noLogin.url(), "trailing slash dropped");
+    }
+
+    @Test
+    void reconfigure_pointsRescanAtTheNewServer_test_keepsNothing_andReset_goesBackToTheInstallFile() throws InterruptedException {
+        NavidromeClient fromInstallFile = new NavidromeClient("", "", "", Duration.ofSeconds(2));
+        assertFalse(fromInstallFile.isConfigured());
+
+        server.enqueue(json(200, OK));
+        StepVerifier.create(fromInstallFile.test(server.url("/").toString(), "typed", "pw")).verifyComplete();
+        assertTrue(server.takeRequest().getPath().contains("u=typed"));
+        assertFalse(fromInstallFile.isConfigured(), "a test stores nothing");
+
+        fromInstallFile.reconfigure(server.url("/").toString(), "saved", "pw");
+        assertTrue(fromInstallFile.isConfigured());
+        assertEquals("saved", fromInstallFile.username());
+        server.enqueue(json(200, OK));
+        StepVerifier.create(fromInstallFile.rescan()).verifyComplete();
+        assertTrue(server.takeRequest().getPath().contains("u=saved"));
+
+        fromInstallFile.reset();
+        assertFalse(fromInstallFile.isConfigured());
     }
 
     private static MockResponse json(int status, String body) {
