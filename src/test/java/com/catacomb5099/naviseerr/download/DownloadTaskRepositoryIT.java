@@ -769,17 +769,19 @@ class DownloadTaskRepositoryIT {
     // ---- songs the library already has -----------------------------------------------------------
 
     /** A song an earlier download filed: its row's own title and number, its pick's grade, its file. */
-    private void filed(UUID downloadId, String youtubeId, String title, Integer trackNumber, String grade, String path) {
+    private UUID filed(UUID downloadId, String youtubeId, String title, Integer trackNumber, String grade, String path) {
+        UUID taskId = UUID.randomUUID();
         var insert = template.getDatabaseClient()
                 .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, track_title, "
                         + "track_number, candidates, candidate_index, phase, phase_entered_at, next_attempt_at, "
-                        + "finished_at, library_path) VALUES (gen_random_uuid(), :dl, :yt, 'q', :title, :n, "
+                        + "finished_at, library_path) VALUES (:task, :dl, :yt, 'q', :title, :n, "
                         + ":candidates, 0, 'SUCCEEDED', :at, :at, :at, :path)")
-                .bind("dl", downloadId).bind("yt", youtubeId).bind("title", title)
+                .bind("task", taskId).bind("dl", downloadId).bind("yt", youtubeId).bind("title", title)
                 .bind("candidates", "[{\"grade\":\"" + grade + "\"}]").bind("at", NOW.minusSeconds(3600));
         insert = trackNumber == null ? insert.bindNull("n", Integer.class) : insert.bind("n", trackNumber);
         insert = path == null ? insert.bindNull("path", String.class) : insert.bind("path", path);
         insert.fetch().rowsUpdated().block();
+        return taskId;
     }
 
     private static DownloadTask wanted(String youtubeId, String title, Integer trackNumber) {
@@ -817,7 +819,76 @@ class DownloadTaskRepositoryIT {
                         wanted("supersonic-omv", "Supersonic (Official Video)", null),
                         wanted("wonderwall", "wonderwall", null),
                         wanted("wonderwall", "Wonderwall (Live)", null)),
-                "the video's twin by its album track; the same id only with the same title");
+                "the video's twin by its album track; the same id with the same title, not with another "
+                        + "title and no length to compare");
+    }
+
+    /** The library's Definitely Maybe, with Supersonic filed as track 6 and both rows' media known. */
+    private String definitelyMaybeSupersonic() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        media("MPREb_dm", "Definitely Maybe", "Oasis");
+        media("supersonic-atv", "Supersonic", "Oasis");
+        setTask(filed(album, "supersonic-atv", "Supersonic", 6, "EXACT", "/music/Oasis/DM/06.flac"), "duration_seconds = 284");
+        return "/music/Oasis/DM/06.flac";
+    }
+
+    @Test
+    void filedCopies_forAPlaylist_isTheSameTitleAndArtistUnderAnyId_butNotAVersion_norAnotherArtist() {
+        String file = definitelyMaybeSupersonic();
+        media("omv", "Oasis - Supersonic (Official Video)", "Oasis");          // the music video's row
+        media("remaster", "Supersonic (Remastered 2014) [Official Audio]", "Oasis");
+        media("live", "Supersonic (Live)", "Oasis");
+        media("ugc", "Supersonic", "Suede HQ");                                 // an uploader, not the artist
+        media("remix", "Supersonic (Daft Punk Remix)", "Oasis");                // "ft" inside a word is not a credit
+        media("live-video", "Supersonic (Live Video)", "Oasis");                // a version word keeps its group
+        media("other-take", "Supersonic", "Oasis");                             // 434 s against the album's 284 s
+
+        assertEquals(List.of("1 " + file, "2 " + file),
+                copies(DownloadType.PLAYLIST, "VL-britpop",
+                        wanted("omv", "Oasis - Supersonic (Official Video)", null),
+                        wanted("remaster", "Supersonic (Remastered 2014) [Official Audio]", null),
+                        wanted("live", "Supersonic (Live)", null),
+                        wanted("ugc", "Supersonic", null),
+                        wanted("remix", "Supersonic (Daft Punk Remix)", null),
+                        wanted("live-video", "Supersonic (Live Video)", null),
+                        wanted("other-take", "Supersonic", null).toBuilder().durationSeconds(434).build()),
+                "noise and the artist's own echo are not the name; a version word, another artist, a remix "
+                        + "or cover credit and a length more than a minute off are");
+    }
+
+    @Test
+    void filedCopies_forAPlaylist_neverTakesACopyFiledUnderAnAlbumNamedAsAVersion() {
+        UUID liveAlbum = insertDownload("SUCCEEDED", "ALBUM", "MPREb_kneb");
+        media("MPREb_kneb", "Live at Knebworth", "Oasis");
+        media("wonderwall-live", "Wonderwall", "Oasis");
+        filed(liveAlbum, "wonderwall-live", "Wonderwall", 3, "EXACT", "/music/Oasis/Knebworth/03.flac");
+        media("wonderwall-omv", "Wonderwall", "Oasis");
+
+        assertEquals(List.of(), copies(DownloadType.PLAYLIST, "VL-britpop", wanted("wonderwall-omv", "Wonderwall", null)),
+                "a live album's Wonderwall is not the Wonderwall a playlist asks for");
+    }
+
+    @Test
+    void filedCopies_forAPlaylist_isTheSameId_byTitleOrByLength() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        setTask(filed(album, "slide-away", "Slide Away", 10, "EXACT", "/music/Oasis/DM/10.flac"), "duration_seconds = 393");
+        // No media rows: the title-and-artist arm has no artist to compare, so only the id arm can fire.
+
+        assertEquals(List.of("1 /music/Oasis/DM/10.flac", "2 /music/Oasis/DM/10.flac"),
+                copies(DownloadType.PLAYLIST, "VL-britpop",
+                        wanted("slide-away", "slide away", null).toBuilder().durationSeconds(375).build(),
+                        wanted("slide-away", "Slide Away (Official Video)", null).toBuilder().durationSeconds(388).build(),
+                        wanted("slide-away", "Slide Away (Official Video)", null).toBuilder().durationSeconds(360).build()),
+                "the same upload: equal titles, or a retitled row within the picker's length tolerance (11 s of 375)");
+    }
+
+    @Test
+    void filedCopies_forAnAlbum_neverMatchesByTitleAndArtist() {
+        definitelyMaybeSupersonic();
+        media("supersonic-tf", "Supersonic", "Oasis");
+
+        assertEquals(List.of(), copies(DownloadType.ALBUM, "MPREb_tf", wanted("supersonic-tf", "Supersonic", 12)),
+                "an album's track is its own, whatever other album has the song");
     }
 
     @Test
@@ -970,6 +1041,57 @@ class DownloadTaskRepositoryIT {
         assertEquals("MPREb_dm#6", keys.get(track));
         assertEquals(keys.get(track), keys.get(twin), "the album's track and its video twin are one song");
         assertEquals("blinding", keys.get(single));
+    }
+
+    @Test
+    void tasksToOrganise_givesAPlaylistTrackTheAlbumsFile_byTitleAndArtistUnderAnotherId_withNoAlbumAnswer() {
+        String file = definitelyMaybeSupersonic();
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        media("supersonic-omv", "Oasis - Supersonic (Official Video)", "Oasis");
+        media("live-omv", "Supersonic (Live)", "Oasis");
+        // Past the album-lookup grace with no answer: filed by what the library has, not by its own name.
+        UUID twin = succeededSong(playlist, "supersonic-omv", "x\\s.mp3", NOW.minusSeconds(121));
+        UUID live = succeededSong(playlist, "live-omv", "x\\l.mp3", NOW.minusSeconds(121));
+        // Another album with the same song: its track gets its own file, never the first album's.
+        UUID compilation = insertDownload("SUCCEEDED", "ALBUM", "MPREb_tf");
+        media("MPREb_tf", "Time Flies", "Oasis");
+        UUID track = UUID.randomUUID();
+        template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, track_title, track_number, "
+                        + "phase, phase_entered_at, next_attempt_at, finished_at, slskd_username, slskd_filename) "
+                        + "VALUES (:task, :dl, 'supersonic-atv', 'q', 'Supersonic', 12, 'SUCCEEDED', :at, :at, :at, 'bob', 'x\\12.flac')")
+                .bind("task", track).bind("dl", compilation).bind("at", NOW)
+                .fetch().rowsUpdated().block();
+
+        java.util.Map<UUID, String> copies = filedCopies();
+
+        assertEquals(file, copies.get(twin));
+        assertNull(copies.get(live), "a version word is part of the name");
+        assertTrue(copies.containsKey(track));
+        assertNull(copies.get(track), "the same id from another album is that album's own track");
+    }
+
+    @Test
+    void tasksToOrganise_namesAnAlbumTrackAndItsTwinAlike_byTitleAndArtist_beforeAnyAlbumAnswer() {
+        UUID album = insertDownload("SUCCEEDED", "ALBUM", "MPREb_dm");
+        media("supersonic-atv", "Supersonic", "Oasis");
+        UUID track = UUID.randomUUID();
+        template.getDatabaseClient()
+                .sql("INSERT INTO download_tasks (task_id, download_id, youtube_id, song_name, track_title, track_number, "
+                        + "phase, phase_entered_at, next_attempt_at, finished_at, slskd_username, slskd_filename) "
+                        + "VALUES (:task, :dl, 'supersonic-atv', 'q', 'Supersonic', 6, 'SUCCEEDED', :at, :at, :at, 'bob', 'x\\06.flac')")
+                .bind("task", track).bind("dl", album).bind("at", NOW)
+                .fetch().rowsUpdated().block();
+        UUID playlist = insertDownload("SUCCEEDED", "PLAYLIST");
+        media("supersonic-omv", "Oasis - Supersonic (Official Video)", "Oasis");
+        UUID twin = succeededSong(playlist, "supersonic-omv", "x\\s.mp3", NOW.minusSeconds(121));
+
+        java.util.Map<UUID, String> keys = new java.util.HashMap<>();
+        repository.tasksToOrganise(10, NOW.minusSeconds(600), NOW.minusSeconds(120))
+                .doOnNext(job -> keys.put(job.taskId(), job.copyKey())).blockLast();
+
+        assertEquals("supersonic|oasis", keys.get(track));
+        assertEquals(keys.get(track), keys.get(twin), "one song, so only one of the two is filed per pass");
     }
 
     @Test

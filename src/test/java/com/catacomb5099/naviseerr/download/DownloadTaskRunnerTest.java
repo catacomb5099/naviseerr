@@ -164,6 +164,26 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
+    void twoCopiesOfOneSongReadyInOnePass_theAlbumsOwnTrackIsFiledFirst_whateverFinishedFirst() {
+        LibraryOrganiser.Job twin = copy("supersonic|oasis");
+        LibraryOrganiser.Job albumTrack = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM, "music\\a\\06.flac",
+                T0.minusSeconds(1), "Supersonic", List.of("Oasis"), "Definitely Maybe", List.of("Oasis"), null, List.of(),
+                null, null, "supersonic|oasis", null);
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(organiser.albumCutoff(T0)).thenReturn(T0.minusSeconds(120));
+        when(repository.tasksToOrganise(10, T0.minusSeconds(600), T0.minusSeconds(120))).thenReturn(Flux.just(twin, albumTrack));
+        when(organiser.file(albumTrack, T0)).thenReturn(Mono.just(java.nio.file.Path.of("/music/Oasis/DM/06.flac")));
+        when(repository.setLibraryPath(any(), any())).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(organiser).file(albumTrack, T0);
+        verify(organiser, never()).file(twin, T0);
+        verify(repository).setLibraryPath(albumTrack.taskId(), "/music/Oasis/DM/06.flac");
+    }
+
+    @Test
     void withTheOrganiserOn_eachFiledSongGetsItsLibraryPathWritten_andAMissingFileIsLeftForNextPass() {
         LibraryOrganiser.Job filed = job(UUID.randomUUID());
         LibraryOrganiser.Job notYet = job(UUID.randomUUID());
