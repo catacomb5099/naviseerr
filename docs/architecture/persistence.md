@@ -278,6 +278,16 @@ Soulseek account (slskd reads it from its own files, `settings/SoulseekAccountFi
 [InstallSettingsRepository.java](../../src/main/java/com/catacomb5099/naviseerr/settings/InstallSettingsRepository.java):
 `find()` answers `InstallSettings.NONE` with no row, every write is `INSERT ... ON CONFLICT (one) DO UPDATE SET <its columns>`.
 
+### V19: `install_settings.download_quality` (download quality, 19-10-2026)
+
+[V19__download_quality.sql](../../src/main/resources/db/migration/V19__download_quality.sql) adds one nullable TEXT
+column to the V18 row, `download_quality`, the tier the Soulseek picker prefers for every download: `LOW`, `NORMAL`,
+`HIGH`, `VERY_HIGH` or `LOSSLESS` (a CHECK keeps it one of the five; text, not a Postgres enum type, because an enum
+type outlives a dropped table on a shared dev database). Null = nothing chosen = `DownloadQuality.DEFAULT` (Lossless,
+what the picker effectively preferred before the setting existed), so an upgraded install changes nothing until someone
+chooses; no data statement. Read by `InstallSettingsRepository.downloadQuality()` (default applied) once per completed
+search, written by `setDownloadQuality()` (the same one-row upsert). Decision: [download-quality-19-10-2026.md](../decisions/download-quality-19-10-2026.md).
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.

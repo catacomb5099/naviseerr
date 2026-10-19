@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.settings;
 
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
@@ -8,7 +9,7 @@ import reactor.core.publisher.Mono;
 import java.time.Instant;
 
 /**
- * All {@code install_settings} SQL (V18): the one row the first-run setup and the Settings page write.
+ * All {@code install_settings} SQL (V18, V19): the one row the first-run setup and the Settings page write.
  * Every write is an upsert on the one-row key, so the first save of any section creates the row and
  * the others leave each other's columns alone.
  */
@@ -17,7 +18,7 @@ public class InstallSettingsRepository {
 
     private static final String FIND_SQL = """
             SELECT setup_completed_at, suggested_playlists, navidrome_url, navidrome_user, navidrome_password,
-                   jellyfin_url, jellyfin_api_key, slskd_url, slskd_api_key
+                   jellyfin_url, jellyfin_api_key, slskd_url, slskd_api_key, download_quality
               FROM install_settings
             """;
 
@@ -59,6 +60,14 @@ public class InstallSettingsRepository {
 
     private static final String CLEAR_SLSKD_SQL = "UPDATE install_settings SET slskd_url = NULL, slskd_api_key = NULL, updated_at = now()";
 
+    private static final String SET_DOWNLOAD_QUALITY_SQL = """
+            INSERT INTO install_settings (download_quality) VALUES (:quality)
+            ON CONFLICT (one) DO UPDATE SET download_quality = EXCLUDED.download_quality, updated_at = now()
+            """;
+
+    /** Null with no row, or a row where nothing was chosen: the default applies. */
+    private static final String DOWNLOAD_QUALITY_SQL = "SELECT (SELECT download_quality FROM install_settings) AS quality";
+
     private final DatabaseClient client;
 
     public InstallSettingsRepository(R2dbcEntityTemplate entityTemplate) {
@@ -73,7 +82,8 @@ public class InstallSettingsRepository {
                         row.get("navidrome_url", String.class), row.get("navidrome_user", String.class),
                         row.get("navidrome_password", String.class),
                         row.get("jellyfin_url", String.class), row.get("jellyfin_api_key", String.class),
-                        row.get("slskd_url", String.class), row.get("slskd_api_key", String.class)))
+                        row.get("slskd_url", String.class), row.get("slskd_api_key", String.class),
+                        quality(row.get("download_quality", String.class))))
                 .one()
                 .defaultIfEmpty(InstallSettings.NONE);
     }
@@ -120,5 +130,28 @@ public class InstallSettingsRepository {
     /** Back to the install file's slskd. */
     public Mono<Void> clearSlskd() {
         return client.sql(CLEAR_SLSKD_SQL).fetch().rowsUpdated().then();
+    }
+
+    /** The download quality chosen on the setup's first screen or in Settings; stored as its word (V19). */
+    public Mono<Void> setDownloadQuality(DownloadQuality quality) {
+        return client.sql(SET_DOWNLOAD_QUALITY_SQL).bind("quality", quality.name()).fetch().rowsUpdated().then();
+    }
+
+    /**
+     * The quality the picker prefers right now, {@link DownloadQuality#DEFAULT} until someone chooses. Read
+     * once per completed search (one SELECT on a one-row table), so a change applies to the next download.
+     */
+    public Mono<DownloadQuality> downloadQuality() {
+        return client.sql(DOWNLOAD_QUALITY_SQL)
+                .map(row -> {
+                    DownloadQuality chosen = quality(row.get("quality", String.class));
+                    return chosen == null ? DownloadQuality.DEFAULT : chosen;
+                })
+                .one();
+    }
+
+    /** The stored word, or null for nothing chosen; V19's CHECK keeps it one of the five. */
+    private static DownloadQuality quality(String stored) {
+        return stored == null ? null : DownloadQuality.valueOf(stored);
     }
 }

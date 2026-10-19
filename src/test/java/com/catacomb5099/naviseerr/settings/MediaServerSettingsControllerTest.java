@@ -37,19 +37,19 @@ class MediaServerSettingsControllerTest {
         when(repository.saveNavidrome(any(), any(), any())).thenAnswer(i -> {
             InstallSettings s = row.get();
             row.set(new InstallSettings(s.setupCompletedAt(), s.suggestedPlaylists(), i.getArgument(0), i.getArgument(1),
-                    i.getArgument(2), s.jellyfinUrl(), s.jellyfinApiKey(), s.slskdUrl(), s.slskdApiKey()));
+                    i.getArgument(2), s.jellyfinUrl(), s.jellyfinApiKey(), s.slskdUrl(), s.slskdApiKey(), s.downloadQuality()));
             return Mono.empty();
         });
         when(repository.saveJellyfin(any(), any())).thenAnswer(i -> {
             InstallSettings s = row.get();
             row.set(new InstallSettings(s.setupCompletedAt(), s.suggestedPlaylists(), s.navidromeUrl(), s.navidromeUser(),
-                    s.navidromePassword(), i.getArgument(0), i.getArgument(1), s.slskdUrl(), s.slskdApiKey()));
+                    s.navidromePassword(), i.getArgument(0), i.getArgument(1), s.slskdUrl(), s.slskdApiKey(), s.downloadQuality()));
             return Mono.empty();
         });
         when(repository.clearNavidrome()).thenAnswer(i -> {
             InstallSettings s = row.get();
             row.set(new InstallSettings(s.setupCompletedAt(), s.suggestedPlaylists(), null, null, null,
-                    s.jellyfinUrl(), s.jellyfinApiKey(), s.slskdUrl(), s.slskdApiKey()));
+                    s.jellyfinUrl(), s.jellyfinApiKey(), s.slskdUrl(), s.slskdApiKey(), s.downloadQuality()));
             return Mono.empty();
         });
         when(notifier.status()).thenReturn(List.of());
@@ -121,7 +121,7 @@ class MediaServerSettingsControllerTest {
 
     @Test
     void anEmptyPassword_keepsTheStoredOne_andTestsWithIt() {
-        row.set(new InstallSettings(null, false, "http://nas:4533", "admin", "kept", null, null, null, null));
+        row.set(new InstallSettings(null, false, "http://nas:4533", "admin", "kept", null, null, null, null, null));
         doReturn(Mono.empty()).when(navidrome).test(any(), any(), any());
 
         http.put().uri("/settings/media-servers")
@@ -135,7 +135,7 @@ class MediaServerSettingsControllerTest {
 
     @Test
     void anEmptyPassword_forAnotherHost_isNotFilledFromTheStoredOne() {
-        row.set(new InstallSettings(null, false, "http://nas:4533", "admin", "kept", null, null, null, null));
+        row.set(new InstallSettings(null, false, "http://nas:4533", "admin", "kept", null, null, null, null, null));
 
         assertEquals("Enter the Navidrome password.",
                 put(Map.of("navidrome", Map.of("url", "http://elsewhere:4533", "username", "admin", "password", ""))));
@@ -178,7 +178,7 @@ class MediaServerSettingsControllerTest {
         when(repository.clearJellyfin()).thenAnswer(i -> {
             InstallSettings s = row.get();
             row.set(new InstallSettings(s.setupCompletedAt(), s.suggestedPlaylists(), s.navidromeUrl(), s.navidromeUser(),
-                    s.navidromePassword(), null, null, s.slskdUrl(), s.slskdApiKey()));
+                    s.navidromePassword(), null, null, s.slskdUrl(), s.slskdApiKey(), s.downloadQuality()));
             return Mono.empty();
         });
         http.delete().uri("/settings/media-servers/jellyfin").exchange().expectStatus().isNoContent();
@@ -190,7 +190,7 @@ class MediaServerSettingsControllerTest {
 
     @Test
     void atBoot_theSavedRowIsApplied_overTheInstallFile() {
-        row.set(new InstallSettings(null, false, "http://nas:4533", "admin", "pw", null, null, null, null));
+        row.set(new InstallSettings(null, false, "http://nas:4533", "admin", "pw", null, null, null, null, null));
 
         controller.applySaved();
 

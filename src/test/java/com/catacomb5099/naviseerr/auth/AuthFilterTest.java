@@ -136,7 +136,8 @@ class AuthFilterTest {
         for (MockServerHttpRequest.BaseBuilder<?> request : new MockServerHttpRequest.BaseBuilder<?>[] {
                 MockServerHttpRequest.get("/settings/setup"), MockServerHttpRequest.post("/settings/setup/done"),
                 MockServerHttpRequest.get("/settings/media-servers"), MockServerHttpRequest.put("/settings/suggested-playlists"),
-                MockServerHttpRequest.get("/settings/soulseek"), MockServerHttpRequest.put("/settings/slskd")}) {
+                MockServerHttpRequest.get("/settings/soulseek"), MockServerHttpRequest.put("/settings/slskd"),
+                MockServerHttpRequest.put("/settings/download-quality")}) {
             reachedHandler.set(false);
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
             filter.filter(exchange, chain).block();

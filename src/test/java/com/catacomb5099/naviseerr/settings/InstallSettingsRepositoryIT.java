@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.settings;
 
 import com.catacomb5099.naviseerr.TestcontainersConfiguration;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -120,6 +121,19 @@ class InstallSettingsRepositoryIT {
 
         repository.setSuggestedPlaylists(false).block();
         assertEquals(Boolean.FALSE, repository.suggestedPlaylists().block());
+        assertEquals(1L, rows());
+    }
+
+    @Test
+    void theDownloadQuality_isLosslessWithNoRow_andIsSavedWithoutTouchingTheRest() {
+        assertEquals(DownloadQuality.LOSSLESS, repository.downloadQuality().block(), "nothing chosen: what the picker did until now");
+        assertNull(repository.find().block().downloadQuality(), "and the row says nothing was chosen");
+
+        repository.setSuggestedPlaylists(true).block();
+        repository.setDownloadQuality(DownloadQuality.NORMAL).block();
+        assertEquals(DownloadQuality.NORMAL, repository.downloadQuality().block());
+        assertEquals(DownloadQuality.NORMAL, repository.find().block().downloadQuality());
+        assertTrue(repository.find().block().suggestedPlaylists(), "the choice leaves the other answers alone");
         assertEquals(1L, rows());
     }
 

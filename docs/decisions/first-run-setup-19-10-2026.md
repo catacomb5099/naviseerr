@@ -75,6 +75,12 @@ Flip: drop W4/K5, nothing else depends on them.
 - Music app: the row wins over env (default) / env wins and the section shows a "set in the install file" note.
 - "Run setup again" link in Settings: dropped (no reference app has one; every section is in Settings) / one link to `/setup/1`.
 
+## Addendum, 19-10-2026 evening: a fifth screen, first
+
+The owner asked for the download quality on both the setup and Settings ("that should be first"): a fifth screen BEFORE the
+Soulseek account, the counter becomes 1 of 5, and Settings gets it as its first section. Its own record:
+[download-quality-19-10-2026.md](download-quality-19-10-2026.md) (W5a stores it, W5b makes the picker honour it; client K6).
+
 ## The PRs
 
 Server: #165 (Soulseek account, rebased onto the Authentik login #188) → W1 the setup mark and this table → W2 the music

@@ -56,13 +56,13 @@ class SlskdSettingsControllerTest {
         when(repository.saveSlskd(any(), any())).thenAnswer(i -> {
             InstallSettings s = row.get();
             row.set(new InstallSettings(s.setupCompletedAt(), s.suggestedPlaylists(), s.navidromeUrl(), s.navidromeUser(),
-                    s.navidromePassword(), s.jellyfinUrl(), s.jellyfinApiKey(), i.getArgument(0), i.getArgument(1)));
+                    s.navidromePassword(), s.jellyfinUrl(), s.jellyfinApiKey(), i.getArgument(0), i.getArgument(1), s.downloadQuality()));
             return Mono.empty();
         });
         when(repository.clearSlskd()).thenAnswer(i -> {
             InstallSettings s = row.get();
             row.set(new InstallSettings(s.setupCompletedAt(), s.suggestedPlaylists(), s.navidromeUrl(), s.navidromeUser(),
-                    s.navidromePassword(), s.jellyfinUrl(), s.jellyfinApiKey(), null, null));
+                    s.navidromePassword(), s.jellyfinUrl(), s.jellyfinApiKey(), null, null, s.downloadQuality()));
             return Mono.empty();
         });
         controller = new SlskdSettingsController(repository, slskd, config, installFile);
@@ -156,7 +156,7 @@ class SlskdSettingsControllerTest {
 
     @Test
     void anEmptyKey_keepsTheStoredOne() throws InterruptedException {
-        row.set(new InstallSettings(null, false, null, null, null, null, null, ownBase() + "/api/v0/", "kept"));
+        row.set(new InstallSettings(null, false, null, null, null, null, null, ownBase() + "/api/v0/", "kept", null));
         own.enqueue(json(LOGGED_IN));
 
         http.put().uri("/settings/slskd").bodyValue(Map.of("url", ownBase(), "apiKey", "")).exchange().expectStatus().isOk();
@@ -166,7 +166,7 @@ class SlskdSettingsControllerTest {
 
     @Test
     void anEmptyKey_forAnotherHost_isNotFilledFromTheStoredOne() {
-        row.set(new InstallSettings(null, false, null, null, null, null, null, "http://nas:5030/api/v0/", "kept"));
+        row.set(new InstallSettings(null, false, null, null, null, null, null, "http://nas:5030/api/v0/", "kept", null));
 
         assertEquals("Enter the slskd API key.", put(Map.of("url", ownBase(), "apiKey", "")));
         assertEquals(0, own.getRequestCount());
@@ -174,7 +174,7 @@ class SlskdSettingsControllerTest {
 
     @Test
     void forget_goesBackToTheInstallFilesSlskd_live() {
-        row.set(new InstallSettings(null, false, null, null, null, null, null, ownBase() + "/api/v0/", "own-key"));
+        row.set(new InstallSettings(null, false, null, null, null, null, null, ownBase() + "/api/v0/", "own-key", null));
         controller.applySaved();
         assertEquals(ownBase() + "/api/v0/", slskd.url(), "the saved slskd applies at boot");
 

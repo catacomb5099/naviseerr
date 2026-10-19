@@ -9,10 +9,10 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
 /**
- * Whether this install has been through its first-run setup (the four screens the web app shows the
+ * Whether this install has been through its first-run setup (the five screens the web app shows the
  * first time it opens, as Jellyfin's setup wizard does), and the one fact the setup's first and last
  * screens need: where the music lands. The answers themselves live in their own places
- * ({@code /settings/soulseek}, {@code /settings/media-servers}, {@code /settings/suggested-playlists},
+ * ({@code /settings/download-quality}, {@code /settings/soulseek}, {@code /settings/media-servers}, {@code /settings/suggested-playlists},
  * {@code /settings/login}); this only remembers that the questions were asked.
  */
 @RestController
