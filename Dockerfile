@@ -32,6 +32,7 @@ COPY --from=build /src/build/libs/*.jar app.jar
 # Default user; compose's `user: ${PUID}:${PGID}` overrides it. Numeric, so no passwd entry needed.
 USER 1000:1000
 EXPOSE 8080
+# /auth/session: answers 200 without a login (every data endpoint is 401 without one since 19-10-2026).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-    CMD curl -fsS -o /dev/null http://localhost:8080/downloads/active || exit 1
+    CMD curl -fsS -o /dev/null http://localhost:8080/auth/session || exit 1
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

@@ -62,7 +62,10 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    `username:` and `password:` under `soulseek:`). Keep them somewhere safe: **Soulseek passwords
    cannot be reset.**
 5. Open the web app at `http://<this computer's address>:5056`, or http://localhost:5056 on the same
-   computer. Is it working? `docker compose ps` shows every part running, the web app has no amber
+   computer. The first open asks you to create your account: choose a username and a password (at
+   least 8 characters); that is the only account, and you stay logged in for 30 days on each device.
+   The round button with your initial, top right, has "Log out". Is it working? `docker compose ps`
+   shows every part running, the web app has no amber
    "Not connected to Soulseek" strip across its top (it stays until the Soulseek login works), and
    `docker compose logs slskd` does not keep saying "Failed to reconnect" (slskd cannot reach
    Soulseek) or "invalid username or password" (see Troubleshooting). The Home page's "Made for you"
@@ -80,8 +83,9 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
      [issue #18169](https://github.com/jellyfin/jellyfin/issues/18169).
 7. Optional, but you get more search results and fewer failed downloads: on your router's "port
    forwarding" page, forward TCP port 50300 to this computer. That is the door other Soulseek users
-   knock on; slskd cannot open it by itself. **Do not forward port 5056 on your router: the web app
-   has no login.**
+   knock on; slskd cannot open it by itself. The web app has a login, but it is plain HTTP: if you
+   want it reachable from outside your home, put it behind a reverse proxy with HTTPS (the login
+   cookie is then marked Secure by itself) rather than forwarding port 5056 as it is.
 
 ### Updating
 
@@ -168,6 +172,14 @@ leave it. Your existing playlists stay.
   runs it again; `docker compose logs naviseerr | grep -i curator` shows what naviseerr saw. "rejected
   the token (401)" there means the two sides hold different tokens: `docker compose up -d` rewrites
   both from the one in the config volume.
+- **Forgot your password**, or the login screen refuses the only account. There is no reset by
+  e-mail (there is no e-mail). Delete the account and its logins; the web app then shows "Create your
+  account" again and your downloads, playlists and settings are untouched:
+  ```sh
+  docker compose exec postgres psql -U naviseerr -c "DELETE FROM sessions; DELETE FROM users;"
+  ```
+  The other way in is one start with `AUTH_REQUIRED=false` in `.env` (`docker compose up -d`), which
+  switches the login off entirely until you set it back.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.

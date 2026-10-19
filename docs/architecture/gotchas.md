@@ -30,11 +30,11 @@ Foot-guns, latent bugs, and hygiene issues to know before touching related code.
 - What it was: worse than the case-sensitivity issue first logged here. slskd leaves `extension` blank on most files (8,972 of 14,188 FLAC files on 04-10-2026), sometimes gets it wrong (218 FLAC files claimed `"mp3"`), and lossless files carry no `bitRate`, so most FLAC failed both halves of the filter and MP3 won (Ticket To Ride kept 8 of 520 files). A null extension would also have thrown.
 - Status: **fixed.** The format comes from the file name's suffix, case-insensitive, falling back to `extension` only for a name with no suffix. Lossless suffixes (`flac`, `wav`, `aif`, `aiff`, `ape`, `wv`) always pass; everything else still needs `bitRate >= slskd-service.min-bit-rate`, so VBR MP3, m4a and opus (no or lower reported bit rate) are still dropped.
 
-## 5. `@EnableWebFlux` + wide-open CORS
+## 5. `@EnableWebFlux` + wide-open CORS (login added 19-10-2026)
 
-- Where: [WebConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/WebConfig.java).
-- What/impact: `@EnableWebFlux` switches WebFlux into "full control" mode, which can disable parts of Spring Boot's WebFlux auto-configuration if you later rely on them. CORS is `allowedOrigins("*")` for all paths - fine for local dev, not for production.
-- Suggested action: be aware before adding WebFlux config; tighten CORS before any non-local deployment.
+- Where: [WebConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/WebConfig.java), [AuthFilter.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthFilter.java).
+- What/impact: `@EnableWebFlux` switches WebFlux into "full control" mode, which can disable parts of Spring Boot's WebFlux auto-configuration if you later rely on them (the login reads `X-Forwarded-Proto` itself for that reason, instead of `server.forward-headers-strategy`). CORS is a `CorsWebFilter` allowing any origin pattern WITH credentials, so the session cookie travels in the cross-origin dev setup; the handler-level `addCorsMappings` it replaced could not decorate the filter's 401. Since the login every data endpoint needs a session, so "any origin" no longer means "anyone": a cross-site page can preflight, but gets 401 without the cookie, and `SameSite=Lax` withholds the cookie on cross-site POSTs.
+- Suggested action: keep `AuthFilter` default-deny (open paths are an explicit set); never list a data endpoint there. Switching the login off (`AUTH_REQUIRED=false`) is for installs with their own login proxy only.
 
 ## 6. `@SpringBootTest` tests require Docker
 

@@ -34,6 +34,10 @@ dependencies {
 	// stays entirely on r2dbc-postgresql.
 	runtimeOnly 'org.postgresql:postgresql'
 	implementation 'me.xdrop:fuzzywuzzy:1.4.0'
+	// bcrypt for the login's passwords (auth/AuthController). Only the crypto jar, not the Security
+	// starter: the login is one WebFilter and four endpoints, and the starter would add a CSRF filter,
+	// redirecting login pages and default headers an API with its own web app does not want.
+	implementation 'org.springframework.security:spring-security-crypto'
 	// Reads and writes song tags (MP3, FLAC, M4A, OGG, WAV, AIFF, WMA; not Opus, APE or WavPack).
 	// LGPL. The only maintained Java tagger on Maven Central; 3.0.1 is its latest release.
 	implementation 'net.jthink:jaudiotagger:3.0.1'

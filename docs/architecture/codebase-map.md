@@ -17,7 +17,8 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 
 - [NaviseerrApplication.java](../../src/main/java/com/catacomb5099/naviseerr/NaviseerrApplication.java) - `@SpringBootApplication` entry point. Plain (no `@EnableScheduling`/`@EnableAsync`).
 - `config/`
-  - [WebConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/WebConfig.java) - `@EnableWebFlux` + wide-open CORS (`*`). See the note in [gotchas.md](gotchas.md).
+  - [WebConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/WebConfig.java) - `@EnableWebFlux` + a `CorsWebFilter` (any origin pattern, credentials on, first in line so the login's 401 carries CORS headers). See the note in [gotchas.md](gotchas.md).
+- `auth/` (19-10-2026) - the login: [AuthFilter.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthFilter.java) (default-deny `WebFilter`, cookie `naviseerr_session`, open paths `/auth/session|login|setup` and `OPTIONS`), [AuthController.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthController.java) (`/auth/*`, bcrypt), [AuthRepository.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthRepository.java) (`users` + `sessions`, V16).
   - [TimeConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/TimeConfig.java) - the `Clock` bean (`Clock.systemUTC()`), injected wherever "now" matters so budget/lease branches are unit-testable without sleeping.
 - `schema/response/` - API response DTOs returned to clients: `Track`, `Album`, `Artist`, `Playlist`, `SearchResponse`.
 - `schema/slskd/` - slskd API DTOs: `SearchState`, `SearchResponseItem`, `SearchFile`, `TransferedFile`, `QueueDownloadResponse`, the `TransferState` enum, and `SlskdSearchState` (search-state classification, added with the durable-download-state-machine work). Details in [slskd-integration.md](slskd-integration.md).

@@ -223,6 +223,21 @@ the OLD row's candidates, index, sharer and transfer id through a self-join (`FR
 the statement's snapshot) so the caller can stop the old transfer and delete the right partial files.
 `phase <> 'SUCCEEDED'` refuses a filed song; tasks are locked before the download row, as in `RETRY_SQL`.
 
+### V16: `users` and `sessions` (login, 19-10-2026)
+
+[V16__users_and_sessions.sql](../../src/main/resources/db/migration/V16__users_and_sessions.sql) adds the
+two login tables. `users` (`user_id`, `username`, `password_hash` bcrypt, `role` `ADMIN|USER` default
+`ADMIN`, `created_at`) with a unique index on `lower(username)`: one account today (the first-run
+screen), `role` kept so more users later need no migration, `password_hash` nullable for a user a login
+proxy vouches for (not built). `sessions` (`session_id` the random id in the browser's cookie, `user_id`
+cascading from `users`, `created_at`, `expires_at`, indexed): a row per signed-in browser, deleted on
+logout, expired rows swept at each login (`deleteExpired`), no scheduler. All SQL in
+[AuthRepository.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthRepository.java);
+`createFirstUser` is `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM users)` so two first-run
+screens cannot both win. Additive only: an existing install gets the tables on its next start and the
+web app then shows "Create your account". The reset path is the README's "Forgot your password" recipe
+(`DELETE FROM sessions; DELETE FROM users`).
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.

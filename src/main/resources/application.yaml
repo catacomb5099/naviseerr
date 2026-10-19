@@ -170,6 +170,17 @@ download-task:
   # means the lookup is broken, not that the download finished -- fail fast and loudly instead.
   missing-transfer-grace-ms: 60000
 
+# Login (19-10-2026): the first open of the web app asks for an account, after that every call needs
+# the session cookie a login gives. See docs/decisions/login-19-10-2026.md.
+auth:
+  # false = switch the built-in login off, because your own login proxy (Authentik, Authelia...) or your
+  # network is the login; then anyone who can reach the web app can use it. Never "off for local
+  # addresses": behind the web app's proxy every request is local. See the README, "Using your own login".
+  required: ${AUTH_REQUIRED:true}
+  # How long a login lasts on one device. Spotify and YouTube Music keep you signed in for good,
+  # Navidrome for two days; 30 days is the compromise.
+  session-days: 30
+
 # Library organiser: moves each finished song out of slskd's downloads folder into an organised music
 # library that Navidrome / Jellyfin can scan. OFF unless BOTH slskd-downloads-dir and root are set --
 # an install that sets neither behaves exactly as before. Needs slskd's downloads folder to be visible
