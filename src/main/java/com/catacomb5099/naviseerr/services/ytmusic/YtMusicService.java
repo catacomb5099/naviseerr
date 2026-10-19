@@ -258,7 +258,7 @@ public class YtMusicService {
         return new YoutubeCollectionInfo(id, songs, collection.getYear(), collection.getTitle(),
                 names(authors), ids(authors), collection.getThumbnailUrl(),
                 isAlbum ? collection.getAudioPlaylistId() : id.replaceFirst("^VL", ""),
-                collection.getType(), collection.getTrackCount());
+                collection.getType(), collection.getTrackCount(), collection.getViews());
     }
 
     private static List<String> names(List<YtMusicSearchResponse.ArtistRef> artists) {

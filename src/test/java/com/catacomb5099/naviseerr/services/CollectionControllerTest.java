@@ -31,13 +31,14 @@ class CollectionControllerTest {
                 new YoutubeSongInfo("vid1", List.of("Oasis"), List.of("UCoasis"), "Rock 'n' Roll Star", "https://img/a.jpg", 322, "28M plays"),
                 new YoutubeSongInfo("vid2", List.of("Oasis"), "Shakermaker", "https://img/a.jpg", null)),
                 1994, "Definitely Maybe", List.of("Oasis"), List.of("UCoasis"), "https://img/a.jpg", "OLAK5uy_1",
-                null, null);
+                null, null, null);
     }
 
     private static YoutubeCollectionInfo playlist() {
         return new YoutubeCollectionInfo("PL1", List.of(
                 new YoutubeSongInfo("vid9", List.of("Blur"), List.of(""), "Parklife", "https://i.ytimg.com/vi/vid9/hqdefault.jpg", 185, null)),
-                null, "Britpop Essentials", List.of("YouTube Music"), List.of(""), "https://img/p.jpg");
+                null, "Britpop Essentials", List.of("YouTube Music"), List.of(""), "https://img/p.jpg",
+                null, null, null, "6.9M views");
     }
 
     @Test
@@ -123,6 +124,23 @@ class CollectionControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.tracks[0].plays").isEmpty();
+    }
+
+    @Test
+    void views_isOnTheWireInYouTubesWording_forAPlaylist_andNullForAnAlbum() {
+        // The playlist's own view count, YouTube's noun kept ("views", never "plays"): the client
+        // shows the string as-is where YouTube Music shows it, and nothing when there is none.
+        when(ytMusicService.getAlbumInfo("MPREb_1")).thenReturn(Mono.just(album()));
+        when(ytMusicService.getPlaylistInfo("PL1")).thenReturn(Mono.just(playlist()));
+
+        client.get().uri("/collections/PL1?type=PLAYLIST").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.views").isEqualTo("6.9M views");
+        client.get().uri("/collections/MPREb_1?type=ALBUM").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.views").isEmpty();
     }
 
     @Test

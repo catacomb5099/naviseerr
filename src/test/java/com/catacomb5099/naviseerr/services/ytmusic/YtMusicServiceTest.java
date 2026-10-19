@@ -421,6 +421,7 @@ class YtMusicServiceTest {
               "title": "Britpop Essentials",
               "author": {"name": "YouTube Music", "channelId": "UC2"},
               "trackCount": 3,
+              "views": "6.9M views",
               "thumbnailUrl": "https://example.com/playlist.jpg",
               "tracks": [
                 {"videoId": "v1", "title": "Wonderwall",
@@ -536,6 +537,7 @@ class YtMusicServiceTest {
                     assertNull(album.songs().get(1).plays(), "absent on the wire is null, not an error");
                     // What YouTube Music plays the album as, for the client's "Play album" link.
                     assertEquals("OLAK5uy_definitelyMaybe", album.playlistId());
+                    assertNull(album.views(), "YouTube Music shows no view count on an album");
                 })
                 .verifyComplete();
 
@@ -629,6 +631,9 @@ class YtMusicServiceTest {
                             "YouTube hands out play counts on album tracks only");
                     // A playlist plays as itself.
                     assertEquals("PL123", playlist.playlistId());
+                    // The playlist's own view count in YouTube's wording, never parsed (the adapter
+                    // keeps the display string because the library's number for it is lossy).
+                    assertEquals("6.9M views", playlist.views());
                 })
                 .verifyComplete();
 

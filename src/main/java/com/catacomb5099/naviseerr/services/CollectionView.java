@@ -26,10 +26,14 @@ import java.util.stream.IntStream;
  *                   gave none (the {@code ""} placeholder {@link YoutubeCollectionInfo#authorIds()}
  *                   carries becomes null on the wire, as on the downloads routes). For a playlist this
  *                   is its author's channel, which the client does not link.
+ * @param views      how often a user-made playlist was viewed, in YouTube Music's own wording ("6.9M
+ *                   views"), passed through unparsed like {@code plays}. Null for albums, radios and
+ *                   YouTube Music's own editorial playlists (YouTube shows no count there), and from
+ *                   an adapter older than 19-10-2026.
  */
 public record CollectionView(String id, DownloadType type, String name, List<String> artists,
                              List<String> artistIds, String iconURL, Integer year, int trackCount,
-                             List<CollectionTrackView> tracks, String playlistId) {
+                             List<CollectionTrackView> tracks, String playlistId, String views) {
 
     /**
      * @param position 1-based track order, the same {@code position} the download's task rows get.
@@ -43,7 +47,7 @@ public record CollectionView(String id, DownloadType type, String name, List<Str
     static CollectionView from(YoutubeCollectionInfo info, DownloadType type, String requestedId) {
         List<CollectionTrackView> tracks = tracksOf(info);
         return new CollectionView(requestedId, type, info.name(), info.authorNames(), blankToNull(info.authorIds()),
-                info.imageUrl(), info.year(), tracks.size(), tracks, info.playlistId());
+                info.imageUrl(), info.year(), tracks.size(), tracks, info.playlistId(), info.views());
     }
 
     /** Every song with an id, numbered from 1: what a download of this collection would create task rows for. */

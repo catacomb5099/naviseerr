@@ -122,6 +122,13 @@ public final class YtMusicDetailResponse {
         private String thumbnailUrl;
         private List<Track> tracks;
         /**
+         * Playlists only: how often the playlist itself was viewed, in YouTube Music's own wording
+         * ({@code "6.9M views"}), a display string never parsed. Null on albums (YouTube shows none),
+         * on YouTube Music's editorial playlists (none there either) and from an adapter older than
+         * 19-10-2026.
+         */
+        private String views;
+        /**
          * Albums only: the same album's other editions (Deluxe, Remastered, 30th Anniversary), as
          * YouTube Music lists them under "Other versions". Read by {@code SongAlbumResolver} to file
          * a song with the plainest one.
