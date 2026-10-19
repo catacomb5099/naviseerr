@@ -238,6 +238,12 @@ class DownloadServiceTest {
                 "SUCCEEDED", "Live Forever - Oasis", 0, List.of(), 0, "/music/Oasis/Live Forever.flac", null, List.of(), null,
                 null, null)));
         assertEquals("ALREADY_IN_LIBRARY", service.candidates(id, taskId).block().reason());
+
+        // An album's copy of another album's file (19-10-2026): a file name, no library path yet, never searched.
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(new DownloadTaskRepository.CachedSearch(taskId,
+                "SUCCEEDED", "Supersonic - Oasis", 0, List.of(), 0, null,
+                LibraryOrganiser.COPY_PREFIX + "abc\\06 - Supersonic.flac", List.of(), null, null, null)));
+        assertEquals("ALREADY_IN_LIBRARY", service.candidates(id, taskId).block().reason());
     }
 
     @Test

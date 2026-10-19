@@ -175,8 +175,9 @@ those changes add no migration of their own and cannot land out of order.
   `artistKey` (title and artist with YouTube's noise stripped, in SQL) unless the copy's album title
   matches `VERSION_ALBUM`. `FILED_COPIES_SQL` joins it against the songs about to be admitted (their
   artist from `media_items`, upserted first), and `CREATE_TASKS_SQL` writes a song whose copy is still
-  on disk `SUCCEEDED` from birth: `finished_at = :now`, progress 100 and that `library_path`, so
-  nothing ever claims it. `TASKS_TO_ORGANISE_SQL` adds `filed_copy` (the same fragment over a LATERAL
+  on disk `SUCCEEDED` from birth: `finished_at = :now`, progress 100 and that `library_path` (or, for an
+  album's copy of another album's file, that `slskd_filename` under `naviseerr-copy-<uuid>/` and no
+  path yet, so the organiser files it), so nothing ever claims it. `TASKS_TO_ORGANISE_SQL` adds `filed_copy` (the same fragment over a LATERAL
   `w` built from the task and its media row; an album's track only by its own album and track),
   `copy_key` (the title-and-artist key, else album and track, else id: the organiser files one copy
   per key per pass) and `pick_size` (the new copy is deleted only when its size is the pick's).

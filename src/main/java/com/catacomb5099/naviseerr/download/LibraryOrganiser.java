@@ -45,7 +45,9 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *
  * <p>Just before the move, {@link SongTagger} writes YouTube Music's details into the file's tags. A
  * song whose album track the library already has is not moved at all: it points at that file and the
- * new copy is removed ({@link Job#filedCopy}).
+ * new copy is removed ({@link Job#filedCopy}). An album that shares a song with an album already filed
+ * gets a copy of that file placed in slskd's downloads folder at admission ({@link #copyIntoDownloads}),
+ * which is then tagged and moved like any other: one file per album folder, as Lidarr and beets do.
  *
  * <p>Pure path logic (locating, sanitising, choosing a target) is in static methods so it can be
  * tested without a filesystem; the two entry points {@link #file} and {@link #deletePartials} do the
@@ -101,8 +103,23 @@ public class LibraryOrganiser {
         }
     }
 
-    /** A file the library already has for the song at {@code position} (1-based) of a download being admitted. */
-    public record FiledCopy(int position, String libraryPath) {}
+    /**
+     * A file the library already has for the song at {@code position} (1-based) of a download being
+     * admitted. {@code sameAlbum}: it is this very album's track (an album download points at it); false
+     * for another album's copy of the recording, which an album download gets a copy of instead.
+     */
+    public record FiledCopy(int position, String libraryPath, boolean sameAlbum) {
+        public FiledCopy(int position, String libraryPath) {
+            this(position, libraryPath, true);
+        }
+    }
+
+    /**
+     * The folder prefix under slskd's downloads folder where {@link #copyIntoDownloads} puts a copy of a
+     * library file for an album that shares the song: {@code naviseerr-copy-<uuid>/<file>}. The row's
+     * {@code slskd_filename} starts with it, which is how the picker knows the song never searched.
+     */
+    public static final String COPY_PREFIX = "naviseerr-copy-";
 
     /** One finished download whose songs are all filed, ready for its playlist file. */
     public record Collection(UUID downloadId, DownloadType type, String title) {}
@@ -226,21 +243,51 @@ public class LibraryOrganiser {
     }
 
     /**
-     * For each of {@code count} songs being admitted, the first of its {@code copies} (newest first)
-     * that is still a file in the library, else null. A file deleted since, or outside the library
-     * root, does not count, so that song is downloaded again.
+     * For each of {@code count} songs being admitted, the first of its {@code copies} (in the order
+     * given: this album's own first, then newest) that is still a file in the library, else null. A
+     * file deleted since, or outside the library root, does not count, so that song is downloaded again.
      */
-    public Mono<List<String>> stillFiled(int count, List<FiledCopy> copies) {
+    public Mono<List<FiledCopy>> stillFiled(int count, List<FiledCopy> copies) {
         return Mono.fromCallable(() -> {
-            String[] paths = new String[count];
+            FiledCopy[] found = new FiledCopy[count];
             for (FiledCopy copy : copies) {
                 int i = copy.position() - 1;
-                if (paths[i] == null && inLibrary(copy.libraryPath())) {
-                    paths[i] = copy.libraryPath();
+                if (found[i] == null && inLibrary(copy.libraryPath())) {
+                    found[i] = copy;
                 }
             }
-            return Arrays.asList(paths);
+            return Arrays.asList(found);
         }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * Copies a library file into slskd's downloads folder as {@code naviseerr-copy-<uuid>/<file>} and
+     * returns that path in slskd's own shape ({@code naviseerr-copy-<uuid>\<file>}), so an album that
+     * shares the song with an album already filed gets its own file: the row is created finished with
+     * it as its {@code slskd_filename}, and the next organiser pass tags it with THIS album's details
+     * and moves it into this album's folder, exactly like a file a sharer sent (19-10-2026). A copy
+     * and not a hard link: the tags are rewritten in place, and a shared inode would retag the
+     * original too. Errors propagate: the caller lets the song download as before.
+     */
+    public Mono<String> copyIntoDownloads(String libraryPath) {
+        return Mono.fromCallable(() -> copyIntoDownloadsBlocking(libraryPath))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /** Removes a copy {@link #copyIntoDownloads} made for a song that was not admitted after all. Best effort. */
+    public Mono<Void> discardCopy(String slskdFilename) {
+        return Mono.<Void>fromRunnable(() -> {
+                    try {
+                        Path copy = locate(slskdFilename);
+                        if (copy != null) {
+                            Files.delete(copy);
+                            deleteIfEmpty(copy.getParent(), downloadsDir);
+                        }
+                    } catch (IOException e) {
+                        log.warn("Could not remove the unused copy {} from {}", slskdFilename, downloadsDir, e);
+                    }
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     /**
@@ -280,6 +327,23 @@ public class LibraryOrganiser {
         return target;
     }
 
+    String copyIntoDownloadsBlocking(String libraryPath) throws IOException {
+        if (!inLibrary(libraryPath)) {
+            throw new NoSuchFileException(libraryPath);
+        }
+        Path source = Path.of(libraryPath).normalize();
+        String folder = COPY_PREFIX + UUID.randomUUID();
+        Path target = Files.createDirectories(guard(downloadsDir.resolve(folder), downloadsDir))
+                .resolve(source.getFileName());
+        // ponytail: a plain copy. When slskd's downloads folder and the library are two volumes (the
+        // all-in-one compose: a named volume and a bind mount) the bytes travel twice, here and in the
+        // organiser's move; a 30 MB FLAC is ~60 MB of I/O, well under a second on local disks. Copying
+        // and tagging straight into the album's folder is the upgrade if that ever matters.
+        Files.copy(source, target);
+        log.info("Copied {} into {} for an album that shares the song", source, target.getParent());
+        return folder + "\\" + source.getFileName();
+    }
+
     Path fileBlocking(Job job, byte[] cover, Instant now) throws IOException {
         Path source = locate(job.slskdFilename());
         if (source == null) {
@@ -301,7 +365,9 @@ public class LibraryOrganiser {
             // filed into the album's folder first, the same single asked for twice): one file per
             // song, so nothing is listed twice. The new copy is removed only when its size is the
             // picked file's: two songs can share a folder and file name, and the other's must stay.
-            if (job.pickSize() != null && Files.size(source) == job.pickSize()) {
+            // A copy this app made itself (copyIntoDownloads) is always ours to remove.
+            if (job.slskdFilename().startsWith(COPY_PREFIX)
+                    || (job.pickSize() != null && Files.size(source) == job.pickSize())) {
                 Files.delete(source);
                 deleteIfEmpty(source.getParent(), downloadsDir);
                 log.info("Song {} is already in the library as {}; removed the new copy {}", job.taskId(),

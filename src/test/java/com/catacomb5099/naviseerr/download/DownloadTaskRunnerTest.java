@@ -203,7 +203,7 @@ class DownloadTaskRunnerTest {
                 new LibraryOrganiser.FiledCopy(1, "/music/Oasis/DM/06.flac"),
                 new LibraryOrganiser.FiledCopy(1, "/music/Oasis/older.flac"),
                 new LibraryOrganiser.FiledCopy(2, "/music/Oasis/deleted.flac"))))
-                .thenReturn(Mono.just(java.util.Arrays.asList("/music/Oasis/DM/06.flac", null)));
+                .thenReturn(Mono.just(java.util.Arrays.asList(new LibraryOrganiser.FiledCopy(1, "/music/Oasis/DM/06.flac"), null)));
         when(repository.markFiled(waiting, "/music/Oasis/DM/06.flac", T0)).thenReturn(Flux.just(DownloadTask.builder()
                 .taskId(waiting).downloadId(playlistId).candidates(List.of()).slskdUsername("bob").slskdTransferId("tr-1").build()));
         when(slskdService.cancelDownload("bob", "tr-1")).thenReturn(Mono.empty());
@@ -864,13 +864,71 @@ class DownloadTaskRunnerTest {
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         List<LibraryOrganiser.FiledCopy> copies = List.of(new LibraryOrganiser.FiledCopy(1, "/music/R/N/n.flac"));
         when(repository.filedCopies(eq(DownloadType.SONG), eq("vid-1"), any())).thenReturn(Flux.fromIterable(copies));
-        when(organiser.stillFiled(1, copies)).thenReturn(Mono.just(List.of("/music/R/N/n.flac")));
+        when(organiser.stillFiled(1, copies)).thenReturn(Mono.just(copies));
 
         runner.pass().block();
 
         verify(repository).createTasks(eq(request.getDownloadId()),
                 argThat(tasks -> tasks.size() == 1 && "/music/R/N/n.flac".equals(tasks.getFirst().libraryPath())),
                 eq(T0), isNull());
+    }
+
+    private Download albumSharingASong() {
+        Download request = pendingRequest(DownloadType.ALBUM, "MPREb_ep");
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(ytMusicService.getAlbumInfo("MPREb_ep")).thenReturn(Mono.just(
+                new YoutubeCollectionInfo("MPREb_ep", List.of(
+                        new YoutubeSongInfo("BJKpUH2kJQg", List.of("Oasis"), "Supersonic", "https://img/ep.jpg", 284),
+                        new YoutubeSongInfo("EdHBIho4SiA", List.of("Oasis"), "Take Me Away", "https://img/ep.jpg", 271)),
+                        1994, "Supersonic", List.of("Oasis"), List.of("UC-oasis"), "https://img/ep.jpg")));
+        when(organiser.isEnabled()).thenReturn(true);
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
+        return request;
+    }
+
+    @Test
+    void anAlbumWithASongAnotherAlbumHas_getsItsOwnCopy_whileItsOwnTrackIsPointedAt() {
+        Download request = albumSharingASong();
+        List<LibraryOrganiser.FiledCopy> copies = List.of(
+                new LibraryOrganiser.FiledCopy(1, "/music/Oasis/Definitely Maybe/06 - Supersonic.flac", false),
+                new LibraryOrganiser.FiledCopy(2, "/music/Oasis/Supersonic/02 - Take Me Away.flac", true));
+        when(repository.filedCopies(eq(DownloadType.ALBUM), eq("MPREb_ep"), any())).thenReturn(Flux.fromIterable(copies));
+        when(organiser.stillFiled(2, copies)).thenReturn(Mono.just(copies));
+        when(organiser.copyIntoDownloads("/music/Oasis/Definitely Maybe/06 - Supersonic.flac"))
+                .thenReturn(Mono.just("naviseerr-copy-abc\\06 - Supersonic.flac"));
+
+        runner.pass().block();
+
+        verify(repository).createTasks(eq(request.getDownloadId()), argThat(tasks -> tasks.size() == 2
+                        && "naviseerr-copy-abc\\06 - Supersonic.flac".equals(tasks.getFirst().slskdFilename())
+                        && tasks.getFirst().libraryPath() == null
+                        && "/music/Oasis/Supersonic/02 - Take Me Away.flac".equals(tasks.get(1).libraryPath())
+                        && tasks.get(1).slskdFilename() == null),
+                eq(T0), eq(T0.plusSeconds(240)));
+        verify(organiser, never()).discardCopy(any());
+    }
+
+    @Test
+    void aCopyThatCannotBeMade_leavesTheSongToDownload_andACopyNobodyAdmitted_isDiscarded() {
+        albumSharingASong();
+        List<LibraryOrganiser.FiledCopy> copies = List.of(
+                new LibraryOrganiser.FiledCopy(1, "/music/Oasis/Definitely Maybe/06 - Supersonic.flac", false),
+                new LibraryOrganiser.FiledCopy(2, "/music/Oasis/Time Flies/02 - Take Me Away.flac", false));
+        when(repository.filedCopies(eq(DownloadType.ALBUM), eq("MPREb_ep"), any())).thenReturn(Flux.fromIterable(copies));
+        when(organiser.stillFiled(2, copies)).thenReturn(Mono.just(copies));
+        when(organiser.copyIntoDownloads("/music/Oasis/Definitely Maybe/06 - Supersonic.flac"))
+                .thenReturn(Mono.error(new java.io.IOException("disk full")));
+        when(organiser.copyIntoDownloads("/music/Oasis/Time Flies/02 - Take Me Away.flac"))
+                .thenReturn(Mono.just("naviseerr-copy-def\\02 - Take Me Away.flac"));
+        when(repository.createTasks(any(), any(), any(), any())).thenReturn(Mono.just(0L));   // admitted meanwhile
+        when(organiser.discardCopy(any())).thenReturn(Mono.empty());
+
+        runner.pass().block();
+
+        verify(repository).createTasks(any(), argThat(tasks -> tasks.getFirst().slskdFilename() == null
+                && tasks.getFirst().libraryPath() == null
+                && "naviseerr-copy-def\\02 - Take Me Away.flac".equals(tasks.get(1).slskdFilename())), any(), any());
+        verify(organiser).discardCopy("naviseerr-copy-def\\02 - Take Me Away.flac");
     }
 
     @Test
