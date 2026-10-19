@@ -85,10 +85,12 @@ public class AuthController {
     /**
      * Leg one: remember the sign-in in the login cookie and send the browser to Authentik. {@code to} is
      * where to land afterwards (the page the person was on); only the app's own address, a listed
-     * origin or a plain path is believed, anything else lands on {@code /}.
+     * origin or a plain path is believed, anything else lands on {@code /}. A browser follows this link,
+     * so a failure (nothing connected: 404; Authentik's settings unreadable: 502) is the same plain page
+     * as a failed callback, with the sentence and a way back, never a blank tab.
      */
     @GetMapping("/authentik/start")
-    Mono<ResponseEntity<Void>> start(@RequestParam(required = false) String to, ServerHttpRequest request) {
+    Mono<ResponseEntity<String>> start(@RequestParam(required = false) String to, ServerHttpRequest request) {
         return settings.find()
                 .switchIfEmpty(Mono.error(new LoginProblem(NOT_CONNECTED)))
                 .flatMap(s -> authentik.discover(s.issuer()).map(openId -> {
@@ -106,11 +108,10 @@ public class AuthController {
                             .build().encode().toUri();
                     return ResponseEntity.status(HttpStatus.FOUND).location(authorize)
                             .header(HttpHeaders.SET_COOKIE, cookie(request, LOGIN_COOKIE, encode(attempt), LOGIN_WINDOW).toString())
-                            .<Void>build();
+                            .<String>build();
                 }))
-                .onErrorResume(LoginProblem.class, e -> Mono.just(ResponseEntity.status(
-                        NOT_CONNECTED.equals(e.getMessage()) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_GATEWAY)
-                        .header("X-Message", e.getMessage()).build()));
+                .onErrorResume(LoginProblem.class, e -> Mono.just(failed(request, returnAddress(to, request),
+                        NOT_CONNECTED.equals(e.getMessage()) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_GATEWAY, e.getMessage())));
     }
 
     /**
@@ -141,12 +142,16 @@ public class AuthController {
                 .onErrorResume(LoginProblem.class, e -> Mono.just(failed(request, attempt, e.getMessage())));
     }
 
-    /** Ends this browser's session: the row goes, the cookie is told to expire. 204 either way. Authentik's own session stays. */
+    /**
+     * Ends this browser's session: the row goes, the cookie is told to expire (a dead cookie too). 204.
+     * Without a cookie there is nothing to clear and nothing is sent back: a cross-site form POST, which
+     * Lax keeps the cookie from, must not be able to log the owner out. Authentik's own session stays.
+     */
     @PostMapping("/logout")
     Mono<ResponseEntity<Void>> logout(ServerHttpRequest request) {
         HttpCookie cookie = request.getCookies().getFirst(AuthFilter.COOKIE);
-        Mono<Void> gone = cookie == null ? Mono.empty() : sessions.deleteSession(cookie.getValue());
-        return gone.thenReturn(ResponseEntity.noContent()
+        if (cookie == null) return Mono.just(ResponseEntity.noContent().build());
+        return sessions.deleteSession(cookie.getValue()).thenReturn(ResponseEntity.noContent()
                 .header(HttpHeaders.SET_COOKIE, cookie(request, AuthFilter.COOKIE, "", Duration.ZERO).toString()).build());
     }
 
@@ -162,24 +167,33 @@ public class AuthController {
                         .<String>build());
     }
 
-    /** 400 with the sentence and a way back, the login cookie cleared. Authentik's own words are escaped before they reach a page. */
+    /** A failed callback: 400 with the sentence, the way back being the attempt's own return address. */
     private static ResponseEntity<String> failed(ServerHttpRequest request, LoginAttempt attempt, String message) {
-        String back = attempt == null ? "/" : attempt.to();
+        return failed(request, attempt == null ? "/" : attempt.to(), HttpStatus.BAD_REQUEST, message);
+    }
+
+    /** A plain page with the sentence and a way back, the login cookie cleared. Authentik's own words are escaped before they reach a page. */
+    private static ResponseEntity<String> failed(ServerHttpRequest request, String back, HttpStatus status, String message) {
         String html = "<!doctype html><meta charset=\"utf-8\"><title>naviseerr</title>"
                 + "<p>" + HtmlUtils.htmlEscape(message) + "</p>"
                 + "<p><a href=\"" + HtmlUtils.htmlEscape(back) + "\">Back to naviseerr</a></p>";
-        return ResponseEntity.badRequest().contentType(MediaType.TEXT_HTML)
+        return ResponseEntity.status(status).contentType(MediaType.TEXT_HTML)
                 .header(HttpHeaders.SET_COOKIE, cookie(request, LOGIN_COOKIE, "", Duration.ZERO).toString())
                 .body(html);
     }
 
-    /** {@code to} as given when it is a plain path or an address we trust (the request's own host, or a listed origin); else {@code /}. */
+    /**
+     * {@code to} as given when it is a plain path or an address we trust (the request's own host, or a listed
+     * origin); else {@code /}. Every candidate goes through {@link URI#create} first: a backslash (which
+     * browsers read as a slash, so {@code /\evil.example} would leave the site) or anything else Java
+     * rejects lands on {@code /} here rather than throwing in {@link #startSession} after the sign-in.
+     */
     String returnAddress(String to, ServerHttpRequest request) {
         if (to == null || to.isBlank()) return "/";
-        if (to.startsWith("/") && !to.startsWith("//")) return to;
         try {
             URI uri = URI.create(to);
-            if (uri.getScheme() == null || uri.getAuthority() == null) return "/";
+            if (uri.getScheme() == null) return uri.getRawAuthority() == null && to.startsWith("/") ? to : "/";
+            if (uri.getAuthority() == null) return "/";
             String host = request.getHeaders().getFirst(HttpHeaders.HOST);
             if (uri.getAuthority().equalsIgnoreCase(host)) return to;
             String origin = uri.getScheme() + "://" + uri.getAuthority();

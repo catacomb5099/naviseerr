@@ -110,8 +110,28 @@ class AuthControllerTest {
                 .expectBody().jsonPath("$.mode").isEqualTo("open").jsonPath("$.authenticated").doesNotExist();
         // Past the filter; only this test client has no handler for it, hence 404 rather than 401.
         http.get().uri("/downloads/active").exchange().expectStatus().isNotFound();
+        // The one button leads here when nothing is connected: a page with the sentence and a way back, not a blank tab.
         http.get().uri("/auth/authentik/start").exchange()
-                .expectStatus().isNotFound().expectHeader().valueEquals("X-Message", AuthController.NOT_CONNECTED);
+                .expectStatus().isNotFound()
+                .expectHeader().contentTypeCompatibleWith("text/html")
+                .expectBody(String.class).value(body -> {
+                    assertTrue(body.contains(AuthController.NOT_CONNECTED), body);
+                    assertTrue(body.contains("href=\"/\""), body);
+                });
+    }
+
+    @Test
+    void start_whileAuthentikDoesNotAnswer_isA502PageWithTheSentence_andAWayBackToWhereYouWere() {
+        connected(true);
+        when(authentik.discover(any())).thenReturn(Mono.error(new LoginProblem(
+                "Could not reach auth.example.com: connection refused. Is Authentik running, and can this server reach it?")));
+        http.get().uri("/auth/authentik/start?to=http://nas:5056/downloads").header("Host", "nas:5056").exchange()
+                .expectStatus().isEqualTo(HttpStatus.BAD_GATEWAY)
+                .expectHeader().contentTypeCompatibleWith("text/html")
+                .expectBody(String.class).value(body -> {
+                    assertTrue(body.contains("Could not reach auth.example.com: connection refused."), body);
+                    assertTrue(body.contains("href=\"http://nas:5056/downloads\""), body);
+                });
     }
 
     @Test
@@ -163,6 +183,18 @@ class AuthControllerTest {
         assertEquals("/", attemptIn(start("//evil.example/x")).to());
         assertEquals("/", attemptIn(start("javascript:alert(1)")).to());
         assertEquals("/", attemptIn(start(null)).to());
+    }
+
+    @Test
+    void anAddressJavaCannotParse_landsOnTheRoot_insteadOfA500AfterTheSignIn() {
+        connected(false);
+        // A backslash, which browsers read as a slash ("/\\evil.example" leaves the site); a character URI rejects.
+        for (String odd : List.of("/\\evil.example", "/plain?x=a|b", "http://nas:5056/a b")) {
+            String loginCookie = http.get().uri(b -> b.path("/auth/authentik/start").queryParam("to", odd).build())
+                    .header("Host", "nas:5056").exchange()
+                    .expectStatus().isFound().returnResult(Void.class).getResponseHeaders().getFirst("Set-Cookie");
+            assertEquals("/", attemptIn(loginCookie).to(), odd);
+        }
     }
 
     @Test
@@ -289,6 +321,9 @@ class AuthControllerTest {
         // Logout is an open path: with a dead cookie the browser still gets told to drop it.
         http.post().uri("/auth/logout").cookie(AuthFilter.COOKIE, session).exchange()
                 .expectStatus().isNoContent().expectHeader().valueMatches("Set-Cookie", ".*Max-Age=0.*");
+        // No cookie at all (a cross-site form POST, which Lax keeps the cookie from): nothing to clear, so nothing is sent.
+        http.post().uri("/auth/logout").exchange()
+                .expectStatus().isNoContent().expectHeader().doesNotExist("Set-Cookie");
     }
 
     @Test
