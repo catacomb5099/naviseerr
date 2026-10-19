@@ -8,6 +8,8 @@ import com.catacomb5099.naviseerr.schema.slskd.SlskdOptions;
 import com.catacomb5099.naviseerr.schema.slskd.TransferedFile;
 import com.catacomb5099.naviseerr.schema.slskd.UserTransfers;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -59,6 +61,37 @@ public class SlskdService {
                 .uri(OPTIONS_ENDPOINT)
                 .retrieve()
                 .bodyToMono(SlskdOptions.class);
+    }
+
+    /**
+     * Asks slskd to log in to Soulseek ({@code PUT /server}, no body): it starts its connection
+     * watchdog, or restarts the wait when one is already running (205). The watchdog reads the
+     * username and password from its current options on every attempt, so after slskd.yml has been
+     * rewritten this is how the new account takes effect without restarting the container.
+     */
+    public Mono<Void> connect() {
+        return webClient
+                .put()
+                .uri(SERVER_ENDPOINT)
+                .retrieve()
+                .toBodilessEntity()
+                .then();
+    }
+
+    /**
+     * Asks slskd to drop its Soulseek connection and stop retrying ({@code DELETE /server}; the body
+     * is the reason, a bare JSON string, which slskd logs). Called before {@link #connect()} when the
+     * account changed, since a logged-in client keeps the old session otherwise.
+     */
+    public Mono<Void> disconnect(String reason) {
+        return webClient
+                .method(HttpMethod.DELETE)
+                .uri(SERVER_ENDPOINT)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(reason)
+                .retrieve()
+                .toBodilessEntity()
+                .then();
     }
 
     public Mono<SearchState> searchResults(String query) {
