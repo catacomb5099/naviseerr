@@ -137,12 +137,13 @@ class JellyfinClientTest {
     }
 
     @Test
-    void findPlaylist_isEmptyWhileJellyfinHasNotImportedTheFile_andFallsBackToTheName() {
+    void findPlaylist_isEmptyWhileJellyfinHasNotImportedTheFile_evenWhenAJellyfinMadePlaylistSharesTheTitle() {
         server.enqueue(json(200, "{\"Items\":[],\"TotalRecordCount\":0}"));
         StepVerifier.create(client.findPlaylist("New.m3u8")).verifyComplete();
 
-        server.enqueue(json(200, "{\"Items\":[{\"Name\":\"New\",\"Id\":\"n3w\",\"Type\":\"Playlist\"}]}"));
-        StepVerifier.create(client.findPlaylist("New.m3u8")).expectNext("n3w").verifyComplete();
+        // A playlist the user made inside Jellyfin (its own Path, never our file) must keep its own picture.
+        server.enqueue(json(200, "{\"Items\":[{\"Name\":\"New\",\"Id\":\"n4tive\",\"Path\":\"/config/data/playlists/New/playlist.xml\",\"Type\":\"Playlist\"}]}"));
+        StepVerifier.create(client.findPlaylist("New.m3u8")).verifyComplete();
     }
 
     @Test

@@ -192,6 +192,27 @@ class MediaServerNotifierTest {
     }
 
     @Test
+    void aPushThatFailsBecauseJellyfinWentAway_isKeptForTheNextRescan() throws Exception {
+        Path m3u8 = Files.writeString(tmp.resolve("Mix.m3u8"), "#EXTM3U\n");
+        Files.write(tmp.resolve("Mix.jpg"), JPEG);
+        when(jellyfin.findPlaylist("Mix.m3u8")).thenReturn(
+                Mono.error(new MediaServerException("Jellyfin at http://nas:8096 did not answer: Connection refused")),
+                Mono.just("item-3"));
+        when(jellyfin.setPrimaryImage(any(), any())).thenReturn(Mono.empty());
+        MediaServerNotifier notifier = notifier();
+
+        notifier.playlistWritten(m3u8);
+        notifier.flush(T0).block();                       // the lookup fails: one WARN, the cover is kept
+        for (int i = 0; i < 50 && warnings().isEmpty(); i++) Thread.sleep(100);
+        assertEquals(1, warnings().size(), () -> warnings().toString());
+        verify(jellyfin, never()).setPrimaryImage(any(), any());
+
+        notifier.libraryChanged();
+        notifier.flush(T0.plusSeconds(60)).block();       // the next rescan: pushed
+        verify(jellyfin, timeout(5000)).setPrimaryImage("item-3", JPEG);
+    }
+
+    @Test
     void aServerWithAUrlButNoLogin_isLeftOut_andNothingConfigured_meansNothingToDo() {
         when(navidrome.hasCredentials()).thenReturn(false);
         when(jellyfin.isConfigured()).thenReturn(false);

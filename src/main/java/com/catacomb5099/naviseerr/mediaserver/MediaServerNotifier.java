@@ -137,7 +137,8 @@ public class MediaServerNotifier {
 
     /**
      * Reads {@code <title>.jpg} beside the playlist file (none: nothing to push), waits for Jellyfin to list
-     * the playlist, then sets its picture. Best effort: one WARN when Jellyfin never lists it or refuses.
+     * the playlist, then sets its picture. One WARN when Jellyfin never lists it; one WARN and another go
+     * after the next rescan when the lookup or the upload itself failed (Jellyfin restarted, say).
      */
     Mono<Void> pushCover(Path m3u8) {
         String fileName = m3u8.getFileName().toString();
@@ -154,12 +155,14 @@ public class MediaServerNotifier {
                         .repeatWhenEmpty(tries -> tries.take(COVER_POLLS).delayElements(coverPoll))
                         // On the lookup, before the push: the push itself completes empty.
                         .switchIfEmpty(Mono.<String>fromRunnable(() -> log.warn("Jellyfin has not imported playlist '{}' "
-                                + "after {}; it keeps Jellyfin's own collage until the playlist is finalised again", title,
-                                coverPoll.multipliedBy(COVER_POLLS))))
+                                + "after {} s; it keeps Jellyfin's own collage until the playlist is finalised again", title,
+                                coverPoll.multipliedBy(COVER_POLLS).toSeconds())))
                         .flatMap(id -> jellyfin.setPrimaryImage(id, bytes)
                                 .doOnSuccess(v -> log.info("Jellyfin: set the picture of playlist '{}'", title))))
                 .onErrorResume(error -> {
-                    log.warn("Could not send the picture of playlist '{}' to Jellyfin: {}", title, error.getMessage());
+                    pendingCovers.add(m3u8);   // Jellyfin went away mid-way: again after its next rescan
+                    log.warn("Could not send the picture of playlist '{}' to Jellyfin; again after its next rescan: {}",
+                            title, error.getMessage());
                     return Mono.empty();
                 });
     }
