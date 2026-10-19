@@ -315,8 +315,9 @@ class YtMusicServiceTest {
         assertEquals(1, server.getRequestCount());
     }
 
+    /** Until 19-10-2026 a 429 was retried like a 502: three calls in ~150 ms at a server already saying "too many". */
     @Test
-    void getResults_429EnvelopeShape_mapsToUnavailable_andRetriesToSuccess() {
+    void getResults_429EnvelopeShape_mapsToRateLimitedUnavailable_andIsNotRetried() {
         server.enqueue(new MockResponse().setResponseCode(429)
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Retry-After", "30")
@@ -326,12 +327,17 @@ class YtMusicServiceTest {
                 .setBody(SONGS_BODY));
 
         StepVerifier.create(service.getResults("Oasis Wonderwall", YtMusicSearchType.SONGS))
-                .assertNext(response -> assertEquals(1, response.getTracks().size()))
-                .verifyComplete();
+                .expectErrorSatisfies(error -> {
+                    assertInstanceOf(YtMusicUnavailableException.class, error);
+                    assertTrue(((YtMusicUnavailableException) error).isRateLimited());
+                    assertEquals("Upstream rate limit exceeded", error.getMessage());
+                })
+                .verify();
 
-        assertEquals(2, server.getRequestCount());
+        assertEquals(1, server.getRequestCount());
     }
 
+    /** A 502 (YouTube down or unreachable from the adapter) is still retried: asking again costs nothing there. */
     @Test
     void getResults_502EnvelopeShape_mapsToUnavailable_andRetriesToSuccess() {
         server.enqueue(new MockResponse().setResponseCode(502)
