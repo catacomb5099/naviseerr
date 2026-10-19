@@ -327,8 +327,23 @@ class DownloadControllerTest {
                 .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isNotEmpty();
         http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x".repeat(201))).exchange()
                 .expectStatus().isBadRequest();
+        // A control character inside the text would forge a log line and reach slskd.
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "Common People\n2026-10-19 INFO forged")).exchange()
+                .expectStatus().isBadRequest();
 
         verify(manualSearch, never()).song(any(), any(), any());
+    }
+
+    @Test
+    void search_whileTheLoopsOwnSearchRuns_is409SearchRunning() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(new ManualSearch.SearchRunningException(taskId)));
+
+        WebTestClient.bindToController(controller).build()
+                .post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("SEARCH_RUNNING").jsonPath("$.message").isNotEmpty();
     }
 
     @Test
@@ -354,12 +369,17 @@ class DownloadControllerTest {
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody()
                 .jsonPath("$.reason").isEqualTo("SOULSEEK_OFFLINE")
-                .jsonPath("$.message").value(message -> assertTrue(message.toString().startsWith("Soulseek is offline"), message.toString()));
+                .jsonPath("$.message").value(message -> {
+                    assertTrue(message.toString().startsWith("Soulseek is offline"), message.toString());
+                    // slskd's own sentence, unquoted; no status code for a person to read.
+                    assertTrue(message.toString().endsWith(": The server connection must be connected and logged in to perform a search (currently: Disconnected)"), message.toString());
+                });
 
         when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(SlskdFixtures.responseFailure(429)));
         http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
                 .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
-                .expectBody().jsonPath("$.reason").isEqualTo("SOULSEEK_BUSY");
+                .expectBody().jsonPath("$.reason").isEqualTo("SOULSEEK_BUSY")
+                .jsonPath("$.message").isEqualTo("Soulseek is busy with other searches; try again in a moment.");
 
         when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(SlskdFixtures.transportFailure()));
         http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()

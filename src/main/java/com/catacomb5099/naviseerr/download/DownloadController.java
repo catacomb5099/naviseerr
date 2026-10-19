@@ -308,7 +308,8 @@ public class DownloadController {
      * {@value #MAX_SEARCH_TEXT} characters; 404 {@code {message}} for unknown ids; 409 {@code {reason:
      * SOULSEEK_OFFLINE, message}} when slskd is not logged in (its own 409); 429 {@code {reason: SOULSEEK_BUSY,
      * message}} when slskd refuses a third concurrent search (its own 429); 502 {@code {reason: SLSKD_UNREACHABLE,
-     * message}} when slskd cannot be reached or does not answer.
+     * message}} when slskd cannot be reached or does not answer; 409 {@code {reason: SEARCH_RUNNING, message}} while
+     * Naviseerr's own search for the song still runs (its result would overwrite the person's).
      */
     @PostMapping("/downloads/{id}/tasks/{taskId}/search")
     Mono<ResponseEntity<Object>> search(@PathVariable UUID id, @PathVariable UUID taskId, @RequestBody SearchRequest body) {
@@ -319,30 +320,36 @@ public class DownloadController {
         return manualSearch.song(id, taskId, text)
                 .map(view -> ResponseEntity.<Object>ok(view))
                 .defaultIfEmpty(notFound("No song " + taskId + " in download " + id))
-                .onErrorResume(WebClientException.class, error -> Mono.just(searchRefused(error)));
+                .onErrorResume(WebClientException.class, error -> Mono.just(searchRefused(error)))
+                .onErrorResume(ManualSearch.SearchRunningException.class, running -> Mono.just(
+                        refused(HttpStatus.CONFLICT, "SEARCH_RUNNING", running.getMessage())));
     }
 
-    /** The trimmed text, or null when there is nothing to search for or too much. */
+    /** The trimmed text, or null when there is nothing to search for, too much, or a control character (it is logged). */
     private static String searchText(SearchRequest body) {
         String text = body == null || body.text() == null ? "" : body.text().strip();
-        return text.isEmpty() || text.length() > MAX_SEARCH_TEXT ? null : text;
+        return text.isEmpty() || text.length() > MAX_SEARCH_TEXT || text.chars().anyMatch(Character::isISOControl) ? null : text;
     }
 
     /**
      * slskd's answer, in a sentence the pop-up can print: its 409 is "not logged in to Soulseek" (the same
      * reading as {@code DownloadStateMachine.onSearchCallFailed}), its 429 "a third search at once" (slskd
      * runs two and queues the rest; an overlapping POST can still be refused); anything else is slskd
-     * itself not answering. slskd's own words follow after a colon so the log and the screen agree.
+     * itself not answering. slskd's own words (its response body, unquoted) follow after a colon when it
+     * gave any; the status code stays in the log, where the whole answer is written.
      */
     private static ResponseEntity<Object> searchRefused(WebClientException error) {
-        String detail = DownloadStateMachine.describe(error);
+        log.warn("A person's Soulseek search was refused: {}", DownloadStateMachine.describe(error));
+        String words = error instanceof WebClientResponseException refused
+                ? refused.getResponseBodyAsString().strip().replaceAll("^\"|\"$", "") : "";
+        String tail = words.isBlank() ? "." : ": " + words;
         if (error instanceof WebClientResponseException.Conflict) {
-            return refused(HttpStatus.CONFLICT, "SOULSEEK_OFFLINE", "Soulseek is offline right now, so the search could not run: " + detail);
+            return refused(HttpStatus.CONFLICT, "SOULSEEK_OFFLINE", "Soulseek is offline right now, so the search could not run" + tail);
         }
         if (error instanceof WebClientResponseException.TooManyRequests) {
-            return refused(HttpStatus.TOO_MANY_REQUESTS, "SOULSEEK_BUSY", "Soulseek is busy with other searches; try again in a moment: " + detail);
+            return refused(HttpStatus.TOO_MANY_REQUESTS, "SOULSEEK_BUSY", "Soulseek is busy with other searches; try again in a moment" + tail);
         }
-        return refused(HttpStatus.BAD_GATEWAY, "SLSKD_UNREACHABLE", "slskd did not answer, so the search could not run: " + detail);
+        return refused(HttpStatus.BAD_GATEWAY, "SLSKD_UNREACHABLE", "slskd did not answer, so the search could not run" + tail);
     }
 
     private static ResponseEntity<Object> refused(HttpStatus status, String reason, String message) {

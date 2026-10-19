@@ -220,7 +220,7 @@ public class DownloadService {
                 files.stream().map(file -> TaskCandidatesView.Candidate.of(file, current)).toList());
     }
 
-    private static PickListStatus statusOf(DownloadTaskRepository.CachedSearch song) {
+    static PickListStatus statusOf(DownloadTaskRepository.CachedSearch song) {
         return "SEARCH_INIT".equals(song.phase()) || "SEARCH_POLL".equals(song.phase())
                 ? PickListStatus.SEARCHING : PickListStatus.NONE;
     }

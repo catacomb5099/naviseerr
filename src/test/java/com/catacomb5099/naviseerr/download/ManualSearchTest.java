@@ -52,7 +52,7 @@ class ManualSearchTest {
     @BeforeEach
     void defaults() {
         when(repository.cachedSearch(downloadId, taskId)).thenReturn(Mono.just(song()));
-        when(repository.saveSearchResults(eq(taskId), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.saveSearchResults(eq(taskId), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskd.searchResults("Common People Pulp 1995")).thenReturn(Mono.just(SlskdFixtures.searchState("new-1", false, "InProgress")));
     }
 
@@ -79,8 +79,9 @@ class ManualSearchTest {
                 .verifyComplete();
 
         verify(slskd, times(3)).getSearchWithResponses("new-1");
+        // The new slskd id lands on the row too, so a reopened pop-up's grey line points at THIS search.
         verify(repository).saveSearchResults(eq(taskId), argThat(files -> files.size() == 1
-                && files.getFirst().filename().equals(file.getFilename())), eq(NOW));
+                && files.getFirst().filename().equals(file.getFilename())), eq(NOW), eq("new-1"));
         assertEquals(0, search.inFlight(), "the slot is given back when the search ends");
     }
 
@@ -119,7 +120,7 @@ class ManualSearchTest {
                 .verifyComplete();
 
         // SAVE_SEARCH_RESULTS_SQL itself decides: an empty list never wipes a remembered one.
-        verify(repository).saveSearchResults(eq(taskId), eq(List.of()), eq(NOW));
+        verify(repository).saveSearchResults(eq(taskId), eq(List.of()), eq(NOW), eq("new-1"));
     }
 
     @Test
@@ -133,7 +134,34 @@ class ManualSearchTest {
                 .verify();
 
         assertEquals(0, search.inFlight(), "the slot is given back on an error too");
-        verify(repository, never()).saveSearchResults(any(), any(), any());
+        verify(repository, never()).saveSearchResults(any(), any(), any(), any());
+    }
+
+    @Test
+    void oneFailedPoll_isReadAgain_notTheEndOfTheWait() {
+        SearchState done = SlskdFixtures.searchStateWithResponses("new-1", true, "Completed, TimedOut", List.of(peer));
+        when(slskd.getSearchWithResponses("new-1")).thenReturn(Mono.error(SlskdFixtures.transportFailure()), Mono.just(done));
+        when(processor.allFiles(eq(done), any(), any())).thenReturn(List.of(pick));
+
+        StepVerifier.withVirtualTime(() -> search.song(downloadId, taskId, "Common People Pulp 1995"))
+                .expectSubscription()
+                .thenAwait(Duration.ofSeconds(1))
+                .assertNext(view -> assertEquals(1, view.candidates().size()))
+                .verifyComplete();
+
+        verify(slskd, times(2)).getSearchWithResponses("new-1");
+    }
+
+    @Test
+    void whileTheLoopsOwnSearchRuns_theSongIsRefused_withoutSearching() {
+        when(repository.cachedSearch(downloadId, taskId)).thenReturn(Mono.just(new DownloadTaskRepository.CachedSearch(
+                taskId, "SEARCH_POLL", "Common People - Pulp", 0, List.of(), 0, null, null, List.of(), null, "loop-1", null)));
+
+        StepVerifier.create(search.song(downloadId, taskId, "Common People Pulp 1995"))
+                .expectError(ManualSearch.SearchRunningException.class)
+                .verify();
+
+        verify(slskd, never()).searchResults(any());
     }
 
     @Test
