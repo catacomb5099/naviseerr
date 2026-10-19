@@ -148,7 +148,7 @@ leave it. Your existing playlists stay.
   slskd never shares it, and Navidrome and Jellyfin ignore it. Leave it there. The check only fires
   when the folder is completely empty: a mount point that still holds something (a `lost+found`
   folder, say) is not caught.
-- **"YouTube Music isn't answering" strip** across the web app (search and new downloads wait while it
+- **"YouTube Music isn't answering" strip** across the web app (search fails and new downloads wait while it
   shows). The YouTube Music helper is down or cannot reach YouTube from inside its container; the
   server's own search just before it will have logged one "YouTube Music is not answering" warning.
   `docker compose logs ytmusic-adapter` says which: "Could not reach YouTube Music
