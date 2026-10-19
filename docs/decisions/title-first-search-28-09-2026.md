@@ -147,17 +147,18 @@ was not a version word at all.
 
 The rule, extending the lists rather than adding a wording (the order of the wordings is unchanged):
 
-- "Explicit Version", "Clean Version" and a bare trailing "Explicit" are version qualifiers: gone from every
-  wording, kept in brackets for the picker ("Poetic Justice (Explicit Version) - Kendrick Lamar"). Spotify, Apple
+- "Explicit Version", "Clean Version" and a bare trailing "Explicit" are version qualifiers, inline or as their own
+  dash segment ("Poetic Justice - Explicit - Kendrick Lamar"): gone from every wording, kept in brackets for the picker ("Poetic Justice (Explicit Version) - Kendrick Lamar"). Spotify, Apple
   Music and YouTube Music all show "Explicit" as a badge beside the title, never as title text, so the song's name
-  is "Poetic Justice". A bare trailing "Clean" is NOT peeled ("Mr. Clean" is a title; files flagged "Clean" are
-  DJ-pool edits the picker already rejects unless the request says so, PR #101).
+  is "Poetic Justice". "Clean" is peeled only as the phrase "Clean Version" ("Mr. Clean" and "Come Clean Remix" are
+  titles; files flagged "Clean" are DJ-pool edits the picker already rejects unless the request says so, PR #101).
 - "Closed Captioned", with a space or a hyphen, is noise like "Official Video": gone from the search and not a
-  picker qualifier either, whether in brackets or inline, and a comma may sit before any trailing tag.
+  picker qualifier either, whether in brackets or inline, before or after the version phrase, and a comma (with or
+  without a space after it) may sit before any trailing tag or version phrase.
 - A trailing tag that hides behind a guest credit ("... Closed Captioned ft. Drake") is cut once the credit is.
 
 Checked on the real titles: "Explicit - Artist", "Explicit Content - Some Band", "Clean - Taylor Swift",
-"Lose Yourself Clean - Eminem" and the bracketed shapes ("Smack That (Clean) (feat. Eminem) - Akon") search as
+"Lose Yourself Clean - Eminem", "Come Clean Remix - Hilary Duff", "Mr. Clean Remix - Yung Gravy" and the bracketed shapes ("Smack That (Clean) (feat. Eminem) - Akon") search as
 before. No title among the lab's 765 or the owner's 1,297 rows ends in a bare "Explicit", so nothing real loses a
 word. No stored data changes: `song_name` is kept raw and the wordings are re-derived on every read, so a row that
 failed for this reason searches correctly on its next Retry.

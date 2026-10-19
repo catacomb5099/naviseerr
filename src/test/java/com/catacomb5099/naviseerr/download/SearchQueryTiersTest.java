@@ -291,6 +291,17 @@ class SearchQueryTiersTest {
         assertEquals(expected, SearchQueryTiers.of("Kendrick Lamar - Poetic Justice Explicit Version, Closed Captioned - Kendrick Lamar"));
         assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
                 SearchQueryTiers.pickerName("Kendrick Lamar - Poetic Justice Explicit Version, Closed Captioned - Kendrick Lamar"));
+        // the same tags as their own dash segment, behind a comma (with or without a space), or before the version phrase
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice - Explicit - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit) - Kendrick Lamar", SearchQueryTiers.pickerName("Poetic Justice - Explicit - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice, Explicit Version - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Poetic Justice, Explicit Version - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Explicit Version,Closed Captioned - Kendrick Lamar"));
+        assertEquals(expected, SearchQueryTiers.of("Poetic Justice Closed Captioned Explicit Version - Kendrick Lamar"));
+        assertEquals("Poetic Justice (Explicit Version) - Kendrick Lamar",
+                SearchQueryTiers.pickerName("Poetic Justice Closed Captioned Explicit Version - Kendrick Lamar"));
+        assertEquals(List.of("Wonderwall", "Wonderwall - Oasis"), SearchQueryTiers.of("Wonderwall, Remastered 2009 - Oasis"));
         // a bare trailing "Explicit" and "Clean Version" are version qualifiers too
         assertEquals(expected, SearchQueryTiers.of("Poetic Justice Explicit - Kendrick Lamar"));
         assertEquals("Poetic Justice (Explicit) - Kendrick Lamar", SearchQueryTiers.pickerName("Poetic Justice Explicit - Kendrick Lamar"));
@@ -324,6 +335,10 @@ class SearchQueryTiersTest {
         assertEquals(List.of("Lose Yourself Clean", "Lose Yourself Clean - Eminem", "Yourself Clean Eminem"),
                 SearchQueryTiers.of("Lose Yourself Clean - Eminem"));
         assertEquals("Lose Yourself Clean - Eminem", SearchQueryTiers.pickerName("Lose Yourself Clean - Eminem"));
+        // "Clean" before another version word is still a title word: only the phrase "Clean Version" is peeled
+        assertEquals(List.of("Come Clean", "Come Clean - Hilary Duff", "Clean Hilary"), SearchQueryTiers.of("Come Clean Remix - Hilary Duff"));
+        assertEquals("Come Clean (Remix) - Hilary Duff", SearchQueryTiers.pickerName("Come Clean Remix - Hilary Duff"));
+        assertEquals(List.of("Mr. Clean", "Mr. Clean - Yung Gravy", "Clean Gravy"), SearchQueryTiers.of("Mr. Clean Remix - Yung Gravy"));
         // the bracketed shapes most official videos use are unchanged
         assertEquals(List.of("Smack That", "Smack That - Akon", "Smack Akon"), SearchQueryTiers.of("Smack That (Clean) (feat. Eminem) - Akon"));
         assertEquals("Smack That (Clean) (feat. Eminem) - Akon", SearchQueryTiers.pickerName("Smack That (Clean) (feat. Eminem) - Akon"));

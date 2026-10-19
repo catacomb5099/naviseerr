@@ -92,7 +92,7 @@ public final class SearchQueryTiers {
      * YouTube puts on official videos, which no shared file is named by.
      */
     private static final Pattern TRAILING_TAG = Pattern.compile(
-            "(?:\\s*,)?\\s+(?:(?:w/|with)?\\s*lyrics|(?:official\\s+)?(?:music\\s+|lyric\\s+)?video|official\\s+audio"
+            "(?:\\s*,\\s*|\\s+)(?:(?:w/|with)?\\s*lyrics|(?:official\\s+)?(?:music\\s+|lyric\\s+)?video|official\\s+audio"
                     + "|closed[ -]captioned)$",
             Pattern.CASE_INSENSITIVE);
 
@@ -105,11 +105,11 @@ public final class SearchQueryTiers {
 
     /**
      * A middle part that names a version rather than a song: "Radio Edit", "Remastered",
-     * "Live At The Florida Theatre". Decides which way a three-part name is read.
+     * "Live At The Florida Theatre", "Explicit". Decides which way a three-part name is read.
      */
     private static final Pattern QUALIFIER = Pattern.compile(
             "\\b(remaster(?:ed)?|version|edit|mix|remix|live|acoustic|unplugged|instrumental|demo|session"
-                    + "|radio|single|album|extended|mono|stereo|cover|karaoke)\\b",
+                    + "|radio|single|album|extended|mono|stereo|cover|karaoke|explicit)\\b",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -118,14 +118,15 @@ public final class SearchQueryTiers {
      * Explicit Version". Peeled off the end repeatedly ("Wonderwall Acoustic Live"). A title that is nothing
      * but such a word ("Live") is left alone. "Explicit Version", "Clean Version" and a bare trailing
      * "Explicit" are the labels YouTube's official uploads carry; Spotify, Apple Music and YouTube Music
-     * show them as a badge, never as title text. A bare trailing "Clean" is not peeled: "Mr. Clean" is
-     * a title, and files flagged "Clean" are DJ-pool edits the picker already rejects.
+     * show them as a badge, never as title text. "Clean" is peeled only as the phrase "Clean Version":
+     * "Mr. Clean" and "Come Clean Remix" are titles, and files flagged "Clean" are DJ-pool edits the
+     * picker already rejects.
      */
     private static final Pattern INLINE_VERSION = Pattern.compile(
-            "\\s+(?:live\\s+(?:at|from|in)\\s+.+"
+            "\\s+(?:live\\s+(?:at|from|in)\\s+.+|clean\\s+version"
                     + "|(?:'?\\d{2,4}\\s+)?"
                     + "(?:(?:radio|club|single|album|extended|original|dub|vocal|acoustic|live|stripped|piano|slowed|full"
-                    + "|explicit|clean)\\s+)?"
+                    + "|explicit)\\s+)?"
                     + "(?:remaster(?:ed)?|version|remix|rmx|mix|edit|acoustic|unplugged|stripped|demo|instrumental"
                     + "|karaoke|session|live|explicit)(?:\\s+'?\\d{2,4})?)$",
             Pattern.CASE_INSENSITIVE);
@@ -377,17 +378,18 @@ public final class SearchQueryTiers {
         return new Cleaned(titles, qualifiers, artistTitleChannel);
     }
 
-    /** Peels "Live at Wembley", "Remastered 2009", "Radio Edit" off the end of each title part. */
+    /** Peels "Live at Wembley", "Remastered 2009", "Radio Edit" off the end of each title part, and the comma before it. */
     private static List<String> withoutInlineVersions(List<String> titles, List<String> qualifiers) {
         List<String> out = new ArrayList<>();
         for (String title : titles) {
             Matcher m = INLINE_VERSION.matcher(title);
             while (m.find() && m.start() > 0) {
                 qualifiers.add("(" + title.substring(m.start()).strip() + ")");
-                title = title.substring(0, m.start()).strip();
+                title = title.substring(0, m.start()).replaceAll("[,;:]+$", "").strip();
                 m = INLINE_VERSION.matcher(title);
             }
-            out.add(title);
+            // "Title Closed Captioned Explicit Version": the tag comes to light once the phrase is gone.
+            out.add(withoutTrailingTag(title));
         }
         return out;
     }
