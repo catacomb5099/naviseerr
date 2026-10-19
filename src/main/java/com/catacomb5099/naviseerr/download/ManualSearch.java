@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
@@ -7,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -38,27 +40,36 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Component
 public class ManualSearch {
 
-    /** Naviseerr's own search for this song is still running; its result would overwrite the person's. 409. */
+    /** Naviseerr's own search for this song or album is still running; its result would overwrite the person's. 409. */
     public static final class SearchRunningException extends RuntimeException {
         SearchRunningException(UUID id) {
             super("Naviseerr's own search for " + id + " is still running; wait for it to finish, then search again");
         }
     }
 
+    /** The album picker was asked about an album with no search row (admitted before albums searched as a whole); 409. */
+    public static final class NoAlbumSearchException extends RuntimeException {
+        NoAlbumSearchException(UUID downloadId) {
+            super("Album " + downloadId + " has no album search to keep folders on");
+        }
+    }
+
     private final SlskdService slskdService;
     private final SlskdSearchResultProcessor processor;
+    private final AlbumFolderPicker picker;
     private final DownloadTaskRepository repository;
     private final Clock clock;
     private final Duration pollInterval;
     private final Duration budget;
     private final AtomicInteger inFlight = new AtomicInteger();
 
-    public ManualSearch(SlskdService slskdService, SlskdSearchResultProcessor processor,
+    public ManualSearch(SlskdService slskdService, SlskdSearchResultProcessor processor, AlbumFolderPicker picker,
                         DownloadTaskRepository repository, Clock clock,
                         @Value("${download-task.search-poll-interval-ms:2000}") Duration pollInterval,
                         @Value("${download-task.manual-search-budget-ms:30000}") Duration budget) {
         this.slskdService = slskdService;
         this.processor = processor;
+        this.picker = picker;
         this.repository = repository;
         this.clock = clock;
         this.pollInterval = pollInterval;
@@ -93,6 +104,50 @@ public class ManualSearch {
                     files.isEmpty() ? PickListStatus.NONE : PickListStatus.READY, files.isEmpty() ? "NO_RESULTS" : null,
                     text, state.getId(), now));
             });
+        });
+    }
+
+    /**
+     * The same for a whole album: every folder the search found holding any of the album's songs, the ones
+     * the album search itself would take first ({@code judged}), written over the album's remembered folders so
+     * {@code POST .../album-pick} accepts any of them, answered as {@code GET .../album-candidates} does with the
+     * text as the query. Every song of the album is matched, finished ones too, so "11 of 11" reads right. No
+     * stalling-sharer filter: the person sees everything and decides. Nothing is written when no folder holds a
+     * song (as the album search step does), so the old list stays. Empty for an unknown download; an error for a
+     * download that is not an album, has no album search row to keep folders on, or whose album search still runs.
+     */
+    public Mono<AlbumCandidatesView> album(UUID downloadId, String text) {
+        return repository.cachedAlbumSearch(downloadId).flatMap(album -> {
+            if (album.type() != DownloadType.ALBUM) {
+                return Mono.error(new DownloadService.NotAnAlbumException(downloadId));
+            }
+            if (album.phase() == null) {
+                return Mono.error(new NoAlbumSearchException(downloadId));
+            }
+            // The loop's album search would poll this id and write its folders over the person's when it completes.
+            if (!"DONE".equals(album.phase())) {
+                return Mono.error(new SearchRunningException(downloadId));
+            }
+            return repository.songs(downloadId).collectList().flatMap(songs -> run(text).flatMap(state -> {
+                Instant now = clock.instant();
+                List<SearchResponseItem> responses = state.getResponses() == null ? List.of() : state.getResponses();
+                // Off the event loop, as the album search step does: judging 250 responses takes a fifth of a second.
+                return Mono.fromCallable(() -> StoredFolder.of(
+                                picker.folders(responses, songs, album.title(), album.artists(), sharer -> false),
+                                picker.allFolders(responses, songs, album.title(), album.artists())))
+                        .subscribeOn(Schedulers.parallel())
+                        .flatMap(folders -> {
+                            log.info("Manual album search '{}' for download {}: slskd search {} ({}), {} folder(s)", text,
+                                    downloadId, state.getId(), state.getState(), folders.size());
+                            Mono<Long> saved = folders.isEmpty() ? Mono.just(0L) : repository.saveAlbumFolders(downloadId, folders, now, state.getId());
+                            // The view reads status and reason off the row: DONE with these folders, NO_RESULTS when none.
+                            DownloadTaskRepository.CachedAlbumSearch found = new DownloadTaskRepository.CachedAlbumSearch(
+                                    album.type(), "DONE", folders.isEmpty() ? "NO_RESULTS" : album.outcome(), album.searchTier(),
+                                    album.title(), album.artists(), folders, now, state.getId(), now);
+                            return saved.then(repository.songPicks(downloadId).collectList())
+                                    .map(picks -> DownloadService.albumView(downloadId, found, picks, text));
+                        });
+            }));
         });
     }
 

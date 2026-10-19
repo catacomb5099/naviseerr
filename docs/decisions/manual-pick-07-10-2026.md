@@ -152,8 +152,8 @@ name) nothing let a person say what to search.
 
 Decisions:
 
-1. **One synchronous route per list** (`POST /downloads/{id}/tasks/{taskId}/search {text}`; the album variant
-   follows in its own change): one `POST /searches` with the text exactly as typed (trimmed, at most 200 characters),
+1. **One synchronous route per list** (`POST /downloads/{id}/tasks/{taskId}/search {text}` for a song,
+   `POST /downloads/{id}/album-search {text}` for a whole album, each its own change): one `POST /searches` with the text exactly as typed (trimmed, at most 200 characters),
    polled with its responses every `search-poll-interval-ms` until slskd says complete or
    `download-task.manual-search-budget-ms` (30 s) is spent, then the answers received so far are used. The request
    is held open for that long at most (slskd's own 10 s inactivity timeout plus a queued slot fit inside; a
@@ -173,16 +173,22 @@ Decisions:
    27-09-2026). slskd's own refusals come through worded: 409 `SOULSEEK_OFFLINE`, 429 `SOULSEEK_BUSY` (an overlapping
    search), 502 `SLSKD_UNREACHABLE`. Flip: refuse up front when the table already counts two running searches (one
    extra query, an instant but colder answer); the default waits in slskd's queue inside the 30 s.
-6. **Not done (ponytail)**: storing the typed text. `search_results_at` moves to the manual search's time and
+6. **The album variant matches every song of the album**, finished ones too (`DownloadTaskRepository.songs`, the
+   track columns only), so a folder's "11 of 11" reads right, and applies no stalling-sharer filter (the person sees
+   everything, `judged` says what the search itself would take). An album with no `album_searches` row (admitted
+   before albums searched as a whole) is refused 409 `NO_ALBUM_SEARCH`: there is no row to keep the folders on, and a
+   pick would then be refused anyway.
+7. **Not done (ponytail)**: storing the typed text. `search_results_at` moves to the manual search's time and
    `search_id` to its slskd id (`saveSearchResults` with the id, review of 19-10-2026, so the reopened pop-up's grey
    line points at the right search in slskd), and the response names the text, but a reopened pop-up re-derives the
    loop's own wording for the header. A `search_results_query` column written by `saveSearchResults` and read by
    `CACHED_SEARCH_SQL` is the fix; the next migration slot belongs to another change this sweep.
-7. **Refused while the loop's own search runs** (review of 19-10-2026): a song in `SEARCH_INIT`/`SEARCH_POLL` answers
-   409 `SEARCH_RUNNING` (`ManualSearch.SearchRunningException`); the pop-up hides the box then, but its list can be
+8. **Refused while the loop's own search runs** (review of 19-10-2026): a song in `SEARCH_INIT`/`SEARCH_POLL`, or an
+   album whose `album_searches` phase is not `DONE`, answers 409 `SEARCH_RUNNING` (`ManualSearch.SearchRunningException`;
+   the album variant writes `album_searches.search_id` too); the pop-up hides the box then, but its list can be
    stale (the row retried from the Downloads page behind an open pop-up), and the loop's completing search would
    write its list and poll its id over the person's. Writing `search_id` makes this guard necessary, not only polite.
-8. **Small things from the same review**: text with a control character is a 400 (a newline would forge a log line
+9. **Small things from the same review**: text with a control character is a 400 (a newline would forge a log line
    and reach slskd); one failed poll is read again (`retry(1)` on the per-poll Mono: a timed-out 1 MiB read used to
    end the whole wait with a 502 while slskd was still searching); the refusal `message` ends with slskd's own
    sentence, unquoted, and no status code (the whole answer goes to the log at WARN).

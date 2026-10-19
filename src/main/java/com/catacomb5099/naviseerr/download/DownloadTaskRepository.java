@@ -960,6 +960,20 @@ public class DownloadTaskRepository {
             """;
 
     /**
+     * Every song of one download as the album folder picker reads a track (its name, title, number and
+     * length), finished ones included, in track order: what a person's own album search
+     * ({@link ManualSearch}) matches folders against, so a folder's "11 of 11" counts the songs already
+     * downloaded too. Only those columns: the two terminal phases are not {@link DownloadPhase} values, so
+     * the full row mapper would refuse them.
+     */
+    private static final String ALL_SONGS_SQL = """
+            SELECT task_id, download_id, youtube_id, song_name, track_title, track_number, duration_seconds
+              FROM download_tasks
+             WHERE download_id = :downloadId
+             ORDER BY position NULLS LAST, phase_entered_at, task_id
+            """;
+
+    /**
      * Ends an album search and releases its songs, in ONE statement, so a crash cannot leave the search
      * done with its songs still held, nor release them twice. The search row is marked DONE only by its
      * own lease holder and only once; the songs are touched only when that happened ({@code EXISTS
@@ -1037,7 +1051,8 @@ public class DownloadTaskRepository {
     private static final String SAVE_ALBUM_FOLDERS_SQL = """
             UPDATE album_searches
                SET folders = :folders::jsonb,
-                   folders_at = :now
+                   folders_at = :now,
+                   search_id = COALESCE(:searchId, search_id)
              WHERE download_id = :id
             """;
 
@@ -1547,6 +1562,22 @@ public class DownloadTaskRepository {
                 .one();
     }
 
+    /** Every song of the download as a track to match folders against, finished ones too; see ALL_SONGS_SQL. */
+    public Flux<DownloadTask> songs(UUID downloadId) {
+        return client.sql(ALL_SONGS_SQL)
+                .bind("downloadId", downloadId)
+                .map((row, meta) -> DownloadTask.builder()
+                        .taskId(row.get("task_id", UUID.class))
+                        .downloadId(row.get("download_id", UUID.class))
+                        .youtubeId(row.get("youtube_id", String.class))
+                        .songName(row.get("song_name", String.class))
+                        .trackTitle(row.get("track_title", String.class))
+                        .trackNumber(row.get("track_number", Integer.class))
+                        .durationSeconds(row.get("duration_seconds", Integer.class))
+                        .build())
+                .all();
+    }
+
     /** The album's songs an album search may still hand files to, in track order. */
     public Flux<DownloadTask> waitingAlbumSongs(UUID downloadId, Instant now) {
         return client.sql(WAITING_ALBUM_SONGS_SQL)
@@ -1699,16 +1730,21 @@ public class DownloadTaskRepository {
 
     /** Remembers the folders an album search judged, best first; see SAVE_ALBUM_FOLDERS_SQL. */
     public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now) {
+        return saveAlbumFolders(downloadId, folders, now, null);
+    }
+
+    /** The same, also making {@code searchId} the album search's id when given (a person's own search, {@link ManualSearch}). */
+    public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now, String searchId) {
         String json;
         try {
             json = objectMapper.writeValueAsString(folders);
         } catch (Exception e) {
             return Mono.error(new IllegalStateException("Could not serialise album folders", e));
         }
-        return client.sql(SAVE_ALBUM_FOLDERS_SQL)
+        return bindNullable(client.sql(SAVE_ALBUM_FOLDERS_SQL)
                 .bind("id", downloadId)
                 .bind("folders", json)
-                .bind("now", now)
+                .bind("now", now), "searchId", searchId)
                 .fetch()
                 .rowsUpdated();
     }

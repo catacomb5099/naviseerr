@@ -387,6 +387,45 @@ class DownloadControllerTest {
                 .expectBody().jsonPath("$.reason").isEqualTo("SLSKD_UNREACHABLE");
     }
 
+    @Test
+    void albumSearch_answersTheFolders_andWordsNotAnAlbumAndNoAlbumSearchAs409() {
+        UUID id = UUID.randomUUID();
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+        AlbumCandidatesView list = new AlbumCandidatesView(id, PickListStatus.READY, null, "Definitely Maybe 1994 flac", "new-2", NOW, 11, List.of());
+        when(manualSearch.album(id, "Definitely Maybe 1994 flac")).thenReturn(Mono.just(list));
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "Definitely Maybe 1994 flac")).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.query").isEqualTo("Definitely Maybe 1994 flac")
+                .jsonPath("$.searchId").isEqualTo("new-2");
+
+        when(manualSearch.album(id, "x")).thenReturn(Mono.error(new DownloadService.NotAnAlbumException(id)));
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("NOT_AN_ALBUM");
+
+        when(manualSearch.album(id, "x")).thenReturn(Mono.error(new ManualSearch.NoAlbumSearchException(id)));
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("NO_ALBUM_SEARCH").jsonPath("$.message").isNotEmpty();
+
+        when(manualSearch.album(id, "x")).thenReturn(Mono.error(new ManualSearch.SearchRunningException(id)));
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("SEARCH_RUNNING").jsonPath("$.message").isNotEmpty();
+
+        when(manualSearch.album(id, "x")).thenReturn(Mono.error(SlskdFixtures.soulseekOffline()));
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("SOULSEEK_OFFLINE");
+
+        when(manualSearch.album(id, "x")).thenReturn(Mono.empty());
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isNotFound();
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", " ")).exchange()
+                .expectStatus().isBadRequest();
+    }
+
     // ---- picking a file by hand ------------------------------------------------------------------
 
     @Test

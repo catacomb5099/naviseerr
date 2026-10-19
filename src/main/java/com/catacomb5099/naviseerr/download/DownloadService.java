@@ -278,8 +278,17 @@ public class DownloadService {
         });
     }
 
+    /** The view for the album's remembered folders, named with the wording the album search used. */
     private static AlbumCandidatesView albumView(UUID downloadId, DownloadTaskRepository.CachedAlbumSearch album,
                                                  List<DownloadTaskRepository.SongPick> songs) {
+        String query = album.title() == null ? null : AlbumSearch.builder().title(album.title()).artists(album.artists())
+                .searchTier(album.searchTier() == null ? 0 : album.searchTier()).build().searchQuery();
+        return albumView(downloadId, album, songs, query);
+    }
+
+    /** The same view over any folders: a person's own search ({@link ManualSearch}) names its text as the query. */
+    static AlbumCandidatesView albumView(UUID downloadId, DownloadTaskRepository.CachedAlbumSearch album,
+                                         List<DownloadTaskRepository.SongPick> songs, String query) {
         Map<UUID, DownloadTaskRepository.SongPick> byTask = songs.stream()
                 .collect(Collectors.toMap(DownloadTaskRepository.SongPick::taskId, song -> song));
         List<AlbumCandidatesView.Folder> folders = album.folders().stream().map(folder -> {
@@ -305,8 +314,6 @@ public class DownloadService {
                     folder.hasFreeUploadSlot(), folder.queueLength(), folder.extras(), songsCurrent, songsCurrent > 0,
                     folder.judged() == null || folder.judged(), files);
         }).toList();
-        String query = album.title() == null ? null : AlbumSearch.builder().title(album.title()).artists(album.artists())
-                .searchTier(album.searchTier() == null ? 0 : album.searchTier()).build().searchQuery();
         PickListStatus status;
         String reason = null;
         if (album.phase() == null) {

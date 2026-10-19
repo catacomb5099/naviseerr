@@ -1733,6 +1733,21 @@ class DownloadTaskRepositoryIT {
                 .map(DownloadTask::songName).collectList().block());
     }
 
+    @Test
+    void songs_areEverySongOfTheDownload_finishedOnesToo_inTrackOrder() {
+        // A person's own album search (19-10-2026) matches folders against every song, so "11 of 11" counts the done ones.
+        UUID id = admitAlbum("b second", "a first", "c done");
+        List<UUID> tasks = taskIdsOf(id);   // ordered by song name: a first, b second, c done
+        finish(template, downloadService, tasks.get(2), DownloadStatus.SUCCEEDED, null, NOW);
+        setTask(tasks.get(0), "search_id = 's9'");
+
+        List<DownloadTask> songs = repository.songs(id).collectList().block();
+
+        assertEquals(List.of("b second", "a first", "c done"), songs.stream().map(DownloadTask::songName).toList());
+        assertEquals(tasks.get(1), songs.getFirst().taskId());
+        assertNull(songs.getFirst().phase(), "only the track columns are read; the phase is not needed to match a folder");
+    }
+
     // ---- retry ---------------------------------------------------------------------------------
 
     /** A finished single-song download whose song failed. */
@@ -2382,6 +2397,11 @@ class DownloadTaskRepositoryIT {
         assertEquals(DownloadCandidate.ALBUM_FOLDER, read.files().get(songs.get(0)).source());
         assertEquals(1, after.holding(songs.get(0)).size());
         assertTrue(after.holding(songs.get(1)).isEmpty(), "a song the folder lacks has no folder to choose");
+        assertNull(after.searchId(), "the loop's save leaves the album search's id alone");
+
+        // A person's own album search (ManualSearch) makes its slskd id the row's.
+        assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW.plusSeconds(5), "manual-2").block());
+        assertEquals("manual-2", repository.cachedAlbumSearch(id).block().searchId());
     }
 
     @Test
