@@ -4,6 +4,7 @@ import org.springframework.web.reactive.function.client.WebClientRequestExceptio
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -45,9 +46,18 @@ public class MediaServerException extends RuntimeException {
         return switch (error) {
             case WebClientResponseException http -> "HTTP " + http.getStatusCode().value();
             case TimeoutException t -> "no answer in time";
-            case WebClientRequestException request -> request.getCause() != null && request.getCause().getMessage() != null
-                    ? request.getCause().getMessage() : request.getMessage();
+            case WebClientRequestException request -> cause(request);
             default -> error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
         };
+    }
+
+    /** Netty's ConnectException repeats the address ("Connection refused: /127.0.0.1:1"); the sentence names it once already. */
+    private static String cause(WebClientRequestException request) {
+        Throwable cause = request.getCause();
+        if (cause instanceof UnknownHostException) return "the name could not be found";
+        String text = cause != null && cause.getMessage() != null ? cause.getMessage()
+                : request.getMessage() != null ? request.getMessage() : "no connection";
+        int address = text.indexOf(": /");
+        return address > 0 ? text.substring(0, address) : text;
     }
 }

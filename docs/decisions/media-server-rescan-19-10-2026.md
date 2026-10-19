@@ -104,7 +104,8 @@ beans fixed at boot are gone: each client builds its own from `MediaServerConfig
 changes. The error sentences lost their env names ("Navidrome refused the username or password." instead of
 "... (NAVIDROME_USER / NAVIDROME_PASSWORD)"; "Could not reach nas:4533: Connection refused. Is Navidrome running,
 and can this server reach it?") since they are now screen text. Secrets are write-only (`passwordSet`,
-`apiKeySet`; an empty field keeps the stored one). Flips: env wins (then the section shows a "set in the install
+`apiKeySet`; an empty field keeps the stored one, for the host it was saved for only, so the test can never carry a
+stored secret to an address someone else typed). Flips: env wins (then the section shows a "set in the install
 file" note); two servers at once in the app (today one PUT saves one server; the other can still come from env).
 
 ## Consequences

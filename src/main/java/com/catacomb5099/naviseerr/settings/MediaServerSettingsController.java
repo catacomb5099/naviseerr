@@ -21,7 +21,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * {@code /settings/media-servers}: which music app (Navidrome or Jellyfin) is told to rescan when a
@@ -31,7 +33,7 @@ import java.util.List;
  * is an admin, and only then stores them and points the clients at them, live. What the app saved wins;
  * a server never saved here keeps the install file's {@code NAVIDROME_*} / {@code JELLYFIN_*} lines as
  * its fallback ({@code fromInstallFile}). The password and the API key are write-only: GET says only
- * whether one is set, and an empty field on PUT keeps the stored one.
+ * whether one is set, and an empty field on PUT keeps the stored one (for the host it was saved for).
  */
 @Slf4j
 @RestController
@@ -105,7 +107,8 @@ public class MediaServerSettingsController {
     private Mono<View> saveNavidrome(NavidromeChange c, InstallSettings existing) {
         String typedUrl = clean(c.url());
         String username = clean(c.username());
-        String password = c.password() == null || c.password().isEmpty() ? clean(existing.navidromePassword()) : c.password();
+        String password = c.password() == null || c.password().isEmpty()
+                ? storedSecret(typedUrl, existing.navidromeUrl(), existing.navidromePassword()) : c.password();
         String problem = urlProblem(typedUrl, "Navidrome", "4533");
         if (problem == null && username.isEmpty()) problem = "Enter the Navidrome admin username.";
         if (problem == null && password.isEmpty()) problem = "Enter the Navidrome password.";
@@ -121,7 +124,8 @@ public class MediaServerSettingsController {
 
     private Mono<View> saveJellyfin(JellyfinChange c, InstallSettings existing) {
         String typedUrl = clean(c.url());
-        String apiKey = c.apiKey() == null || c.apiKey().isBlank() ? clean(existing.jellyfinApiKey()) : c.apiKey().strip();
+        String apiKey = c.apiKey() == null || c.apiKey().isBlank()
+                ? storedSecret(typedUrl, existing.jellyfinUrl(), existing.jellyfinApiKey()) : c.apiKey().strip();
         String problem = urlProblem(typedUrl, "Jellyfin", "8096");
         if (problem == null && apiKey.isEmpty()) problem = "Enter the Jellyfin API key.";
         if (problem != null) return Mono.error(new SettingsProblem(problem));
@@ -159,6 +163,19 @@ public class MediaServerSettingsController {
             return "The address should start with http:// or https://, for example http://192.168.1.10:" + examplePort + ".";
         }
         return null;
+    }
+
+    /**
+     * The stored secret stands in for an empty field only for the host it was saved for: in open mode anyone on
+     * the network could otherwise point the test at a host of their own and have the server hand it the secret.
+     */
+    static String storedSecret(String typedUrl, String storedUrl, String secret) {
+        try {
+            boolean sameHost = storedUrl != null && Objects.equals(URI.create(typedUrl).getHost(), URI.create(storedUrl).getHost());
+            return sameHost ? clean(secret) : "";
+        } catch (IllegalArgumentException odd) {
+            return "";
+        }
     }
 
     private static String clean(String value) {

@@ -134,6 +134,15 @@ class MediaServerSettingsControllerTest {
     }
 
     @Test
+    void anEmptyPassword_forAnotherHost_isNotFilledFromTheStoredOne() {
+        row.set(new InstallSettings(null, false, "http://nas:4533", "admin", "kept", null, null, null, null));
+
+        assertEquals("Enter the Navidrome password.",
+                put(Map.of("navidrome", Map.of("url", "http://elsewhere:4533", "username", "admin", "password", ""))));
+        verify(navidrome, never()).test(any(), any(), any());
+    }
+
+    @Test
     void theFieldsAreCheckedBeforeAnythingIsCalled() {
         assertEquals("Choose Navidrome or Jellyfin.", put(Map.of()));
         assertEquals("Choose Navidrome or Jellyfin.", put(Map.of("navidrome", Map.of("url", "http://a"), "jellyfin", Map.of("url", "http://b"))));
