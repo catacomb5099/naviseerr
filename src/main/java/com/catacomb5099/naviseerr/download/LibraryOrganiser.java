@@ -121,8 +121,11 @@ public class LibraryOrganiser {
      */
     public static final String COPY_PREFIX = "naviseerr-copy-";
 
-    /** One finished download whose songs are all filed, ready for its playlist file. */
-    public record Collection(UUID downloadId, DownloadType type, String title) {}
+    /**
+     * One finished download whose songs are all filed, ready for its playlist file. {@code imageUrl} is
+     * the picture it had in the app ({@code media_items.image_url}), null when none was stored.
+     */
+    public record Collection(UUID downloadId, DownloadType type, String title, String imageUrl) {}
 
     /** One filed song as a playlist line shows it. */
     public record Entry(String libraryPath, String title, List<String> artists, Integer durationSeconds) {}
@@ -236,10 +239,19 @@ public class LibraryOrganiser {
      * move) {@code root/Playlists/<title>.m3u8} listing the entries relative to that folder, so
      * Navidrome and Jellyfin both show the download as a playlist. Written only once every song is in
      * place: Jellyfin drops entries whose file does not exist at import time.
+     *
+     * <p>The playlist's own picture ({@code imageUrl}, the one it had in the app) is fetched the way
+     * album covers are ({@link SongTagger#cover(String)}: album-art shaped YouTube Music pictures only,
+     * so a curated or video-seeded list whose picture is a video frame gets none) and written as
+     * {@code <title>.jpg} beside the {@code .m3u8}, before it, so a scanner that sees the playlist sees
+     * its picture. Navidrome 0.61+ shows a same-named sidecar as the playlist cover with nothing to set up.
+     * A picture that cannot be loaded costs one INFO line and nothing else; an older sidecar is left as it is.
      */
-    public Mono<Path> writePlaylist(String title, List<Entry> entries) {
-        return Mono.fromCallable(() -> writePlaylistBlocking(title, entries))
-                .subscribeOn(Schedulers.boundedElastic());
+    public Mono<Path> writePlaylist(String title, String imageUrl, List<Entry> entries) {
+        return tagger.cover(imageUrl)
+                .defaultIfEmpty(SongTagger.NO_COVER)
+                .flatMap(cover -> Mono.fromCallable(() -> writePlaylistBlocking(title, entries, cover))
+                        .subscribeOn(Schedulers.boundedElastic()));
     }
 
     /**
@@ -307,11 +319,19 @@ public class LibraryOrganiser {
 
     // ---- blocking I/O ----------------------------------------------------------------------------
 
-    Path writePlaylistBlocking(String title, List<Entry> entries) throws IOException {
+    Path writePlaylistBlocking(String title, List<Entry> entries, byte[] cover) throws IOException {
         String name = orElse(title, "Playlist");
         Path folder = guard(root.resolve(PLAYLISTS_FOLDER), root);
         Files.createDirectories(folder);
         Path target = guard(folder.resolve(sanitise(name) + ".m3u8"), folder);
+        if (cover.length > 0) {
+            // Same stem as the playlist file: that is how Navidrome pairs them (case-insensitive).
+            Path picture = guard(folder.resolve(sanitise(name) + ".jpg"), folder);
+            Path partial = picture.resolveSibling(picture.getFileName() + ".partial");
+            Files.write(partial, cover);
+            Files.move(partial, picture, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            log.info("Wrote playlist cover {} ({} KB)", picture, cover.length / 1024);
+        }
         List<Entry> inside = entries.stream()
                 .filter(entry -> {
                     boolean ok = entry.libraryPath() != null && Path.of(entry.libraryPath()).startsWith(root);

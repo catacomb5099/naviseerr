@@ -504,14 +504,14 @@ public class DownloadTaskRunner {
         return item -> seen.add(key.apply(item));
     }
 
-    /** A playlist gets its .m3u8; a song or an album needs nothing more than its files in place. */
+    /** A playlist gets its .m3u8 (and its picture beside it); a song or an album needs nothing more than its files in place. */
     private Mono<Void> finalise(LibraryOrganiser.Collection collection) {
         if (!collection.type().isPlaylist()) {
             return Mono.empty();
         }
         return repository.playlistEntries(collection.downloadId())
                 .collectList()
-                .flatMap(entries -> organiser.writePlaylist(collection.title(), entries))
+                .flatMap(entries -> organiser.writePlaylist(collection.title(), collection.imageUrl(), entries))
                 .then();
     }
 

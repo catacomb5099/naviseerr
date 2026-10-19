@@ -165,7 +165,15 @@ public class SongTagger {
      * without one.
      */
     public Mono<byte[]> cover(Tags tags) {
-        String url = tags == null ? null : coverUrl(tags.coverUrl());
+        return cover(tags == null ? null : tags.coverUrl());
+    }
+
+    /**
+     * The same for any YouTube Music picture (a playlist's, for its sidecar): its album-art form at
+     * 1200 px, or empty when it is not album art ({@link #coverUrl}) or did not load.
+     */
+    public Mono<byte[]> cover(String imageUrl) {
+        String url = coverUrl(imageUrl);
         return url == null ? Mono.empty() : covers.computeIfAbsent(url, this::fetch);
     }
 

@@ -818,7 +818,7 @@ public class DownloadTaskRepository {
      * nothing was ever filed. Idempotent through {@code organised_at IS NULL}.
      */
     private static final String DOWNLOADS_TO_FINALISE_SQL = """
-            SELECT d.download_id, d.download_type, c.title AS collection_title
+            SELECT d.download_id, d.download_type, c.title AS collection_title, c.image_url AS collection_image
               FROM downloads d
               LEFT JOIN media_items c ON c.youtube_id = d.youtube_id
              WHERE d.status IN ('SUCCEEDED', 'PARTIAL_SUCCESS')
@@ -1450,7 +1450,8 @@ public class DownloadTaskRepository {
                 .map((row, meta) -> new LibraryOrganiser.Collection(
                         row.get("download_id", UUID.class),
                         DownloadType.valueOf(row.get("download_type", String.class)),
-                        row.get("collection_title", String.class)))
+                        row.get("collection_title", String.class),
+                        row.get("collection_image", String.class)))
                 .all();
     }
 

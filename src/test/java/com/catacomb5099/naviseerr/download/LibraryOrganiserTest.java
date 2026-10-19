@@ -544,7 +544,7 @@ class LibraryOrganiserTest {
         Path track = put(root.resolve("Pixies/Debaser"), "01 - Débaser.flac");
         List<LibraryOrganiser.Entry> entries = List.of(entry(track, "Débaser", 170, "Pixies"));
 
-        Path written = organiser.writePlaylist("Mix: 1989?", entries).block();
+        Path written = organiser.writePlaylist("Mix: 1989?", null, entries).block();
 
         assertEquals(root.resolve("Playlists/Mix - 1989_.m3u8"), written);
         byte[] bytes = Files.readAllBytes(written);
@@ -555,16 +555,63 @@ class LibraryOrganiserTest {
         assertTrue(text.startsWith("#EXTM3U\n#PLAYLIST:Mix: 1989?\n"), "the display name keeps its punctuation");
 
         // Second write of the same playlist replaces the file; no ' (2)', no leftover staging file.
-        Path again = organiser.writePlaylist("Mix: 1989?", entries).block();
+        Path again = organiser.writePlaylist("Mix: 1989?", null, entries).block();
         assertEquals(written, again);
         assertEquals(1, Files.list(root.resolve("Playlists")).count());
+    }
+
+    // A JPEG header: what SongTagger.cover hands over when the picture loaded.
+    private static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 1, 2, 3};
+
+    @Test
+    void writePlaylist_putsThePictureBesideTheFile_underTheSameStem_andReplacesItNextTime() throws IOException {
+        Path track = put(root.resolve("Pixies/Debaser"), "01 - Debaser.flac");
+        List<LibraryOrganiser.Entry> entries = List.of(entry(track, "Debaser", 170, "Pixies"));
+
+        Path written = organiser.writePlaylistBlocking("Mix: 1989?", entries, JPEG);
+
+        assertEquals(root.resolve("Playlists/Mix - 1989_.m3u8"), written);
+        Path picture = root.resolve("Playlists/Mix - 1989_.jpg");
+        assertArrayEquals(JPEG, Files.readAllBytes(picture), "the same stem as the .m3u8, so Navidrome pairs them");
+        assertEquals(2, Files.list(root.resolve("Playlists")).count(), "no staging file left");
+
+        byte[] other = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 9};
+        organiser.writePlaylistBlocking("Mix: 1989?", entries, other);
+        assertArrayEquals(other, Files.readAllBytes(picture), "rewritten whole, like the playlist file");
+    }
+
+    @Test
+    void writePlaylist_withNoPicture_writesNoSidecar_andKeepsAnOlderOne() throws IOException {
+        Path track = put(root.resolve("Pixies/Debaser"), "01 - Debaser.flac");
+        List<LibraryOrganiser.Entry> entries = List.of(entry(track, "Debaser", 170, "Pixies"));
+
+        organiser.writePlaylistBlocking("Plain", entries, SongTagger.NO_COVER);
+        assertFalse(Files.exists(root.resolve("Playlists/Plain.jpg")));
+        assertEquals(1, Files.list(root.resolve("Playlists")).count());
+
+        // The picture loaded once; the next finalise could not fetch it: the old sidecar stays.
+        organiser.writePlaylistBlocking("Plain", entries, JPEG);
+        organiser.writePlaylistBlocking("Plain", entries, SongTagger.NO_COVER);
+        assertArrayEquals(JPEG, Files.readAllBytes(root.resolve("Playlists/Plain.jpg")));
+    }
+
+    @Test
+    void writePlaylist_withAVideoFramePicture_fetchesNothing_andWritesNoSidecar() throws IOException {
+        Path track = put(root.resolve("A/B"), "c.flac");
+
+        // i.ytimg.com is a video frame, not album art: SongTagger.cover refuses it before any fetch.
+        Path written = organiser.writePlaylist("Curated", "https://i.ytimg.com/vi/abc/hqdefault.jpg",
+                List.of(entry(track, "c", 1, "A"))).block();
+
+        assertEquals(root.resolve("Playlists/Curated.m3u8"), written);
+        assertFalse(Files.exists(root.resolve("Playlists/Curated.jpg")));
     }
 
     @Test
     void writePlaylist_skipsEntriesOutsideTheLibrary_andFallsBackToAName() throws IOException {
         Path inside = put(root.resolve("A/B"), "c.flac");
 
-        Path written = organiser.writePlaylist(null, List.of(
+        Path written = organiser.writePlaylist(null, null, List.of(
                 entry(tmp.resolve("elsewhere.flac"), "x", 1, "y"),
                 entry(inside, "c", 1, "A"))).block();
 

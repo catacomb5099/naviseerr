@@ -1222,7 +1222,8 @@ class DownloadTaskRepositoryIT {
     @Test
     void downloadsToFinalise_returnsAFinishedDownloadOnceEveryFiledOrGivenUpSongIsSettled() {
         UUID playlist = insertDownload("PARTIAL_SUCCESS", "PLAYLIST");
-        media("yt-" + playlist, "Alt Nation 1989", "Various");
+        repository.upsertMedia(List.of(new MediaItem("yt-" + playlist, "Alt Nation 1989", List.of("Various"), List.of(),
+                "https://yt3.googleusercontent.com/alt=w544-h544-l90-rj", null, null))).block();
         repository.setLibraryPath(succeededSong(playlist, "a", "x\\a.flac", NOW), "/music/A/a/a.flac").block();
         UUID pending = succeededSong(playlist, "b", "x\\b.flac", NOW);   // filed? not yet
 
@@ -1235,6 +1236,8 @@ class DownloadTaskRepositoryIT {
         assertEquals(playlist, ready.getFirst().downloadId());
         assertEquals(DownloadType.PLAYLIST, ready.getFirst().type());
         assertEquals("Alt Nation 1989", ready.getFirst().title());
+        assertEquals("https://yt3.googleusercontent.com/alt=w544-h544-l90-rj", ready.getFirst().imageUrl(),
+                "the picture the playlist had in the app, for its sidecar");
     }
 
     @Test

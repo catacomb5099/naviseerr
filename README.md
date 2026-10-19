@@ -74,10 +74,15 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
    its container the same folder.
    - **Navidrome:** its music folder must be `LIBRARY_DIR` or a folder that contains it. Playlists are
      imported by themselves. They belong to the first admin account. Admin accounts see them; other
-     accounts only if you start Navidrome with `ND_DEFAULTPLAYLISTPUBLICVISIBILITY=true`.
+     accounts only if you start Navidrome with `ND_DEFAULTPLAYLISTPUBLICVISIBILITY=true`. Navidrome
+     0.61 or newer also shows the playlist's own picture (naviseerr writes it next to the playlist file;
+     YouTube Music and user playlists only: a suggested playlist keeps the mosaic, since the app draws its
+     cover rather than storing one); older versions show a mosaic of the songs' covers.
    - **Jellyfin:** add `LIBRARY_DIR` to a library of type Music. Playlists appear for everyone who can
      see that library. Tested with Jellyfin 12.1.0 and 12.2.0. If a playlist shows up empty on your version, see
-     [issue #18169](https://github.com/jellyfin/jellyfin/issues/18169).
+     [issue #18169](https://github.com/jellyfin/jellyfin/issues/18169). Jellyfin reads no picture file
+     for playlists; it shows a collage of the songs' covers unless naviseerr is connected to it (next bullet),
+     in which case it gets the playlist's own picture.
    - **Optional: have it rescan the moment a download is filed.** Music apps notice new files by
      themselves only when they run on the same Linux host; over a NAS share, from another machine or on
      Docker Desktop they see nothing until they scan. Put the app's address and login in `.env`
