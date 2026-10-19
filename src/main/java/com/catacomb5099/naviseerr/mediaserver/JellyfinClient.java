@@ -18,8 +18,9 @@ import java.util.List;
  * Jellyfin through its REST API with an API key ({@code Authorization: MediaBrowser Token="<key>"}, set on
  * the client by {@link MediaServerConfig}; keys carry the Administrator role, so every call below is
  * allowed). The rescan is what Jellyfin's own "Scan Library" button on a library sends: one
- * {@code POST /Items/{libraryId}/Refresh?Recursive=true} per library of type music, immediate and
- * queued behind a running scan rather than cancelling it. With no music library at all it falls back to
+ * {@code POST /Items/{libraryId}/Refresh?Recursive=true} per library of type music or of no type (a
+ * "Mixed" library, which Jellyfin's audio and playlist resolvers serve too), immediate and queued behind
+ * a running scan rather than cancelling it. With no such library at all it falls back to
  * {@code POST /Library/Refresh}, the full scan of every library.
  *
  * <p>Measured 19-10-2026 on Jellyfin 12.2.0 with a fresh mp3 in a new artist folder: this call showed it
@@ -61,7 +62,7 @@ public class JellyfinClient {
         return url;
     }
 
-    /** Asks every music library to scan for new files; all of Jellyfin when there is no music library. */
+    /** Asks every music (or untyped) library to scan for new files; all of Jellyfin when there is none. */
     public Mono<Void> rescan() {
         return http.get().uri("/Library/MediaFolders")
                 .retrieve()
@@ -78,11 +79,12 @@ public class JellyfinClient {
                 .onErrorMap(error -> !(error instanceof MediaServerException), this::translate);
     }
 
-    /** The ids of the libraries of type music in a {@code GET /Library/MediaFolders} answer. */
+    /** The ids of the libraries of type music, or of no type ("Mixed"), in a {@code GET /Library/MediaFolders} answer. */
     static List<String> musicLibraryIds(JsonNode body) {
         List<String> ids = new ArrayList<>();
         for (JsonNode item : body.path("Items")) {
-            if ("music".equalsIgnoreCase(item.path("CollectionType").asString("")) && !item.path("Id").asString("").isBlank()) {
+            String type = item.path("CollectionType").asString("");
+            if ((type.isEmpty() || "music".equalsIgnoreCase(type)) && !item.path("Id").asString("").isBlank()) {
                 ids.add(item.path("Id").asString(""));
             }
         }

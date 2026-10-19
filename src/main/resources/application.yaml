@@ -211,7 +211,7 @@ media-servers:
   # At most one rescan request per server this often; a change inside the gap is sent when it ends.
   # Navidrome drops a scan request while it is already scanning, which the trailing send covers.
   rescan-gap-ms: 30000
-  # Per-request timeout. A dead host must never hold up a download pass.
+  # Per-request timeout. The download loop does not wait for these calls; this only bounds one attempt.
   timeout-ms: 10000
 
 # Playlist curator: the separate croissant service (in both compose files) builds a fresh "suggested

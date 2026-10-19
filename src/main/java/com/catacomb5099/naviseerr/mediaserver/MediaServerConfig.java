@@ -14,7 +14,7 @@ import java.time.Duration;
 /**
  * Outbound clients for the self-hoster's music servers (Navidrome, Jellyfin), one per server, on the
  * {@code CuratorConfig} pattern. A server is "configured" when its URL is set; the clients never call
- * an unconfigured one. Short connect timeout: a dead host must never hold up a download pass.
+ * an unconfigured one. Short connect timeout, and the download loop never waits for these calls.
  */
 @Configuration
 public class MediaServerConfig {

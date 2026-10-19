@@ -77,10 +77,12 @@ class JellyfinClientTest {
     }
 
     @Test
-    void musicLibraryIds_matchesTheCollectionTypeCaseInsensitively() throws Exception {
+    void musicLibraryIds_matchesMusicCaseInsensitively_andAnUntypedMixedLibrary() throws Exception {
+        // A "Mixed" library has no CollectionType; Jellyfin imports music and playlists from it too, so it is
+        // refreshed per library rather than falling back to the full Library/Refresh of everything.
         tools.jackson.databind.JsonNode body = new tools.jackson.databind.ObjectMapper().readTree(
-                "{\"Items\":[{\"Id\":\"a\",\"CollectionType\":\"Music\"},{\"Id\":\"b\",\"CollectionType\":\"movies\"},{\"Id\":\"\",\"CollectionType\":\"music\"}]}");
-        assertEquals(List.of("a"), JellyfinClient.musicLibraryIds(body));
+                "{\"Items\":[{\"Id\":\"a\",\"CollectionType\":\"Music\"},{\"Id\":\"b\",\"CollectionType\":\"movies\"},{\"Id\":\"\",\"CollectionType\":\"music\"},{\"Id\":\"m\",\"Name\":\"Mixed\"}]}");
+        assertEquals(List.of("a", "m"), JellyfinClient.musicLibraryIds(body));
     }
 
     @Test

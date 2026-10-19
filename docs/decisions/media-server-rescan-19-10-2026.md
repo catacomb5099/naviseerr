@@ -38,7 +38,7 @@ the same reason; their shape (host, login, one call on import) is what this foll
 
 | | Navidrome | Jellyfin |
 |---|---|---|
-| call | `GET /rest/startScan` (Subsonic, `v=1.16.1`, `c=naviseerr`, `f=json`), incremental (`fullScan` absent) | `GET /Library/MediaFolders`, then `POST /Items/{id}/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=Default` per library of type music (what the UI's "Scan Library" button sends); `POST /Library/Refresh` when there is no music library |
+| call | `GET /rest/startScan` (Subsonic, `v=1.16.1`, `c=naviseerr`, `f=json`), incremental (`fullScan` absent) | `GET /Library/MediaFolders`, then `POST /Items/{id}/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=Default` per library of type music or of no type (a "Mixed" library; what the UI's "Scan Library" button sends); `POST /Library/Refresh` when there is no such library |
 | auth | `u` + `t`/`s` token form; **the account must be an admin** (`Scanner.AdminOnly` is true by default; a non-admin gets Subsonic error 50) | API key, `Authorization: MediaBrowser Token="<key>"` (Dashboard -> API Keys); keys carry the Administrator role |
 | wrong login | error 40 -> "Navidrome rejected the username or password" | 401/403 -> "Jellyfin rejected the API key" |
 | while already scanning | the request is accepted and dropped inside Navidrome (not queued); the trailing resend after the gap covers scans shorter than 30 s | queued by Jellyfin |
