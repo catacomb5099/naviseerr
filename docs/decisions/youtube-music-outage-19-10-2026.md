@@ -59,6 +59,7 @@ Known ceiling: only the in-call retry is gone. The download loop still asks the 
 pass (up to `download-task.batch-size` calls every pass; the rows stay PENDING), and the `/status` probe below keeps
 about one tiny search a minute going; both carry on through a rate limit. Skipping a pass while the last admission
 failure was a 429 is the next step, if a real one is ever observed.
+
 ## Addendum, same day: `/status` says whether YouTube Music can be reached
 
 The web app already shows a persistent amber strip for the two things a download waits on that the user cannot see
@@ -75,3 +76,9 @@ Rejected: a passive status (remember the last real adapter outcome in `YtMusicSe
 clear itself until somebody searches again, so it needs a "probe when stale" branch anyway: more code than the probe,
 not less. Known ceiling: the adapter caches a failed probe for 60 s, so the strip can linger up to about a minute after
 YouTube Music is back (Sonarr's health warnings "will not always disappear immediately" either).
+
+Same day, after review: the adapter client's connection pool drops any connection idle for over a second
+(`YtMusicConfig`). uvicorn closes an idle keep-alive connection after 5 s (gunicorn's `UvicornWorker` after 2 s), and
+with the web app polling `/status` every 5 s a pooled connection was reused just as the adapter closed it: a
+`Connection reset`, which the probe (no retry, by design) worded as a one-poll outage on a healthy adapter during the
+first demo recording. `execute()` had been hiding the same race behind its retries.
