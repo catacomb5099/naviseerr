@@ -111,7 +111,7 @@ public class SetupCode {
     private String write() {
         if (file == null) return "";
         try {
-            Files.createDirectories(file.getParent());
+            Files.createDirectories(file.toAbsolutePath().getParent());   // a bare file name has no parent until made absolute
             Files.writeString(file, code + System.lineSeparator());
             try {
                 Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"));
