@@ -84,8 +84,9 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
 7. Optional, but you get more search results and fewer failed downloads: on your router's "port
    forwarding" page, forward TCP port 50300 to this computer. That is the door other Soulseek users
    knock on; slskd cannot open it by itself. The web app has a login, but it is plain HTTP: if you
-   want it reachable from outside your home, put it behind a reverse proxy with HTTPS (the login
-   cookie is then marked Secure by itself) rather than forwarding port 5056 as it is.
+   want it reachable from outside your home, put it behind a reverse proxy with HTTPS rather than
+   forwarding port 5056 as it is (a proxy on your own network or Docker network also makes the login
+   cookie Secure by itself: the web app passes its `X-Forwarded-Proto` on).
 
 ### Updating
 
@@ -178,8 +179,10 @@ leave it. Your existing playlists stay.
   ```sh
   docker compose exec postgres psql -U naviseerr -c "DELETE FROM sessions; DELETE FROM users;"
   ```
-  The other way in is one start with `AUTH_REQUIRED=false` in `.env` (`docker compose up -d`), which
-  switches the login off entirely until you set it back.
+  If you would rather not touch the database, switch the login off instead: add `AUTH_REQUIRED: "false"`
+  under the `naviseerr` service's `environment:` in `compose.yaml` (`.env` cannot do it: compose does not
+  pass that variable on) and `docker compose up -d`. The app then has no login at all until you remove
+  the line, so only do this on a network nobody else can reach.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.

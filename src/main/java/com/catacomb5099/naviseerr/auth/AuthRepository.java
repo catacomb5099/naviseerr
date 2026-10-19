@@ -17,7 +17,8 @@ public class AuthRepository {
 
     private static final String ANY_USER_SQL = "SELECT EXISTS (SELECT 1 FROM users) AS present";
 
-    /** One statement, so two first-run screens submitted at once cannot both win: the second updates 0 rows. */
+    /** One statement, so of two first-run screens submitted at once the second normally sees the row and updates 0.
+     *  A true tie under READ COMMITTED can still make two accounts; harmless, either could have been first. */
     private static final String CREATE_FIRST_USER_SQL = """
             INSERT INTO users (user_id, username, password_hash, role)
             SELECT :id, :username, :hash, 'ADMIN'

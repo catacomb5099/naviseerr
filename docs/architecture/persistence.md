@@ -233,8 +233,9 @@ proxy vouches for (not built). `sessions` (`session_id` the random id in the bro
 cascading from `users`, `created_at`, `expires_at`, indexed): a row per signed-in browser, deleted on
 logout, expired rows swept at each login (`deleteExpired`), no scheduler. All SQL in
 [AuthRepository.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthRepository.java);
-`createFirstUser` is `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM users)` so two first-run
-screens cannot both win. Additive only: an existing install gets the tables on its next start and the
+`createFirstUser` is `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM users)` so of two first-run
+screens submitted at once the second normally gets 409 (a true tie under READ COMMITTED can make two
+accounts; harmless). Additive only: an existing install gets the tables on its next start and the
 web app then shows "Create your account". The reset path is the README's "Forgot your password" recipe
 (`DELETE FROM sessions; DELETE FROM users`).
 

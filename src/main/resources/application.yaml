@@ -175,7 +175,8 @@ download-task:
 auth:
   # false = switch the built-in login off, because your own login proxy (Authentik, Authelia...) or your
   # network is the login; then anyone who can reach the web app can use it. Never "off for local
-  # addresses": behind the web app's proxy every request is local. See the README, "Using your own login".
+  # addresses": behind the web app's proxy every request is local. compose.yaml does not pass it on from
+  # .env: set it under the naviseerr service's environment. See docs/decisions/login-19-10-2026.md.
   required: ${AUTH_REQUIRED:true}
   # How long a login lasts on one device. Spotify and YouTube Music keep you signed in for good,
   # Navidrome for two days; 30 days is the compromise.

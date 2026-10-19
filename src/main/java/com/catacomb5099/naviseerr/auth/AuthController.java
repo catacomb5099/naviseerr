@@ -16,6 +16,7 @@ import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
@@ -36,6 +37,8 @@ public class AuthController {
     static final String WRONG_LOGIN = "Wrong username or password";
     static final String ACCOUNT_EXISTS = "An account already exists. Log in instead.";
     static final int MIN_PASSWORD = 8;
+    /** bcrypt hashes the first 72 bytes only, and spring-security-crypto refuses a longer one outright. */
+    static final int MAX_PASSWORD_BYTES = 72;
     static final int MAX_USERNAME = 30;
 
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -139,6 +142,7 @@ public class AuthController {
         String username = body == null || body.username() == null ? "" : body.username().trim();
         if (username.isEmpty() || username.length() > MAX_USERNAME) return "Username: 1 to " + MAX_USERNAME + " characters.";
         if (body.password() == null || body.password().length() < MIN_PASSWORD) return "Password: at least " + MIN_PASSWORD + " characters.";
+        if (body.password().getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES) return "Password: at most " + MAX_PASSWORD_BYTES + " characters.";
         return null;
     }
 

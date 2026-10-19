@@ -91,13 +91,16 @@ class AuthControllerTest {
     }
 
     @Test
-    void setup_refusesABlankOrLongName_andAShortPassword() {
+    void setup_refusesABlankOrLongName_andAShortOrOver72BytePassword() {
         http.post().uri("/auth/setup").bodyValue(Map.of("username", "  ", "password", "long enough")).exchange()
                 .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isEqualTo("Username: 1 to 30 characters.");
         http.post().uri("/auth/setup").bodyValue(Map.of("username", "x".repeat(31), "password", "long enough")).exchange()
                 .expectStatus().isBadRequest();
         http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "short")).exchange()
                 .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isEqualTo("Password: at least 8 characters.");
+        // bcrypt stops at 72 bytes and spring-security-crypto throws past it: a 400 with words, not a 500.
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "alex", "password", "x".repeat(73))).exchange()
+                .expectStatus().isBadRequest().expectBody().jsonPath("$.message").isEqualTo("Password: at most 72 characters.");
         assertNull(account.get());
     }
 
@@ -127,7 +130,8 @@ class AuthControllerTest {
 
         for (Map<String, String> wrong : java.util.List.of(
                 Map.of("username", "alex", "password", "wrong horse"),
-                Map.of("username", "nobody", "password", "correct horse"))) {
+                Map.of("username", "nobody", "password", "correct horse"),
+                Map.of("username", "alex", "password", "x".repeat(80)))) {   // over 72 bytes: still a 401, never a 500
             http.post().uri("/auth/login").bodyValue(wrong).exchange()
                     .expectStatus().isUnauthorized()
                     .expectHeader().doesNotExist("Set-Cookie")
@@ -145,6 +149,9 @@ class AuthControllerTest {
 
         assertTrue(cleared.contains("Max-Age=0"), cleared);
         http.get().uri("/downloads/active").cookie(AuthFilter.COOKIE, id).exchange().expectStatus().isUnauthorized();
+        // Logout is an open path: with no cookie, or a dead one, the browser still gets told to drop it.
+        http.post().uri("/auth/logout").cookie(AuthFilter.COOKIE, id).exchange()
+                .expectStatus().isNoContent().expectHeader().valueMatches("Set-Cookie", ".*Max-Age=0.*");
     }
 
     @Test

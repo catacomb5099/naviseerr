@@ -45,7 +45,7 @@ class AuthFilterTest {
 
     @Test
     void theOpenPaths_andPreflights_passWithoutACookie() {
-        for (String path : new String[] {"/auth/session", "/auth/login", "/auth/setup"}) {
+        for (String path : new String[] {"/auth/session", "/auth/login", "/auth/setup", "/auth/logout"}) {
             reachedHandler.set(false);
             filter.filter(MockServerWebExchange.from(MockServerHttpRequest.post(path)), chain).block();
             assertTrue(reachedHandler.get(), path);

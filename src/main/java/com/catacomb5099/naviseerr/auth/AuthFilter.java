@@ -38,8 +38,8 @@ public class AuthFilter implements WebFilter {
     /** What a request without a session gets: the web app shows its login screen on any 401. */
     static final String UNAUTHORIZED_BODY = "{\"message\":\"Log in to Naviseerr\"}";
 
-    /** Reachable without a session: the ways to learn whether one is needed and to get one. */
-    private static final Set<String> OPEN = Set.of("/auth/session", "/auth/login", "/auth/setup");
+    /** Reachable without a session: the ways to learn whether one is needed, to get one, and to end one (so a dead cookie is still cleared). */
+    private static final Set<String> OPEN = Set.of("/auth/session", "/auth/login", "/auth/setup", "/auth/logout");
 
     private final AuthRepository repository;
     private final Clock clock;
