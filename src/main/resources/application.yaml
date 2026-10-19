@@ -187,6 +187,12 @@ auth:
   # owner-only, deleted once the account exists. Empty = <install.data-dir>/config/setup-code.txt
   # when the install's data folder is known (NAVISEERR_DATA_DIR), else the log only.
   setup-code-file: ${AUTH_SETUP_CODE_FILE:}
+  # Which other web addresses may call the API from a browser with your login cookie (CORS),
+  # comma-separated. Only the developer setup needs one: Vite on :5173 calling the server on :8080.
+  # The compose install never needs it: the web app's Caddy forwards /api, so its calls name the
+  # server's own address and are not cross-origin, through an HTTPS proxy too. Any address not listed
+  # here gets no CORS answer at all, so a page on another site cannot read from the API.
+  allowed-origins: ${AUTH_ALLOWED_ORIGINS:http://localhost:5173}
 
 # Library organiser: moves each finished song out of slskd's downloads folder into an organised music
 # library that Navidrome / Jellyfin can scan. OFF unless BOTH slskd-downloads-dir and root are set --
