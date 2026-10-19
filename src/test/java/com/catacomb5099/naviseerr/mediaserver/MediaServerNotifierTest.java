@@ -1,10 +1,21 @@
 package com.catacomb5099.naviseerr.mediaserver;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.catacomb5099.naviseerr.download.LibraryOrganiser;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -41,7 +52,24 @@ class MediaServerNotifierTest {
     }
 
     private MediaServerNotifier notifier() {
-        return new MediaServerNotifier(navidrome, jellyfin, organiser, GAP);
+        return new MediaServerNotifier(navidrome, jellyfin, organiser, GAP, Duration.ofMillis(10));
+    }
+
+    private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+
+    @BeforeEach
+    void captureLogs() {
+        logs.start();
+        ((Logger) LoggerFactory.getLogger(MediaServerNotifier.class)).addAppender(logs);
+    }
+
+    @AfterEach
+    void detachLogs() {
+        ((Logger) LoggerFactory.getLogger(MediaServerNotifier.class)).detachAppender(logs);
+    }
+
+    private List<String> warnings() {
+        return logs.list.stream().filter(e -> e.getLevel().isGreaterOrEqual(Level.WARN)).map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     @Test
@@ -99,6 +127,68 @@ class MediaServerNotifierTest {
         assertNull(jf.problem());
         assertEquals(T0.plusSeconds(60), jf.lastRescanAt());
         assertEquals(1, jellyfinCalls.get());
+    }
+
+    @TempDir Path tmp;
+
+    private static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 1};
+
+    @Test
+    void aPlaylistWithAPictureFile_getsItSentToJellyfin_onceJellyfinListsThePlaylist() throws IOException {
+        Path m3u8 = Files.writeString(tmp.resolve("Mix.m3u8"), "#EXTM3U\n");
+        Files.write(tmp.resolve("Mix.jpg"), JPEG);
+        // Jellyfin has not imported the file at the first look, then lists it.
+        when(jellyfin.findPlaylist("Mix.m3u8")).thenReturn(Mono.empty(), Mono.empty(), Mono.just("item-1"));
+        when(jellyfin.setPrimaryImage(any(), any())).thenReturn(Mono.empty());
+        MediaServerNotifier notifier = notifier();
+
+        notifier.playlistWritten(m3u8);
+        notifier.libraryChanged();
+        notifier.flush(T0).block();
+
+        verify(jellyfin, timeout(5000)).setPrimaryImage("item-1", JPEG);
+        verify(jellyfin, times(3)).findPlaylist("Mix.m3u8");
+        // Seen live 19-10-2026: the "not imported" warning fired after a successful push, because the push
+        // completes empty. The warning belongs to the lookup only.
+        assertEquals(List.of(), warnings());
+    }
+
+    @Test
+    void aPlaylistWithoutAPictureFile_isNotPushed_andAFailedJellyfinRescan_keepsItForTheNextOne() throws IOException {
+        Path plain = Files.writeString(tmp.resolve("Plain.m3u8"), "#EXTM3U\n");
+        Path withPicture = Files.writeString(tmp.resolve("Mix.m3u8"), "#EXTM3U\n");
+        Files.write(tmp.resolve("Mix.jpg"), JPEG);
+        when(jellyfin.rescan()).thenReturn(
+                Mono.error(new MediaServerException("Jellyfin at http://nas:8096 did not answer: Connection refused")),
+                Mono.fromRunnable(jellyfinCalls::incrementAndGet));
+        when(jellyfin.findPlaylist(any())).thenReturn(Mono.just("item-2"));
+        when(jellyfin.setPrimaryImage(any(), any())).thenReturn(Mono.empty());
+        MediaServerNotifier notifier = notifier();
+
+        notifier.playlistWritten(plain);
+        notifier.playlistWritten(withPicture);
+        notifier.flush(T0).block();                       // Jellyfin down: nothing pushed, both kept
+        verify(jellyfin, never()).findPlaylist(any());
+
+        notifier.libraryChanged();
+        notifier.flush(T0.plusSeconds(60)).block();       // Jellyfin back: the one with a picture is pushed
+        verify(jellyfin, timeout(5000)).setPrimaryImage("item-2", JPEG);
+        verify(jellyfin, timeout(1000).times(1)).findPlaylist("Mix.m3u8");
+        verify(jellyfin, never()).findPlaylist("Plain.m3u8");
+    }
+
+    @Test
+    void pushCover_givesUpWithOneWarning_whenJellyfinNeverListsThePlaylist() throws IOException {
+        Path m3u8 = Files.writeString(tmp.resolve("Lost.m3u8"), "#EXTM3U\n");
+        Files.write(tmp.resolve("Lost.jpg"), JPEG);
+        when(jellyfin.findPlaylist("Lost.m3u8")).thenReturn(Mono.empty());
+
+        notifier().pushCover(m3u8).block(Duration.ofSeconds(10));
+
+        verify(jellyfin, times(MediaServerNotifier.COVER_POLLS + 1)).findPlaylist("Lost.m3u8");
+        verify(jellyfin, never()).setPrimaryImage(any(), any());
+        assertEquals(1, warnings().size(), () -> warnings().toString());
+        assertTrue(warnings().getFirst().startsWith("Jellyfin has not imported playlist 'Lost'"), warnings().getFirst());
     }
 
     @Test

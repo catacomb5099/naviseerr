@@ -512,6 +512,8 @@ public class DownloadTaskRunner {
         return repository.playlistEntries(collection.downloadId())
                 .collectList()
                 .flatMap(entries -> organiser.writePlaylist(collection.title(), collection.imageUrl(), entries))
+                // Jellyfin reads no picture file: the notifier sends it after Jellyfin's rescan.
+                .doOnNext(mediaServers::playlistWritten)
                 .then();
     }
 
