@@ -95,9 +95,83 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
      rescan the library: ...") and in `GET /api/status` under `library.mediaServers`; nothing else breaks.
 7. Optional, but you get more search results and fewer failed downloads: on your router's "port
    forwarding" page, forward TCP port 50300 to this computer. That is the door other Soulseek users
-   knock on; slskd cannot open it by itself. **Do not forward port 5056 on your router until you have
-   connected Authentik** (Settings -> Login in the web app): until then the web app has no login and
-   anyone who can reach it can use it.
+   knock on; slskd cannot open it by itself. **Do not forward port 5056 on your router as it is:** the web
+   app has no login until you connect Authentik, and even then it should sit behind a reverse proxy with
+   HTTPS. See "Log in with Authentik" and "Exposing naviseerr on the internet" below.
+
+### Log in with Authentik
+
+Out of the box the web app has no login: fine on your own network, not fine on the internet. If you
+run [Authentik](https://goauthentik.io/) (or want to: it is one more container), naviseerr can hand its
+door to it. Nothing to put in a file: it is all in the web app. About eight clicks in Authentik and
+three fields in naviseerr.
+
+**In Authentik** (2026.8; the words are its own):
+
+1. **Applications -> Applications -> Create with Provider.** Application name `naviseerr`, slug
+   `naviseerr` (the slug becomes part of the address below; keep it plain).
+2. Provider type **OAuth2/OpenID Provider**. Name it `naviseerr` too. Authorization flow:
+   `default-provider-authorization-implicit-consent` (no "do you consent" page each time; the explicit
+   one works too).
+3. **Client type: Confidential.** Leave Client ID and Client Secret as generated and copy both
+   somewhere for a minute.
+4. **Redirect URIs/Origins:** paste the **Redirect URL** that naviseerr shows under Settings -> Login
+   (the gear top right). It reads `https://<your address>/api/auth/authentik/callback`, and Authentik
+   matches it strictly: connect from the address you will really use (your domain, behind HTTPS), not
+   from `localhost`. Signing key: any (naviseerr trusts the connection to Authentik rather than the
+   token's signature; OpenID Connect allows this when the token comes straight from the token endpoint).
+5. Finish the wizard. On the provider's page, copy **OpenID Configuration Issuer**
+   (`https://auth.example.com/application/o/naviseerr/`).
+6. Open the application you just made -> **Policy / Group / User Bindings -> Bind existing policy/group/user**
+   -> **User** -> yourself. **This is what decides who may use naviseerr:** whoever Authentik lets into
+   this application gets in. With no binding, every Authentik user does.
+
+**In naviseerr:** Settings (the gear top right) -> Login. Paste the Issuer into **Authentik address**,
+then **Client ID** and **Client secret**, press **Save and test**. It reads Authentik's settings and
+says "Authentik answered at ...", or what to fix in plain words (a wrong slug answers 404; "could not
+reach" means this server cannot see Authentik's address: both your browser and the naviseerr
+container must be able to reach it, so `localhost` will not do in Docker). Then press **Continue with
+Authentik**, sign in there, and you are back in naviseerr, signed in. **That first sign-in is what
+turns the login on:** from then on every visitor sees "Continue with Authentik" first, and
+`https://<your address>/api/...` answers 401 without a session. Until then nothing is enforced, so a
+wrong Client ID or Redirect URL can never lock you out. You stay signed in for 30 days per device, a
+server restart included; "Log out" (top right) ends naviseerr's session only, Authentik's stays, so the
+next "Continue with Authentik" is one click. **Turn off Authentik login** in Settings opens the app
+again and logs everyone out; the settings are kept.
+
+Do it **before** you open your proxy to the internet: until you have signed in once, anyone who can
+reach the page could connect their own Authentik instead (see Troubleshooting, "Locked out", for the way
+back in if that ever happens). naviseerr keeps no accounts of its own and shows no names; nothing in it
+is per-user. The server stores only Authentik's stable id for you, and your Client secret, in its
+database.
+
+### Exposing naviseerr on the internet
+
+With the web app behind a reverse proxy on your own domain, Authentik is what stands between the
+internet and your downloads (a bot that got in could hammer search until YouTube Music blocks your
+address, or start downloads until the disk is full). What the app does for you, and what you do:
+
+- **Connect Authentik first** (the section above), and sign in once, before the proxy is open to the
+  world. Until that first sign-in the web app is open to anyone who can reach it.
+- **Bind the Authentik application to your own user.** Whoever Authentik admits to the application may
+  use naviseerr; the binding is how it admits only you.
+- **HTTPS at your proxy.** Your proxy owns the certificate; the login cookie is marked Secure by itself
+  when the request arrived over HTTPS (the web app passes `X-Forwarded-Proto` on from a proxy on your
+  own network or Docker network), and the Redirect URL shown in Settings reads `https://`. The web
+  app's own answers carry the usual browser hardening headers (no type sniffing, no framing by other
+  sites, no camera or location prompts); add HSTS at your proxy if you want it.
+- **Your proxy must pass the `Host` header through unchanged** (Nginx Proxy Manager, Traefik, Caddy and
+  Cloudflare do by default; plain nginx needs `proxy_set_header Host $host;`). The server uses it for
+  the Redirect URL and to tell the web app's own calls from another site's.
+- **Only the web app's own address may call the API from a browser** with your login cookie. The
+  install needs nothing for that (the web app and the API share one address, through your proxy too),
+  and the Docker image allows no other address at all. Developers running the web app on another port
+  have `http://localhost:5173` allowed by the jar's default, or list theirs in `AUTH_ALLOWED_ORIGINS`
+  (`.env.example`).
+- **Authentik over plain HTTP on your LAN** is fine for a home network, but the trust in Authentik's
+  answers rests on that connection; on the internet, Authentik itself must be behind HTTPS too.
+- **Nothing else of the API answers without a login** once it is on: a bot cannot search or download at
+  all. Authentik's own login page takes the brute force, with its own limits and logs.
 
 ### Updating
 
@@ -193,6 +267,15 @@ leave it. Your existing playlists stay.
   runs it again; `docker compose logs naviseerr | grep -i curator` shows what naviseerr saw. "rejected
   the token (401)" there means the two sides hold different tokens: `docker compose up -d` rewrites
   both from the one in the config volume.
+- **Locked out of the web app** (Authentik is down or gone, its application was deleted, or somebody
+  else connected their Authentik first). Open the login's own switch from the database, no restart
+  needed, the next page load is open again:
+  ```sh
+  docker compose exec postgres psql -U naviseerr -d naviseerr -c "UPDATE login_settings SET enabled = false"
+  ```
+  Then Settings -> Login: fix the values or connect your own Authentik and sign in once, which turns
+  the login back on. If you have no terminal (TrueNAS: the postgres container's Shell), the same
+  statement runs there.
 - **Playlists missing.** Check, in order:
   1. The playlist download finished with at least one song: the playlist file is written once one of
      its songs is in the library.
