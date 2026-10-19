@@ -28,6 +28,22 @@ FROM eclipse-temurin:21-jre
 LABEL org.opencontainers.image.source=https://github.com/catacomb5099/naviseerr
 LABEL org.opencontainers.image.licenses=AGPL-3.0-only
 WORKDIR /app
+# The install's own addresses and folders (compose.yaml and deploy/compose.yaml name their services
+# postgres, ytmusic-adapter, slskd and croissant, and mount /data, /downloads, /incomplete and
+# /library), so a compose file need not repeat them. Any of these still yields to the environment,
+# and application.yaml's localhost defaults stay for a jar run by hand.
+ENV SPRING_R2DBC_URL=r2dbc:postgresql://postgres:5432/naviseerr \
+    SPRING_FLYWAY_URL=jdbc:postgresql://postgres:5432/naviseerr \
+    YT_MUSIC_SERVICE_URL=http://ytmusic-adapter:8000 \
+    SLSKD_URL=http://slskd:5030/api/v0/ \
+    SLSKD_DOWNLOADS_DIR=/downloads \
+    SLSKD_INCOMPLETE_DIR=/incomplete \
+    LIBRARY_ROOT=/library \
+    NAVISEERR_DATA_DIR=/data \
+    SPRING_CONFIG_IMPORT=optional:file:/data/config/naviseerr.properties \
+    CURATOR_URL=http://croissant:8010 \
+    CURATOR_FIRST_RUN_ON_START=true \
+    LOGGING_LEVEL_COM_CATACOMB5099_NAVISEERR_DOWNLOAD=INFO
 COPY --from=build /src/build/libs/*.jar app.jar
 # Default user; compose's `user: ${PUID}:${PGID}` overrides it. Numeric, so no passwd entry needed.
 USER 1000:1000
