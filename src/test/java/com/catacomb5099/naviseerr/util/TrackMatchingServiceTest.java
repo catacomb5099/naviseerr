@@ -180,4 +180,26 @@ class TrackMatchingServiceTest {
         assertEquals(Match.EXACT, grade("Wonderwall - Remastered - Oasis", "Oasis - Wonderwall.flac"));
         assertEquals(Match.EXACT, grade("Wonderwall Remastered 2009 - Oasis", "Oasis - Wonderwall (Remastered).flac"));
     }
+
+    // ---- 19-10-2026: "(Explicit)" in a YouTube title is a label, not a recording ----
+
+    @Test
+    void explicit_isALabelNotAVersion_theAlbumFileIsExact() {
+        // "Kendrick Lamar - Poetic Justice (Explicit) ft. Drake": how most official videos are titled. Before, the picker
+        // demanded "explicit" in the file's name, so the album file was "another version" and the title-only wording was
+        // never enough: one extra search for every such video, and a download marked as another version.
+        String albumFile = "Kendrick Lamar/good kid, m.A.A.d city/09 - Poetic Justice (feat. Drake).flac";
+        assertEquals(Match.EXACT, grade("Poetic Justice (Explicit) ft. Drake - Kendrick Lamar", albumFile));
+        assertEquals(Match.EXACT, grade("Poetic Justice (Explicit) ft. Drake - Kendrick Lamar", "Kendrick Lamar - Poetic Justice (Explicit).mp3"));
+        // the inline shapes SearchQueryTiers now reads as "(Explicit Version)"
+        assertEquals(Match.EXACT, grade("Poetic Justice Explicit Version, Closed Captioned - Kendrick Lamar", albumFile));
+        assertEquals(Match.EXACT, grade("Poetic Justice (Explicit Version, Closed Captioned) ft. Drake - Kendrick Lamar",
+                "Kendrick Lamar/good kid, m.A.A.d city/09 - Poetic Justice.flac"));
+        // a request that says "Clean" still means the clean cut; the original is another version of it
+        assertEquals(Match.EXACT, grade("Poetic Justice Clean Version - Kendrick Lamar", "Kendrick Lamar/good kid, m.A.A.d city/09 - Poetic Justice (Clean).mp3"));
+        assertEquals(Match.OTHER_VERSION, grade("Poetic Justice Clean Version - Kendrick Lamar", "Kendrick Lamar/good kid, m.A.A.d city/09 - Poetic Justice.flac"));
+        // the plain request: a "Clean" file is still a DJ-pool edit (PR #101), an "Explicit" file is still the song
+        assertEquals(Match.NONE, grade("Poetic Justice - Kendrick Lamar", "Kendrick Lamar/good kid, m.A.A.d city/09 - Poetic Justice (Clean).mp3"));
+        assertEquals(Match.EXACT, grade("Poetic Justice - Kendrick Lamar", "Kendrick Lamar/good kid, m.A.A.d city/09 - Poetic Justice (Explicit).mp3"));
+    }
 }

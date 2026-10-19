@@ -52,10 +52,15 @@ public class TrackMatchingService {
 
     private static final Pattern TOKEN = Pattern.compile("[a-z0-9]+");
 
-    /** Bracketed words in a YouTube title that say nothing about which recording it is. */
+    /**
+     * Bracketed words in a YouTube title that say nothing about which recording it is. "Explicit" is a label
+     * (Spotify, Apple Music and YouTube Music show it as a badge beside the title), not a recording: the album
+     * original IS the explicit cut and shared files rarely say so, so demanding the word only made the right
+     * file "another version". "Clean" is not here on purpose: a request that says it wants the clean cut.
+     */
     private static final Set<String> QUALIFIER_NOISE = tokens("official video music lyric lyrics audio visualizer hd hq 4k"
             + " remastered remaster version ft feat featuring from the at with topic vevo closed captioned stereo dir bonus"
-            + " track show colors movie ver clip full");
+            + " track show colors movie ver clip full explicit");
     private static final Pattern BRACKETED = Pattern.compile("[\\(\\[]([^\\)\\]]*)[\\)\\]]");
     /** A trailing dash segment that tags the file rather than naming the song: "Remastered 2021", "2011 Remaster", "320 kbps", "Mono". */
     private static final Pattern TAG_SEGMENT = Pattern.compile(
