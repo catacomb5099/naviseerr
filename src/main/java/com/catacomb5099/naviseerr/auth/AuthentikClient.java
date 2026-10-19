@@ -1,7 +1,11 @@
 package com.catacomb5099.naviseerr.auth;
 
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import reactor.core.publisher.Mono;
@@ -18,9 +22,9 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * The calls naviseerr makes to Authentik (any OpenID Connect provider, in fact: nothing here is
- * Authentik-specific beyond the wording). Today: reading the provider's OpenID configuration, which
- * is what "Save and test" on the Settings page does. Every failure becomes a {@link LoginProblem}
- * with one sentence saying what to check.
+ * Authentik-specific beyond the wording). Today: what "Save and test" on the Settings page does, reading
+ * the provider's OpenID configuration and trying the Client ID, secret and Redirect URL at its token
+ * endpoint. Every failure becomes a {@link LoginProblem} with one sentence saying what to check.
  */
 @Component
 public class AuthentikClient {
@@ -29,6 +33,8 @@ public class AuthentikClient {
     static final String EXAMPLE = "https://auth.example.com/application/o/naviseerr/";
     /** Authentik answers in milliseconds; anything slower than this is a network problem to name. */
     static final Duration TIMEOUT = Duration.ofSeconds(10);
+    static final String REFUSED = "Authentik does not accept this Client ID and secret, or the Redirect URL shown here is not in "
+            + "the provider's Redirect URIs yet. Check all three in Authentik; nothing was changed.";
 
     /** What the provider says about itself; the endpoints the sign-in uses. */
     public record OpenIdConfiguration(String issuer, String authorizationEndpoint, String tokenEndpoint,
@@ -70,6 +76,39 @@ public class AuthentikClient {
                 .timeout(TIMEOUT)
                 .onErrorMap(error -> !(error instanceof LoginProblem), error -> unreachable(issuer, error))
                 .map(body -> parse(issuer, body));
+    }
+
+    /**
+     * Does Authentik know this Client ID and secret, and is {@code redirectUri} one of the provider's
+     * Redirect URIs? Asked by POSTing the token endpoint a code that does not exist: Authentik checks the
+     * client and the redirect URI first ({@code invalid_client}, RFC 6749 5.2) and only then looks the
+     * code up ({@code invalid_grant}), so the error word says which, and nothing is issued either way.
+     * A wrong secret saved while the login is on would otherwise show only at the next sign-in, with
+     * Settings already behind the door.
+     */
+    // ponytail: Authentik's error words; Keycloak says unauthorized_client for a wrong secret and would pass here.
+    public Mono<Void> checkClient(OpenIdConfiguration openId, String clientId, String clientSecret, String redirectUri) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "authorization_code");
+        form.add("code", "naviseerr-save-and-test");
+        form.add("redirect_uri", redirectUri);
+        form.add("client_id", clientId);
+        form.add("client_secret", clientSecret);
+        return webClient.post().uri(openId.tokenEndpoint()).contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromFormData(form))
+                .exchangeToMono(response -> response.bodyToMono(String.class).defaultIfEmpty(""))
+                .timeout(TIMEOUT)
+                .onErrorMap(error -> unreachable(openId.issuer(), error))
+                .flatMap(body -> "invalid_client".equals(read(body).path("error").asString(null))
+                        ? Mono.<Void>error(new LoginProblem(REFUSED)) : Mono.<Void>empty());
+    }
+
+    private JsonNode read(String body) {
+        try {
+            return objectMapper.readTree(body);
+        } catch (JacksonException notJson) {
+            return objectMapper.createObjectNode();
+        }
     }
 
     private OpenIdConfiguration parse(String issuer, String body) {

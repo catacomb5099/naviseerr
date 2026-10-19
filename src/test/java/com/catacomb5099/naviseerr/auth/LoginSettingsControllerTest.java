@@ -37,6 +37,7 @@ class LoginSettingsControllerTest {
             return Mono.empty();
         });
         when(authentik.discover(any())).thenReturn(Mono.just(OPEN_ID));
+        when(authentik.checkClient(any(), any(), any(), any())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -76,9 +77,11 @@ class LoginSettingsControllerTest {
                 .jsonPath("$.clientSecretSet").isEqualTo(true)
                 .jsonPath("$.enabled").isEqualTo(false)
                 .jsonPath("$.clientSecret").doesNotExist()
-                .jsonPath("$.message").value(m -> assertTrue(m.toString().startsWith("Authentik answered at " + ISSUER + ". Sign in once"), m.toString()));
+                .jsonPath("$.message").value(m -> assertTrue(m.toString().startsWith("Authentik answered at " + ISSUER
+                        + " and accepted the Client ID, secret and Redirect URL. Sign in once"), m.toString()));
 
         verify(authentik).discover("https://auth.example.com/application/o/naviseerr");
+        verify(authentik).checkClient(OPEN_ID, "abc", "s3cret", "http://nas:5056/auth/authentik/callback");
         verify(repository).save(ISSUER, "abc", "s3cret");
         assertFalse(row.get().enabled(), "saving never turns the door on");
     }
@@ -110,6 +113,21 @@ class LoginSettingsControllerTest {
                 .expectBody().jsonPath("$.message").isEqualTo(ISSUER + " answered 404. Check the slug at the end.");
         verify(repository, never()).save(any(), any(), any());
         assertNull(row.get());
+    }
+
+    @Test
+    void aClientIdOrSecretAuthentikRefuses_is400WithTheSentence_andTheOldValuesStay() {
+        row.set(new LoginSettings(ISSUER, "abc", "old-secret", true));
+        when(authentik.checkClient(any(), any(), any(), any())).thenReturn(Mono.error(new LoginProblem(AuthentikClient.REFUSED)));
+
+        http.put().uri("/settings/login").header("Host", "nas:5056")
+                .bodyValue(Map.of("issuer", ISSUER, "clientId", "abc", "clientSecret", "typo")).exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.message").isEqualTo(AuthentikClient.REFUSED);
+
+        verify(repository, never()).save(any(), any(), any());
+        assertEquals("old-secret", row.get().clientSecret(), "the secret that works is still the one stored");
+        assertTrue(row.get().enabled(), "and the login stays on");
     }
 
     @Test

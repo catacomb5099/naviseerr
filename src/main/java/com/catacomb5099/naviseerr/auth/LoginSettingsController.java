@@ -19,8 +19,10 @@ import java.util.Optional;
 /**
  * {@code /settings/login}: connect Authentik from the web app's Settings page (the fields Immich's
  * OAuth settings have: issuer, client id, client secret). "Save and test" (PUT) reads the provider's
- * OpenID configuration before anything is stored, so a typo is named at once; it never turns the
- * login on by itself, the first successful sign-in does, so a wrong value cannot lock anyone out.
+ * OpenID configuration and tries the Client ID, secret and Redirect URL at its token endpoint before
+ * anything is stored, so a typo is named at once (and a wrong secret saved while the login is on cannot
+ * lock anyone out at the next sign-in); it never turns the login on by itself, the first successful
+ * sign-in does.
  * The client secret is write-only: GET says whether one is set, never what it is.
  */
 @RestController
@@ -65,10 +67,11 @@ public class LoginSettingsController {
             return authentik.discover(issuer).flatMap(openId -> {
                 String stored = AuthentikClient.normaliseIssuer(issuer);
                 boolean enabled = existing.map(LoginSettings::enabled).orElse(false);
-                return settings.save(stored, clientId, secret).thenReturn(view(
+                return authentik.checkClient(openId, clientId, secret, redirectUrl(request))
+                        .then(Mono.defer(() -> settings.save(stored, clientId, secret))).thenReturn(view(
                         new LoginSettings(stored, clientId, secret, enabled), request,
-                        "Authentik answered at " + openId.issuer() + ". " + (enabled ? "The login is on."
-                                : "Sign in once with 'Continue with Authentik' to turn the login on.")));
+                        "Authentik answered at " + openId.issuer() + " and accepted the Client ID, secret and Redirect URL. "
+                                + (enabled ? "The login is on." : "Sign in once with 'Continue with Authentik' to turn the login on.")));
             });
         });
     }
