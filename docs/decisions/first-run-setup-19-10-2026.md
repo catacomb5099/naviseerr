@@ -31,8 +31,11 @@ The owner's words: the compose file "is not navigable by a non-technical person"
   account is not in it: slskd reads its own files.
 - **Existing installs see the setup once after upgrading.** The row did not exist before V18, so `completed` is false;
   every screen is pre-filled with the current state, so it is four Nexts. The one data statement in V18 keeps the weekly
-  playlists ON where the database already holds a suggested-playlist download (the feature was in use); fresh installs
-  start OFF until the screen or Settings turns it on.
+  playlists ON where the database already holds a suggested-playlist download (`downloads.download_type = 'CURATED'`: the one
+  trace of the feature naviseerr's database holds, since the playlists themselves live in croissant); fresh installs start OFF
+  until the screen or Settings turns it on. Narrower than "in use": an install whose maker ran for weeks but whose owner never
+  downloaded a suggested playlist starts OFF and finds the switch pre-filled on the setup's third screen (check your own
+  database with `SELECT count(*) FROM downloads WHERE download_type = 'CURATED'`).
 - **App over install file for the music app** (the row wins; a null column falls back to the env lines, and the API says
   `fromInstallFile: true`). Env stays the ONLY way for paths and plumbing (`LIBRARY_ROOT`, `SLSKD_DOWNLOADS_DIR`,
   `NAVISEERR_DATA_DIR`, `CURATOR_URL`/`CURATOR_TOKEN`). The reverse of the Soulseek files, where the compose file wins:

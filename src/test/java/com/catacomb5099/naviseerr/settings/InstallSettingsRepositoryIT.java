@@ -10,6 +10,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.test.context.TestPropertySource;
 
+import java.io.IOException;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
@@ -63,5 +66,18 @@ class InstallSettingsRepositoryIT {
         assertTrue(s.setupCompleted());
         assertTrue(s.suggestedPlaylists(), "finishing the setup does not touch the answers");
         assertEquals(1L, rows());
+    }
+
+    /** The one data statement in V18, run again by hand: Flyway met an empty downloads table, so it never exercised the TRUE branch. */
+    @Test
+    void v18_seedsTheSwitchOn_whereASuggestedPlaylistWasDownloaded() throws IOException {
+        var db = template.getDatabaseClient();
+        db.sql("INSERT INTO downloads (download_id, status, download_type, youtube_id) VALUES ('00000000-0000-0000-0000-000000000018', 'SUCCEEDED', 'CURATED', 'v18-seed')")
+                .fetch().rowsUpdated().block();
+        String migration = new String(getClass().getResourceAsStream("/db/migration/V18__install_settings.sql").readAllBytes(), UTF_8);
+        db.sql(migration.substring(migration.indexOf("INSERT INTO install_settings")).replace(";", "")).fetch().rowsUpdated().block();
+        boolean seeded = repository.find().block().suggestedPlaylists();
+        db.sql("DELETE FROM downloads WHERE download_id = '00000000-0000-0000-0000-000000000018'").fetch().rowsUpdated().block();
+        assertTrue(seeded, "an upgrade keeps the weekly run where a suggested playlist was downloaded");
     }
 }
