@@ -197,6 +197,51 @@ class AuthControllerTest {
     }
 
     @Test
+    void thirtyWrongLoginsUnderMadeUpNames_thenEveryoneWaitsAMinute_theRightPasswordAndSetupIncluded() {
+        setup("alex", "correct horse");
+        for (int i = 0; i < 30; i++) {
+            http.post().uri("/auth/login").bodyValue(Map.of("username", "bot-" + i, "password", "guess")).exchange()
+                    .expectStatus().isUnauthorized();
+        }
+        http.post().uri("/auth/login").bodyValue(Map.of("username", "alex", "password", "correct horse")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
+                .expectHeader().doesNotExist("Set-Cookie")
+                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY_FOR_EVERYONE);
+        http.post().uri("/auth/setup").bodyValue(Map.of("username", "bob", "password", "another one", "setupCode", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
+                .expectBody().jsonPath("$.message").isEqualTo(LoginThrottle.TOO_MANY_FOR_EVERYONE);
+    }
+
+    @Test
+    void theLoggedAddress_isTheForwardedClientBehindAPrivateProxy_andThePeerItselfOtherwise() throws Exception {
+        // The install: Caddy on the Docker network passes the real client on in X-Forwarded-For.
+        assertEquals("203.0.113.9", AuthController.clientAddress(request("172.18.0.3", "203.0.113.9, 172.18.0.1")));
+        assertEquals("203.0.113.9", AuthController.clientAddress(request("127.0.0.1", "203.0.113.9")));
+        assertEquals("203.0.113.9", AuthController.clientAddress(request("fd12:3456::1", "203.0.113.9")));
+        // The server reached from the internet directly: the header is the caller's word, never believed.
+        assertEquals("198.51.100.7", AuthController.clientAddress(request("198.51.100.7", "10.0.0.1")));
+        assertEquals("2001:db8:0:0:0:0:0:7", AuthController.clientAddress(request("2001:db8::7", "10.0.0.1")), "Java prints the long form");
+        // No header: the peer.
+        assertEquals("192.168.1.20", AuthController.clientAddress(request("192.168.1.20", null)));
+        assertEquals("172.18.0.3", AuthController.clientAddress(request("172.18.0.3", "  ")));
+        assertEquals("unknown", AuthController.clientAddress(org.springframework.mock.http.server.reactive.MockServerHttpRequest.post("/auth/login").build()));
+
+        for (String p : new String[] {"127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.1.1", "::1", "fc00::1", "fdff::1", "fe80::1"}) {
+            assertTrue(AuthController.isPrivate(java.net.InetAddress.getByName(p)), p);
+        }
+        for (String p : new String[] {"8.8.8.8", "172.32.0.1", "203.0.113.9", "2001:db8::1", "100.64.0.1"}) {
+            assertFalse(AuthController.isPrivate(java.net.InetAddress.getByName(p)), p);
+        }
+    }
+
+    private static org.springframework.http.server.reactive.ServerHttpRequest request(String peer, String forwardedFor) throws Exception {
+        var b = org.springframework.mock.http.server.reactive.MockServerHttpRequest.post("/auth/login")
+                .remoteAddress(new java.net.InetSocketAddress(java.net.InetAddress.getByName(peer), 40000));
+        if (forwardedFor != null) b = b.header("X-Forwarded-For", forwardedFor);
+        return b.build();
+    }
+
+    @Test
     void logout_dropsTheSession_andExpiresTheCookie() {
         String id = sessionId(setup("alex", "correct horse"));
 

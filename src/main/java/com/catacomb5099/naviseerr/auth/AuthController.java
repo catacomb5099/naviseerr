@@ -16,6 +16,8 @@ import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Clock;
@@ -91,12 +93,13 @@ public class AuthController {
     @PostMapping("/setup")
     Mono<ResponseEntity<?>> setup(@RequestBody Credentials body, ServerWebExchange exchange) {
         if (body == null || body.setupCode() == null) return Mono.just(ResponseEntity.badRequest().body(Map.of("message", OLD_CLIENT)));
+        if (throttle.blockedForEveryone()) return Mono.just(tooManyForEveryone());
         if (throttle.blocked(SETUP_BUCKET)) return Mono.just(tooMany());
         if (!setupCode.matches(body.setupCode())) {
             // A spent code means the account exists: say so, and the web app shows the login instead.
             return repository.anyUser().map(any -> {
                 if (any) return accountExists();
-                throttle.failed(SETUP_BUCKET);
+                throttle.failed(SETUP_BUCKET, clientAddress(exchange.getRequest()));
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", WRONG_CODE));
             });
         }
@@ -115,12 +118,14 @@ public class AuthController {
 
     /**
      * 200 with the session started, 401 {@link #WRONG_LOGIN} otherwise: never says which half was wrong.
-     * 429 {@link LoginThrottle#TOO_MANY} once a name has had its five wrong passwords in 20 seconds.
+     * 429 {@link LoginThrottle#TOO_MANY} once a name has had its five wrong passwords in 20 seconds, or
+     * {@link LoginThrottle#TOO_MANY_FOR_EVERYONE} once everyone together has had thirty failures in a minute.
      */
     @PostMapping("/login")
     Mono<ResponseEntity<?>> login(@RequestBody Credentials body, ServerWebExchange exchange) {
         if (body == null || body.username() == null || body.password() == null) return Mono.just(wrongLogin());
         String name = body.username().trim();
+        if (throttle.blockedForEveryone()) return Mono.just(tooManyForEveryone());
         if (throttle.blocked(name)) return Mono.just(tooMany());
         // Exactly one bcrypt check per attempt, against the dummy hash for an unknown name, so the time
         // taken does not say whether the name exists.
@@ -133,7 +138,7 @@ public class AuthController {
                     throttle.succeeded(name);
                     return repository.deleteExpired(clock.instant()).then(startSession(user, exchange, HttpStatus.OK));
                 })
-                .switchIfEmpty(Mono.fromSupplier(() -> { throttle.failed(name); return wrongLogin(); }));
+                .switchIfEmpty(Mono.fromSupplier(() -> { throttle.failed(name, clientAddress(exchange.getRequest())); return wrongLogin(); }));
     }
 
     /** Ends this browser's session: the row goes, the cookie is told to expire. 204 either way. */
@@ -174,6 +179,34 @@ public class AuthController {
 
     private static ResponseEntity<?> tooMany() {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY));
+    }
+
+    private static ResponseEntity<?> tooManyForEveryone() {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("message", LoginThrottle.TOO_MANY_FOR_EVERYONE));
+    }
+
+    /**
+     * Who is knocking, for the log. The peer's address, unless the peer is on a private or loopback
+     * address (the web app's proxy in the Docker install, a dev machine): then the FIRST address in
+     * X-Forwarded-For, which that proxy filled in with the real client (Caddy only passes an incoming
+     * X-Forwarded-For on from a trusted proxy and otherwise writes the client's own address). A peer on
+     * the internet is never believed about who it is: a forged header there would only forge the log.
+     */
+    static String clientAddress(ServerHttpRequest request) {
+        InetSocketAddress peer = request.getRemoteAddress();
+        InetAddress ip = peer == null ? null : peer.getAddress();
+        String forwarded = request.getHeaders().getFirst("X-Forwarded-For");
+        if (ip != null && isPrivate(ip) && forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return ip == null ? "unknown" : ip.getHostAddress();
+    }
+
+    /** Loopback, link-local, RFC 1918 (10/8, 172.16/12, 192.168/16) and IPv6 unique-local (fc00::/7). */
+    static boolean isPrivate(InetAddress ip) {
+        byte[] b = ip.getAddress();
+        return ip.isLoopbackAddress() || ip.isSiteLocalAddress() || ip.isLinkLocalAddress()
+                || (b.length == 16 && (b[0] & 0xfe) == 0xfc);
     }
 
     private static ResponseEntity<?> accountExists() {
