@@ -286,6 +286,30 @@ public class YtMusicService {
     }
 
     /**
+     * Can YouTube Music be reached right now, for {@code GET /status}: the adapter's own
+     * {@code GET /health/ready}, which runs one tiny search and caches the answer for 60 s
+     * ({@code YTM_READY_CACHE_SECONDS}), so polling it costs YouTube about one call a minute per
+     * install. Not through {@link #execute}: no retry, no translation, and a probe that fails must
+     * say which part failed. A 2xx is reachable; any other status is the adapter saying YouTube is
+     * not (its 503); an error (refused, timeout) is the adapter itself being away, left to the caller
+     * to word, since only the caller knows its budget.
+     */
+    public Mono<Readiness> readiness() {
+        return ytMusicWebClient.get()
+                .uri("/health/ready")
+                .exchangeToMono(response -> response.releaseBody().thenReturn(
+                        response.statusCode().is2xxSuccessful()
+                                ? Readiness.OK
+                                : new Readiness(false, "YouTube Music not reachable from the adapter (it answered "
+                                        + response.statusCode().value() + " to /health/ready)")));
+    }
+
+    /** {@code detail} is one plain sentence while {@code reachable} is false, null otherwise. */
+    public record Readiness(boolean reachable, String detail) {
+        public static final Readiness OK = new Readiness(true, null);
+    }
+
+    /**
      * The one request pipeline every adapter call goes through: timeout, typed error translation,
      * and retry on availability failures only. Extracted from {@code executeSearch} when the
      * metadata calls above were added — AGENTS.md names this handling the pattern new provider
