@@ -19,6 +19,7 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - `config/`
   - [WebConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/WebConfig.java) - `@EnableWebFlux` + wide-open CORS (`*`). See the note in [gotchas.md](gotchas.md).
   - [TimeConfig.java](../../src/main/java/com/catacomb5099/naviseerr/config/TimeConfig.java) - the `Clock` bean (`Clock.systemUTC()`), injected wherever "now" matters so budget/lease branches are unit-testable without sleeping.
+- `auth/` (19-10-2026) - the login with Authentik. `LoginSettingsController` (`GET|PUT|DELETE /settings/login`: connect Authentik from the web app's Settings page, the redirect URL to paste into Authentik), `LoginSettingsRepository` (the one `login_settings` row, V16), `AuthentikClient` (the OpenID configuration read by "Save and test"), `LoginProblem` (one plain sentence, answered as 400 `{message}`).
 - `schema/response/` - API response DTOs returned to clients: `Track`, `Album`, `Artist`, `Playlist`, `SearchResponse`.
 - `schema/slskd/` - slskd API DTOs: `SearchState`, `SearchResponseItem`, `SearchFile`, `TransferedFile`, `QueueDownloadResponse`, the `TransferState` enum, and `SlskdSearchState` (search-state classification, added with the durable-download-state-machine work). Details in [slskd-integration.md](slskd-integration.md).
 - `services/`
@@ -48,7 +49,7 @@ Orientation for the Naviseerr backend: where things live, the entry points, the 
 - [DownloadController.java](../../src/main/java/com/catacomb5099/naviseerr/download/DownloadController.java) (`@RestController`):
   - `POST /download/song/{videoId}` and `POST /download/collection/{id}?type=ALBUM|PLAYLIST` - insert a `PENDING` download row, return `202 Accepted`; processed asynchronously (see [download-manager.md](download-manager.md)).
 
-Spring beans inventory: `@RestController` x4 (`SearchService`, `CollectionController`, `ArtistController`, `DownloadController`); `@Service` (`LastFMService`, `SlskdService`, `TrackMatchingService`, `DownloadService`); `@Component` (`LastFMAPIMethodHelper`, `SlskdSearchResultProcessor`, `DownloadTaskRunner`, `DownloadStepExecutor`, `DownloadStateMachine`); `@Repository` (`DownloadTaskRepository`); `@Configuration` (`WebConfig`, `TimeConfig`, `LastFMConfig`, `SlskdConfig`).
+Spring beans inventory: `@RestController` x5 (`SearchService`, `CollectionController`, `ArtistController`, `DownloadController`, `LoginSettingsController`); `@Service` (`LastFMService`, `SlskdService`, `TrackMatchingService`, `DownloadService`); `@Component` (`LastFMAPIMethodHelper`, `SlskdSearchResultProcessor`, `DownloadTaskRunner`, `DownloadStepExecutor`, `DownloadStateMachine`, `AuthentikClient`); `@Repository` (`DownloadTaskRepository`, `LoginSettingsRepository`); `@Configuration` (`WebConfig`, `TimeConfig`, `LastFMConfig`, `SlskdConfig`).
 
 ## Branch topology
 
