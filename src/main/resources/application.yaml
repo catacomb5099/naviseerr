@@ -235,6 +235,13 @@ media-servers:
   # through its image API. Navidrome reads the picture file next to the playlist by itself.
   cover-poll-ms: 5000
 
+# The install's data folder (NAVISEERR_DATA_DIR, /data in the compose install): where setup keeps
+# config/secrets.env and slskd/slskd.yml, the two files the Soulseek account lives in. Set, the web app
+# can show and change that account (GET/PUT /settings/soulseek); empty (a developer run, or an install
+# that mounts only /config), those routes answer 404 and the account stays where the compose put it.
+install:
+  data-dir: ${NAVISEERR_DATA_DIR:}
+
 # Playlist curator: the separate croissant service (in both compose files) builds a fresh "suggested
 # playlists" edition per category. naviseerr owns the clock: once a week it tells the curator to start,
 # then checks back every poll-interval until the run is done. OFF unless BOTH url and token are set -- an

@@ -82,6 +82,52 @@ reading it from `slskd.yml`. The first real login that registers such a name on 
 whether Soulseek's administrators react to the prefix, cannot be checked from the machine this was
 built on (its network blocks Soulseek, and a login would create a real account).
 
+### Revisited 19-10-2026: the Soulseek account is shown and changed in the app
+
+The owner's complaint ("the compose file is not navigable by a non-technical person") had one
+setting at its heart: the Soulseek account was the only thing a newcomer had to read a container log
+for (the box above) or edit the compose file for (`SOULSEEK_USERNAME`/`SOULSEEK_PASSWORD`). Jellyfin,
+Navidrome, Audiobookshelf and Immich all ask every such question on a screen, in a first-run wizard,
+and keep the compose file to folders and ports. So the account moves into the app:
+
+- `GET /settings/soulseek` shows the account slskd logs in with and whether Soulseek accepted it;
+  for a name setup made up (`naviseerr-` + six characters) it also returns the password, which the
+  web app shows behind a *Show* button once, with "write it down, it cannot be reset". A name a person
+  chose never has its password echoed. The web app's Settings page hosts it today, and the amber
+  "Not connected to Soulseek" strip links to it (*Fix*); when the first-run wizard lands (the login
+  work of the same day), the same component becomes its second step, after "Create your account".
+- `PUT /settings/soulseek` rewrites the two lines in the two files setup already keeps the account
+  in (`config/secrets.env`, `slskd/slskd.yml`) and asks slskd to log out and in again (`DELETE` then
+  `PUT /server`, 2 s after the write so slskd's file watch has reloaded the yml; its connection
+  watchdog reads the credentials from its current options on every attempt, checked in slskd 0.26.0's
+  `ConnectionWatchdog.AttemptConnection`). The next container start renders the same account from
+  `secrets.env`, so `setup.sh` needs no change. Not slskd's options API: `PATCH /options` is a
+  volatile overlay without the credentials; `PUT /options/yaml` wants a browser session with slskd's
+  web password, not an API key.
+- The compose file keeps `SOULSEEK_USERNAME: ""`/`SOULSEEK_PASSWORD: ""` as two optional values on one
+  line, for carrying an account over from an older install; set there, they win over the app at the
+  next start (setup's rule since 30-09). The app can tell (setup then leaves `secrets.env`'s
+  `SOULSEEK_USERNAME` empty, or behind the yml's name) and says so on the page, with the two values
+  to clear; the answer to a change carries the same flag, so the sentence survives the Save.
+- Until the login work of the same day is merged, the API answers anyone on the LAN, and `GET
+  /settings/soulseek` is the first route to return a secret (the made-up password; before, it sat in
+  a root-only container log and a mode-600 file). The rule from the library-rescan decision holds ("a
+  screen must wait for the login, or it shows a Navidrome admin password to the LAN"): this PR merges
+  after the auth PR, so the route is behind the session from its first published image. The
+  alternative, never returning the password, is one `null` in `SoulseekAccountController.get()`.
+- Off unless `install.data-dir` (`NAVISEERR_DATA_DIR`, `/data` in the install) is set and the files
+  are there: a developer run, or an install that mounts only `/config`, keeps today's behaviour.
+
+Checked: unit tests on the two files (setup-shaped content, quote doubling, owner-only mode kept) and
+the controller (rules, 202, disconnect-then-connect, slskd refusing); the page against a sealed slskd
+on the laptop, where every login fails, which is the "did not accept this login" flow. Seen in that
+slskd's log, within a second of the write: "Options changed, restarting (re)connection process",
+"Options reconfigured successfully", then a fresh attempt #1 with the new name, so slskd 0.26.0
+reloads an edited yml and, while not logged in, restarts the connection by itself; the
+disconnect-then-connect call covers the other case, a client still logged in with the old account
+(there slskd only flags `PendingReconnect`). Not checked: a real login after a change (no Soulseek
+from here).
+
 ### Revisited 09-10-2026: the library folder is required, must exist, and is checked
 
 The owner asked that every folder a person must provide be required and checked, the library first.
