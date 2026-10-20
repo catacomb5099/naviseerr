@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.services.PlaylistRepository;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,7 @@ class DownloadControllerTest {
     private DownloadService downloadService;
     private ManualSearch manualSearch;
     private ActiveDownloadRepository activeDownloadRepository;
+    private PlaylistRepository playlists;
     private DownloadController controller;
 
     @BeforeEach
@@ -44,7 +46,8 @@ class DownloadControllerTest {
         downloadService = mock(DownloadService.class);
         manualSearch = mock(ManualSearch.class);
         activeDownloadRepository = mock(ActiveDownloadRepository.class);
-        controller = new DownloadController(downloadService, manualSearch, activeDownloadRepository,
+        playlists = mock(PlaylistRepository.class);
+        controller = new DownloadController(downloadService, manualSearch, activeDownloadRepository, playlists,
                 Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(5), RETENTION);
         // Nothing already exists unless a test says so; Mockito's default for a Mono is null.
         when(activeDownloadRepository.findCurrent(any(), any(), anyBoolean())).thenReturn(Mono.empty());
@@ -660,6 +663,35 @@ class DownloadControllerTest {
     }
 
     @Test
+    void create_freezesYourPlaylistFirst_thenRequestsItUnderItsCanonicalId() {
+        UUID id = UUID.randomUUID();
+        when(playlists.freeze(id)).thenReturn(Mono.just(1L));
+        when(downloadService.requestDownload(id.toString(), DownloadType.CUSTOM))
+                .thenReturn(Mono.just(Download.builder().downloadId(UUID.randomUUID()).build()));
+
+        ResponseEntity<?> response = controller.downloadCollection(id.toString().toUpperCase(), DownloadType.CUSTOM, false).block();
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        verify(playlists).freeze(id);
+        verify(downloadService).requestDownload(id.toString(), DownloadType.CUSTOM);
+    }
+
+    @Test
+    void create_anEmptyPlaylistIs400_anUnknownOne404_andNeitherIsRequested() {
+        UUID empty = UUID.randomUUID();
+        UUID unknown = UUID.randomUUID();
+        when(playlists.freeze(any())).thenReturn(Mono.just(0L));
+        when(playlists.find(empty)).thenReturn(Mono.just(new PlaylistRepository.Playlist(empty, "Empty", "", List.of(),
+                null, NOW, null)));
+        when(playlists.find(unknown)).thenReturn(Mono.empty());
+
+        assertEquals(HttpStatus.BAD_REQUEST, controller.downloadCollection(empty.toString(), DownloadType.CUSTOM, false).block().getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND, controller.downloadCollection(unknown.toString(), DownloadType.CUSTOM, false).block().getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND, controller.downloadCollection("not-a-uuid", DownloadType.CUSTOM, false).block().getStatusCode());
+        verify(downloadService, never()).requestDownload(any(), any());
+    }
+
+    @Test
     void downloadCollection_withTypeSong_isRejected() {
         // A single track has its own route; accepting SONG here would create a download the
         // collection branch of admission cannot resolve.
@@ -778,7 +810,7 @@ class DownloadControllerTest {
 
         // To the user a suggested playlist is a playlist; the client's Playlists pill already folds
         // the two, so the server's filter has to agree or the pill shows a shorter list than the count.
-        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED, DownloadType.RADIO));
+        verify(activeDownloadRepository).findAll(20, 1, List.of(DownloadType.PLAYLIST, DownloadType.CURATED, DownloadType.RADIO, DownloadType.CUSTOM));
     }
 
     @Test

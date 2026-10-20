@@ -76,7 +76,7 @@ one music folder, ready for [Navidrome](https://www.navidrome.org/) or
      imported by themselves. They belong to the first admin account. Admin accounts see them; other
      accounts only if you start Navidrome with `ND_DEFAULTPLAYLISTPUBLICVISIBILITY=true`. Navidrome
      0.61 or newer also shows the playlist's own picture (naviseerr writes it next to the playlist file;
-     YouTube Music and user playlists only: a suggested playlist keeps the mosaic, since the app draws its
+     YouTube Music playlists, user playlists and your own playlists with a picture you chose: a suggested playlist keeps the mosaic, since the app draws its
      cover rather than storing one); older versions show a mosaic of the songs' covers.
    - **Jellyfin:** add `LIBRARY_DIR` to a library of type Music. Playlists appear for everyone who can
      see that library. Tested with Jellyfin 12.1.0 and 12.2.0. If a playlist shows up empty on your version, see

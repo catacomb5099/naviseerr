@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.download;
 
+import com.catacomb5099.naviseerr.services.PlaylistRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -37,6 +38,7 @@ public class DownloadController {
     private final DownloadService downloadService;
     private final ManualSearch manualSearch;
     private final ActiveDownloadRepository activeDownloadRepository;
+    private final PlaylistRepository playlists;
     private final Clock clock;
     private final long pollIntervalMs;
     private final Duration terminalRetention;
@@ -44,12 +46,14 @@ public class DownloadController {
     public DownloadController(DownloadService downloadService,
                               ManualSearch manualSearch,
                               ActiveDownloadRepository activeDownloadRepository,
+                              PlaylistRepository playlists,
                               Clock clock,
                               @Value("${download-task.download-poll-interval-ms:5000}") Duration pollInterval,
                               @Value("${download-task.terminal-retention-ms:600000}") Duration terminalRetention) {
         this.downloadService = downloadService;
         this.manualSearch = manualSearch;
         this.activeDownloadRepository = activeDownloadRepository;
+        this.playlists = playlists;
         this.clock = clock;
         this.pollIntervalMs = pollInterval.toMillis();
         this.terminalRetention = terminalRetention;
@@ -84,7 +88,8 @@ public class DownloadController {
      * different ytmusic-adapter endpoints, and guessing from an id prefix would be a heuristic that
      * silently picks the wrong one the first time YouTube changes a prefix. An unparseable value is
      * rejected by Spring before this method runs; {@code SONG} is rejected here, since a single
-     * track has its own route. {@code force} as on the song route.
+     * track has its own route. {@code force} as on the song route. {@code CUSTOM} is "Create" on one of
+     * your playlists: see {@link #create}.
      */
     @PostMapping("/download/collection/{collectionId}")
     Mono<ResponseEntity<?>> downloadCollection(@PathVariable String collectionId,
@@ -93,7 +98,27 @@ public class DownloadController {
         if (collectionId == null || collectionId.isBlank() || !type.isCollection()) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return request(collectionId, type, force);
+        return type == DownloadType.CUSTOM ? create(collectionId, force) : request(collectionId, type, force);
+    }
+
+    /**
+     * "Create" freezes the draft first, then requests it like any download: what you saw is what downloads,
+     * even if admission runs seconds later (the radio rule). 404 for an unknown playlist, 400 for an empty one.
+     * Pressing it again, or "Download again", finds it frozen already and is the usual request.
+     */
+    private Mono<ResponseEntity<?>> create(String id, boolean force) {
+        UUID playlistId;
+        try {
+            playlistId = UUID.fromString(id);
+        } catch (IllegalArgumentException notAUuid) {
+            return Mono.just(ResponseEntity.notFound().build());
+        }
+        return playlists.freeze(playlistId).flatMap(rows -> rows > 0
+                // The canonical spelling, so the finalise join on playlist_id::text always matches.
+                ? request(playlistId.toString(), DownloadType.CUSTOM, force)
+                : playlists.find(playlistId)
+                        .<ResponseEntity<?>>map(empty -> badRequest("Add a song first: an empty playlist cannot be created."))
+                        .defaultIfEmpty(ResponseEntity.notFound().build()));
     }
 
     /**
@@ -395,9 +420,9 @@ public class DownloadController {
      * in the client because the page count has to describe the narrowed list: filtering a page after
      * it arrived left "Page 1 of 7" and the arrows describing the unfiltered history.
      *
-     * <p>{@code type=PLAYLIST} also matches curated editions. To the user a suggested playlist is a
-     * playlist, and the client's pill already folds the two; an unknown value is a 400 from Spring
-     * before this runs.
+     * <p>{@code type=PLAYLIST} also matches curated editions, radios and your own playlists. To the user
+     * they are all playlists, and the client's pill already folds them; an unknown value is a 400 from
+     * Spring before this runs.
      */
     @GetMapping("/downloads/all")
     Mono<ResponseEntity<AllDownloadsResponse>> allDownloads(
@@ -417,7 +442,7 @@ public class DownloadController {
             return List.of();
         }
         return type == DownloadType.PLAYLIST
-                ? List.of(DownloadType.PLAYLIST, DownloadType.CURATED, DownloadType.RADIO)
+                ? List.of(DownloadType.PLAYLIST, DownloadType.CURATED, DownloadType.RADIO, DownloadType.CUSTOM)
                 : List.of(type);
     }
 }

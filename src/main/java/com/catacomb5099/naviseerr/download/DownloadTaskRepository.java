@@ -818,9 +818,12 @@ public class DownloadTaskRepository {
      * nothing was ever filed. Idempotent through {@code organised_at IS NULL}.
      */
     private static final String DOWNLOADS_TO_FINALISE_SQL = """
-            SELECT d.download_id, d.download_type, c.title AS collection_title, c.image_url AS collection_image
+            SELECT d.download_id, d.download_type, c.title AS collection_title, c.image_url AS collection_image,
+                   p.cover AS collection_cover
               FROM downloads d
               LEFT JOIN media_items c ON c.youtube_id = d.youtube_id
+              -- Your own playlist's uploaded picture (V20); frozen at Create, so it is the one you saw.
+              LEFT JOIN playlists p ON d.download_type = 'CUSTOM' AND p.playlist_id::text = d.youtube_id
              WHERE d.status IN ('SUCCEEDED', 'PARTIAL_SUCCESS')
                AND d.organised_at IS NULL
                AND EXISTS (SELECT 1 FROM download_tasks t
@@ -1451,7 +1454,8 @@ public class DownloadTaskRepository {
                         row.get("download_id", UUID.class),
                         DownloadType.valueOf(row.get("download_type", String.class)),
                         row.get("collection_title", String.class),
-                        row.get("collection_image", String.class)))
+                        row.get("collection_image", String.class),
+                        row.get("collection_cover", byte[].class)))
                 .all();
     }
 

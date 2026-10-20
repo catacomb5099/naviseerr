@@ -123,9 +123,10 @@ public class LibraryOrganiser {
 
     /**
      * One finished download whose songs are all filed, ready for its playlist file. {@code imageUrl} is
-     * the picture it had in the app ({@code media_items.image_url}), null when none was stored.
+     * the picture it had in the app ({@code media_items.image_url}), null when none was stored; {@code cover}
+     * the JPEG you uploaded for one of your own playlists, null for every other download.
      */
-    public record Collection(UUID downloadId, DownloadType type, String title, String imageUrl) {}
+    public record Collection(UUID downloadId, DownloadType type, String title, String imageUrl, byte[] cover) {}
 
     /** One filed song as a playlist line shows it. */
     public record Entry(String libraryPath, String title, List<String> artists, Integer durationSeconds) {}
@@ -246,11 +247,12 @@ public class LibraryOrganiser {
      * {@code <title>.jpg} beside the {@code .m3u8}, before it, so a scanner that sees the playlist sees
      * its picture. Navidrome 0.61+ shows a same-named sidecar as the playlist cover with nothing to set up.
      * A picture that cannot be loaded costs one INFO line and nothing else; an older sidecar is left as it is.
+     * {@code cover}, the JPEG you uploaded for one of your own playlists, is written as it is instead.
      */
-    public Mono<Path> writePlaylist(String title, String imageUrl, List<Entry> entries) {
-        return tagger.cover(imageUrl)
+    public Mono<Path> writePlaylist(String title, String imageUrl, byte[] cover, List<Entry> entries) {
+        return (cover != null ? Mono.just(cover) : tagger.cover(imageUrl))
                 .defaultIfEmpty(SongTagger.NO_COVER)
-                .flatMap(cover -> Mono.fromCallable(() -> writePlaylistBlocking(title, entries, cover))
+                .flatMap(picture -> Mono.fromCallable(() -> writePlaylistBlocking(title, entries, picture))
                         .subscribeOn(Schedulers.boundedElastic()));
     }
 

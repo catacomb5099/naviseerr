@@ -93,6 +93,12 @@ public class PlaylistRepository {
 
     private static final String COVER_SQL = "SELECT cover FROM playlists WHERE playlist_id = :id AND cover IS NOT NULL";
 
+    // COALESCE: pressing Create twice (or "Download again") keeps the first date.
+    private static final String FREEZE_SQL = """
+            UPDATE playlists SET downloaded_at = COALESCE(downloaded_at, now())
+             WHERE playlist_id = :id AND jsonb_array_length(songs) > 0
+            """;
+
     private static final String DELETE_SQL = "DELETE FROM playlists WHERE playlist_id = :id AND downloaded_at IS NULL";
 
     private static final TypeReference<List<YoutubeSongInfo>> SONG_LIST = new TypeReference<>() {};
@@ -191,6 +197,11 @@ public class PlaylistRepository {
     /** The picture's bytes; empty when there is none. */
     public Mono<byte[]> cover(UUID id) {
         return client.sql(COVER_SQL).bind("id", id).map(row -> row.get("cover", byte[].class)).one();
+    }
+
+    /** "Create": no edit after this. 0 rows when the id is unknown or the playlist has no songs. */
+    public Mono<Long> freeze(UUID id) {
+        return client.sql(FREEZE_SQL).bind("id", id).fetch().rowsUpdated();
     }
 
     /** Drafts only. */
