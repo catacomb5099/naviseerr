@@ -45,12 +45,18 @@ import java.util.Objects;
  *                       playlist's track list (its first 100 tracks) credits the artist by name.
  *                       YouTube Music exposes no exact "featured on" list, so this is the closest
  *                       thing there is.
+ * @param artistPlaylists the artist's own channel playlists, YouTube Music's "Playlists by &lt;artist&gt;" row (often
+ *                       one per album, plus "Music Videos" and the like), up to {@value #MAX_RELEASES}, in
+ *                       YouTube's order. {@code artists}/{@code artistIds} are the artist's, as on albums;
+ *                       {@code trackCount} is 0 (the row gives none) and {@code views} YouTube's wording
+ *                       ("2.1M views"). Empty from an adapter older than 20-10-2026. Not the same list as
+ *                       {@code playlists}, which is where the artist is featured.
  * @param similarArtists {@code iconUrl} is the related artist's thumbnail from the same adapter answer
  *                       (no extra call); {@code ""} when the adapter sends none.
  */
 public record ArtistView(String id, String name, String iconURL, String description, String subscribers,
                          List<Track> topSongs, String topSongsPlaylistId, List<Album> albums, List<Album> singles,
-                         List<Playlist> playlists, List<Artist> similarArtists) {
+                         List<Playlist> playlists, List<Playlist> artistPlaylists, List<Artist> similarArtists) {
 
     static final int MAX = 10;
     /** The adapter sends at most 100 of each (its own page size for the discography). */
@@ -77,7 +83,7 @@ public record ArtistView(String id, String name, String iconURL, String descript
                 artist.getDescription(), artist.getSubscribers(), topSongs,
                 artist.getSongsPlaylistId() == null ? null : artist.getSongsPlaylistId().replaceFirst("^VL", ""),
                 albums(artist.getAlbums(), ownName, ownId, MAX_RELEASES), albums(artist.getSingles(), ownName, ownId, MAX_RELEASES),
-                orEmpty(playlists).stream().limit(MAX).toList(), similar);
+                orEmpty(playlists).stream().limit(MAX).toList(), ownPlaylists(artist.getPlaylists(), ownName, ownId), similar);
     }
 
     private static List<Album> albums(List<YtMusicDetailResponse.AlbumStub> stubs, List<String> ownName, List<String> ownId, int max) {
@@ -86,6 +92,15 @@ public record ArtistView(String id, String name, String iconURL, String descript
                 .limit(max)
                 .map(stub -> new Album(stub.getBrowseId(), orEmpty(stub.getThumbnailUrl()), orEmpty(stub.getTitle()),
                         ownName, ownId, stub.getYear() == null ? 0 : stub.getYear()))
+                .toList();
+    }
+
+    private static List<Playlist> ownPlaylists(List<YtMusicDetailResponse.PlaylistStub> stubs, List<String> ownName, List<String> ownId) {
+        return orEmpty(stubs).stream()
+                .filter(stub -> stub.getPlaylistId() != null)
+                .limit(MAX_RELEASES)
+                .map(stub -> new Playlist(stub.getPlaylistId(), orEmpty(stub.getThumbnailUrl()), orEmpty(stub.getTitle()),
+                        ownName, ownId, 0, stub.getViews()))
                 .toList();
     }
 

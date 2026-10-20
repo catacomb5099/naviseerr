@@ -24,7 +24,7 @@ import java.util.stream.Stream;
 
 /**
  * Read-only artist page by channel id: header, top songs, albums, singles, the featured playlists
- * whose track list names the artist, and similar artists. Same id the artist search hands out, so
+ * whose track list names the artist, the artist's own playlists, and similar artists. Same id the artist search hands out, so
  * the client links straight from a search card.
  */
 @Slf4j
@@ -66,9 +66,9 @@ public class ArtistController {
                 .flatMap(artist -> featuredOn(artist)
                         .map(playlists -> ArtistView.from(artist, playlists, channelId)))
                 .doOnNext(view -> {
-                    log.info("Resolved artist '{}' ({}): {} songs, {} albums, {} singles, {} playlists, {} similar",
+                    log.info("Resolved artist '{}' ({}): {} songs, {} albums, {} singles, {} featured-on playlists, {} own playlists, {} similar",
                             view.name(), channelId, view.topSongs().size(), view.albums().size(), view.singles().size(),
-                            view.playlists().size(), view.similarArtists().size());
+                            view.playlists().size(), view.artistPlaylists().size(), view.similarArtists().size());
                     if (!view.similarArtists().isEmpty() && view.similarArtists().stream().allMatch(similar -> similar.getIconUrl().isEmpty())) {
                         log.warn(STALE_ADAPTER_WARNING, view.name(), channelId, view.similarArtists().size());
                     }

@@ -17,6 +17,12 @@ row held YouTube's artist-page shelf of ten.
 - Singles: the adapter now reads every single and EP (`get_artist_albums` on the singles shelf, newest first, in
   parallel with the rest; its first ten are exactly the old shelf), and `ArtistView` caps singles at 100 like albums
   (`MAX_RELEASES`). An older adapter still sends ten, which the row shows as before.
+- The artist's own playlists: YouTube Music's artist page has a "Playlists by <artist>" row (Tame Impala 12, Taylor
+  Swift 17; Black Sabbath none), which ytmusicapi 1.12.2 no longer parses. The adapter keeps it and reads its full list;
+  `GET /artists/{id}` sends it as `artistPlaylists` (up to 100), apart from `playlists` (Featured on), so an older web
+  app keeps working. The web app shows it as a "Playlists by <name>" row after "Featured on" (YouTube Music's order),
+  with "Show all". Many mirror an album ("Currents"); downloading one works like any playlist, and the 19-10 work that
+  lets a playlist reuse album files already avoids double files.
 - No new route: the "Show all" page reads the same `GET /artists/{id}` answer, which the web app keeps for five minutes,
   so it opens instantly from the artist page and still works from a link.
 

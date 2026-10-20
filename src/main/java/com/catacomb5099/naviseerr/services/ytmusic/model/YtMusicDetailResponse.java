@@ -210,7 +210,25 @@ public final class YtMusicDetailResponse {
         private String songsPlaylistId;
         private List<AlbumStub> albums;
         private List<AlbumStub> singles;
+        /** The artist's own channel playlists ("Playlists by Tame Impala"); null from an adapter older than 20-10-2026. */
+        private List<PlaylistStub> playlists;
         private List<RelatedArtist> related;
+    }
+
+    /**
+     * One of an artist's own playlists. {@code playlistId} is bare ({@code PL...}); {@code views} is YouTube's
+     * wording with its noun ("2.1M views"), null when the card shows none.
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class PlaylistStub {
+        private String playlistId;
+        private String title;
+        private String thumbnailUrl;
+        private String views;
     }
 
     /**
