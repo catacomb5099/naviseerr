@@ -76,7 +76,8 @@ yt-music-service:
 # a live failure; confirm the interaction during Task 8.
 slskd-service:
     # No default: every deployment points at its own slskd instance. Set SLSKD_URL in ./.env
-    # (see .env.example) or a real env var.
+    # (see .env.example) or a real env var. This and api_key are the install file's values: an slskd
+    # saved in the web app (install_settings.slskd_url, "Use my own slskd") wins over them, live.
     url: ${SLSKD_URL}
     # No default, same reasoning as LASTFM_API_KEY above.
     api_key: ${SLSKD_API_KEY}

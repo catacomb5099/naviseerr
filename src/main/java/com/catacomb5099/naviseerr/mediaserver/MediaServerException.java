@@ -10,7 +10,8 @@ import java.util.concurrent.TimeoutException;
 /**
  * One plain sentence about why a music server could not be asked to do something: shown in
  * {@code GET /status}, as the Settings page's "Save and test" answer, and logged once. Never carries
- * the password, the API key or a request URL (a Subsonic URL holds the auth token).
+ * the password, the API key or a request URL (a Subsonic URL holds the auth token). {@link #transport}
+ * words the "cannot reach it" case for any server the Settings page tests, slskd included.
  */
 public class MediaServerException extends RuntimeException {
 
@@ -23,7 +24,7 @@ public class MediaServerException extends RuntimeException {
      * answered HTTP 500.") or nothing at all ("Could not reach nas:8096: Connection refused. Is Jellyfin running,
      * and can this server reach it?"), the sentence a person fixing the address needs.
      */
-    static MediaServerException transport(String server, String url, Throwable error) {
+    public static MediaServerException transport(String server, String url, Throwable error) {
         if (error instanceof WebClientResponseException http) {
             return new MediaServerException(server + " at " + url + " answered HTTP " + http.getStatusCode().value() + ".");
         }

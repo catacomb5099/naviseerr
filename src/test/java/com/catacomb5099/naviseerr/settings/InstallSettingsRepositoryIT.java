@@ -122,4 +122,19 @@ class InstallSettingsRepositoryIT {
         assertEquals(Boolean.FALSE, repository.suggestedPlaylists().block());
         assertEquals(1L, rows());
     }
+
+    @Test
+    void yourOwnSlskd_isSavedAndCleared_leavingTheRestAlone() {
+        repository.setSuggestedPlaylists(true).block();
+        repository.saveSlskd("http://nas:5030/api/v0/", "k3y").block();
+        InstallSettings s = repository.find().block();
+        assertEquals("http://nas:5030/api/v0/", s.slskdUrl());
+        assertEquals("k3y", s.slskdApiKey());
+        assertTrue(s.suggestedPlaylists(), "the slskd save leaves the switch alone");
+
+        repository.clearSlskd().block();
+        assertNull(repository.find().block().slskdUrl());
+        assertNull(repository.find().block().slskdApiKey());
+        assertEquals(1L, rows());
+    }
 }
