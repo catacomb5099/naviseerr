@@ -299,6 +299,13 @@ for the two compose files in this repo: both still set every value, and an envir
 beats an image default. A jar started by hand is unaffected, since the defaults live in the image,
 not in `application.yaml`. Held until the owner has confirmed the short install file on TrueNAS.
 
+Addendum 20-10-2026: the two download folders default to `/transfers/complete` and
+`/transfers/incomplete`, where setup makes them when the whole downloads folder is mounted at
+`/transfers`. A short install file can then mount it in one line (`downloads:/transfers`) instead of
+two sub-folder mounts. slskd keeps its own `/downloads` and `/incomplete`: the organiser resolves
+slskd's file names under naviseerr's own folder, so the two mount points need not match. Both compose
+files in this repo still set the old paths explicitly, so nothing changes for them.
+
 ## Trade-offs
 
 - The first start builds four images from source and takes several minutes. Builds follow moving
