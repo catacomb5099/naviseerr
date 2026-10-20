@@ -22,9 +22,11 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * The calls naviseerr makes to Authentik (any OpenID Connect provider, in fact: nothing here is
- * Authentik-specific beyond the wording). Today: what "Save and test" on the Settings page does, reading
- * the provider's OpenID configuration and trying the Client ID, secret and Redirect URL at its token
- * endpoint. Every failure becomes a {@link LoginProblem} with one sentence saying what to check.
+ * Authentik-specific beyond the wording): reading the provider's OpenID configuration ("Save and test"
+ * on the Settings page, and before each sign-in), trying the Client ID, secret and Redirect URL at its
+ * token endpoint (Save and test), and swapping an authorization code for an ID token (the sign-in).
+ * Every failure becomes a {@link LoginProblem} with one sentence saying what to check. Token answers
+ * are never logged.
  */
 @Component
 public class AuthentikClient {
@@ -103,12 +105,49 @@ public class AuthentikClient {
                         ? Mono.<Void>error(new LoginProblem(REFUSED)) : Mono.<Void>empty());
     }
 
+    /**
+     * POST the token endpoint as a form ({@code client_secret_post}, which Authentik lists) and answer the
+     * raw ID token. {@code redirectUri} must be the exact string the authorize request carried.
+     */
+    public Mono<String> exchangeCode(OpenIdConfiguration openId, String clientId, String clientSecret, String code,
+                                     String redirectUri, String verifier) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "authorization_code");
+        form.add("code", code);
+        form.add("redirect_uri", redirectUri);
+        form.add("client_id", clientId);
+        form.add("client_secret", clientSecret);
+        form.add("code_verifier", verifier);
+        return webClient.post().uri(openId.tokenEndpoint()).contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromFormData(form)).retrieve()
+                .onStatus(HttpStatusCode::isError, response -> response.bodyToMono(String.class).defaultIfEmpty("")
+                        .map(body -> new LoginProblem("Authentik refused the sign-in (" + tokenError(body, response.statusCode().value())
+                                + "). Check the Client ID and Client secret in Settings.")))
+                .bodyToMono(String.class)
+                .timeout(TIMEOUT)
+                .onErrorMap(error -> !(error instanceof LoginProblem), error -> unreachable(openId.issuer(), error))
+                .map(body -> {
+                    String idToken = read(body).path("id_token").asString(null);
+                    if (idToken == null) {
+                        throw new LoginProblem("Authentik's answer had no ID token. Make sure the provider's scope mappings "
+                                + "include 'openid'.");
+                    }
+                    return idToken;
+                });
+    }
+
     private JsonNode read(String body) {
         try {
             return objectMapper.readTree(body);
         } catch (JacksonException notJson) {
             return objectMapper.createObjectNode();
         }
+    }
+
+    /** The token endpoint's own {@code error} word (RFC 6749 5.2) when it sent one, else the status. */
+    private String tokenError(String body, int status) {
+        String error = read(body).path("error").asString(null);
+        return error == null ? String.valueOf(status) : error;
     }
 
     private OpenIdConfiguration parse(String issuer, String body) {

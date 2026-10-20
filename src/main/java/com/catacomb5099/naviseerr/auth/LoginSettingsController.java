@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -40,10 +41,12 @@ public class LoginSettingsController {
                        String message) {}
 
     private final LoginSettingsRepository settings;
+    private final AuthRepository sessions;
     private final AuthentikClient authentik;
 
-    public LoginSettingsController(LoginSettingsRepository settings, AuthentikClient authentik) {
+    public LoginSettingsController(LoginSettingsRepository settings, AuthRepository sessions, AuthentikClient authentik) {
         this.settings = settings;
+        this.sessions = sessions;
         this.authentik = authentik;
     }
 
@@ -76,10 +79,17 @@ public class LoginSettingsController {
         });
     }
 
-    /** "Turn off Authentik login": the app is open again on the next request; the settings stay for later. */
+    /**
+     * "Turn off Authentik login": the app is open again on the next request, every session is dropped
+     * and this browser's cookie cleared; the settings stay, so a later "Continue with Authentik" turns
+     * it back on without retyping anything.
+     */
     @DeleteMapping
-    Mono<ResponseEntity<Void>> turnOff() {
-        return settings.setEnabled(false).thenReturn(ResponseEntity.noContent().build());
+    Mono<ResponseEntity<Void>> turnOff(ServerHttpRequest request) {
+        return settings.setEnabled(false).then(sessions.deleteAll())
+                .thenReturn(ResponseEntity.noContent()
+                        .header(HttpHeaders.SET_COOKIE, AuthController.cookie(request, AuthFilter.COOKIE, "", Duration.ZERO).toString())
+                        .build());
     }
 
     @ExceptionHandler(LoginProblem.class)

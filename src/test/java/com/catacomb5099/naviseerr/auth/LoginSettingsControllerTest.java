@@ -20,9 +20,10 @@ class LoginSettingsControllerTest {
             "https://auth.example.com/application/o/authorize/", "https://auth.example.com/application/o/token/", null);
 
     private final LoginSettingsRepository repository = mock(LoginSettingsRepository.class);
+    private final AuthRepository sessions = mock(AuthRepository.class);
     private final AuthentikClient authentik = mock(AuthentikClient.class);
     private final AtomicReference<LoginSettings> row = new AtomicReference<>();
-    private final WebTestClient http = WebTestClient.bindToController(new LoginSettingsController(repository, authentik)).build();
+    private final WebTestClient http = WebTestClient.bindToController(new LoginSettingsController(repository, sessions, authentik)).build();
 
     LoginSettingsControllerTest() {
         when(repository.find()).thenAnswer(i -> Mono.justOrEmpty(row.get()));
@@ -38,6 +39,7 @@ class LoginSettingsControllerTest {
         });
         when(authentik.discover(any())).thenReturn(Mono.just(OPEN_ID));
         when(authentik.checkClient(any(), any(), any(), any())).thenReturn(Mono.empty());
+        when(sessions.deleteAll()).thenReturn(Mono.empty());
     }
 
     @Test
@@ -131,13 +133,15 @@ class LoginSettingsControllerTest {
     }
 
     @Test
-    void turnOff_setsEnabledFalse_andGetSaysSo() {
+    void turnOff_setsEnabledFalse_dropsEverySession_clearsTheCookie_andGetSaysSo() {
         row.set(new LoginSettings(ISSUER, "abc", "s", true));
         http.get().uri("/settings/login").exchange().expectBody().jsonPath("$.enabled").isEqualTo(true);
 
-        http.delete().uri("/settings/login").exchange().expectStatus().isNoContent();
+        http.delete().uri("/settings/login").exchange().expectStatus().isNoContent()
+                .expectHeader().valueMatches("Set-Cookie", AuthFilter.COOKIE + "=;.*Max-Age=0.*");
 
         verify(repository).setEnabled(false);
+        verify(sessions).deleteAll();
         http.get().uri("/settings/login").exchange().expectBody().jsonPath("$.enabled").isEqualTo(false)
                 .jsonPath("$.clientSecretSet").isEqualTo(true);
     }
