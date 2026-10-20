@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -178,6 +179,77 @@ class ManualSearchTest {
                 .verify();
 
         verify(slskd, never()).getSearchWithResponses(any());
+    }
+
+    // ---- the search belongs to the server, not the request (20-10-2026) -----------------------------
+
+    private TaskCandidatesView storedView() {
+        return new TaskCandidatesView(taskId, PickListStatus.READY, null, "Common People", "old-search", NOW.minusSeconds(600),
+                DownloadStage.FAILED, null, List.of(), null);
+    }
+
+    @Test
+    void aWaiterThatGoesAway_doesNotStopTheSearch_itRunsToTheEndAndIsStored() {
+        VirtualTimeScheduler time = VirtualTimeScheduler.getOrSet();
+        try {
+            SearchState running = SlskdFixtures.searchStateWithResponses("new-1", false, "InProgress", List.of());
+            SearchState done = SlskdFixtures.searchStateWithResponses("new-1", true, "Completed, TimedOut", List.of(peer));
+            when(slskd.getSearchWithResponses("new-1")).thenReturn(Mono.just(running), Mono.just(running), Mono.just(done));
+            when(processor.allFiles(eq(done), any(), any(), any())).thenReturn(List.of(pick));
+
+            search.song(downloadId, taskId, "Common People Pulp 1995").subscribe().dispose(); // the pop-up closed at once
+
+            assertEquals(1, search.inFlight());
+            TaskCandidatesView seen = search.overlay(storedView());
+            assertEquals(PickListStatus.SEARCHING, seen.status(), "a reopened pop-up sees the search running");
+            assertEquals("Common People Pulp 1995", seen.query(), "under the words the person typed");
+            assertTrue(seen.candidates().isEmpty());
+
+            time.advanceTimeBy(Duration.ofSeconds(10));
+
+            verify(repository).saveSearchResults(eq(taskId), argThat(files -> files.size() == 1), eq(NOW),
+                    eq("Common People Pulp 1995"), eq("new-1"));
+            assertEquals(0, search.inFlight(), "the registration ends with the search");
+            assertEquals(storedView(), search.overlay(storedView()), "then the stored list shows as it is");
+        } finally {
+            VirtualTimeScheduler.reset();
+        }
+    }
+
+    @Test
+    void aSecondSearchWhileThePersonsFirstRuns_isRefused_withoutAskingSlskd() {
+        VirtualTimeScheduler time = VirtualTimeScheduler.getOrSet();
+        try {
+            when(slskd.getSearchWithResponses("new-1")).thenReturn(
+                    Mono.just(SlskdFixtures.searchStateWithResponses("new-1", false, "InProgress", List.of())));
+            when(processor.allFiles(any(), any(), any(), any())).thenReturn(List.of());
+            search.song(downloadId, taskId, "Common People Pulp 1995");
+
+            StepVerifier.create(search.song(downloadId, taskId, "Common People second"))
+                    .expectError(ManualSearch.AlreadyRunningException.class)
+                    .verify();
+
+            verify(slskd, times(1)).searchResults(any());
+            time.advanceTimeBy(BUDGET.plusSeconds(5));
+            assertEquals(0, search.inFlight());
+        } finally {
+            VirtualTimeScheduler.reset();
+        }
+    }
+
+    @Test
+    void aSearchThatFailsWithNobodyWaiting_isKeptForThePopUp_untilTheNextSearchStarts() {
+        when(slskd.searchResults("Common People Pulp 1995")).thenReturn(Mono.error(SlskdFixtures.soulseekOffline()));
+        search.song(downloadId, taskId, "Common People Pulp 1995"); // nobody subscribes
+
+        TaskCandidatesView seen = search.overlay(storedView());
+        assertEquals(PickListStatus.READY, seen.status(), "the previous list still shows");
+        assertTrue(seen.searchError().contains("“Common People Pulp 1995”"), seen.searchError());
+        assertTrue(seen.searchError().contains("Soulseek is offline"), seen.searchError());
+
+        when(slskd.searchResults("Common People")).thenReturn(Mono.never());
+        search.song(downloadId, taskId, "Common People");
+        assertNull(search.overlay(storedView()).searchError(), "a new search clears it");
     }
 
     // ---- a whole album ----------------------------------------------------------------------------

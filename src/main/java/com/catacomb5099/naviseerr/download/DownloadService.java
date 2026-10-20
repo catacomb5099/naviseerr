@@ -231,7 +231,7 @@ public class DownloadService {
         DownloadCandidate current = song.current();
         return new TaskCandidatesView(song.taskId(), status, reason, query, searchId, searchedAt,
                 ActiveDownloadRepository.toSongStage(song.phase()), TaskCandidatesView.Current.of(current),
-                files.stream().map(file -> TaskCandidatesView.Candidate.of(file, current)).toList());
+                files.stream().map(file -> TaskCandidatesView.Candidate.of(file, current)).toList(), null);
     }
 
     static PickListStatus statusOf(DownloadTaskRepository.CachedSearch song) {
@@ -352,7 +352,7 @@ public class DownloadService {
         }
         Instant searchedAt = album.foldersAt() != null ? album.foldersAt() : album.finishedAt();
         return new AlbumCandidatesView(downloadId, status, reason, albumQuery(album), albumSearchId(album), searchedAt,
-                songs.size(), folders);
+                songs.size(), folders, null);
     }
 
     // ---- manual pick: re-pointing songs at a chosen file ----------------------------------------------

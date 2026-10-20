@@ -22,9 +22,10 @@ import java.util.UUID;
  *                   never took one
  * @param searchedAt when the folders were remembered, else when the search ended; null when never
  * @param songCount  how many songs the album has, to read {@code fileCount} against
+ * @param searchError why the person's last own search failed, when it did ({@link ManualSearch#overlay}); null otherwise
  */
 public record AlbumCandidatesView(UUID downloadId, PickListStatus status, String reason, String query, String searchId,
-                                  Instant searchedAt, int songCount, List<Folder> folders) {
+                                  Instant searchedAt, int songCount, List<Folder> folders, String searchError) {
 
     /**
      * @param folder       the shared folder's path, verbatim: the pick sends it back unchanged
