@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.curator;
 
+import com.catacomb5099.naviseerr.settings.InstallSettingsRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,14 +25,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * polling continues: a slow curator is not a failed run. See
  * docs/decisions/curator-weekly-trigger-27-09-2026.md.
  *
- * <p>OFF unless {@code curator.url} and {@code curator.token} are both set -- the same
- * "off unless configured" rule as the library organiser.
+ * <p>Two switches, both needed ({@link #isOn()}): CONFIGURED = {@code curator.url} and {@code curator.token}
+ * are both set (the same "off unless configured" rule as the library organiser; an install without a
+ * playlist maker), and ON = the person said yes to "Make weekly playlists for me" on the first-run setup
+ * or in Settings ({@code install_settings.suggested_playlists}, 19-10-2026, the owner's "opt in"). Off by
+ * default, so a fresh install makes no playlists until someone asks; read from the row at each tick, so
+ * flipping the switch needs no restart.
  *
  * <p>A fresh install has no editions and would otherwise wait for the first Monday 03:00: when
  * {@code curator.first-run-on-start} is on, {@link #onStart()} asks the curator for its editions two
  * minutes after boot and runs one refresh if there are none at all. compose.yaml turns it on for the
  * Docker install; the jar's own default is off, so an IntelliJ start or the test suite (both read the
- * dev .env, which may hold a CURATOR_TOKEN) never calls a curator on their own.
+ * dev .env, which may hold a CURATOR_TOKEN) never calls a curator on their own. Switching the setting on
+ * in the app runs the same check at once ({@link #firstRun(Duration)} with no grace).
  */
 @Slf4j
 @Component
@@ -42,16 +48,17 @@ public class CuratorScheduler {
             "THU", DayOfWeek.THURSDAY, "FRI", DayOfWeek.FRIDAY, "SAT", DayOfWeek.SATURDAY, "SUN", DayOfWeek.SUNDAY);
 
     private final CuratorClient client;
+    private final InstallSettingsRepository settings;
     private final Duration pollInterval;
     private final Duration runBudget;
-    private final boolean enabled;
+    private final boolean configured;
     private final boolean firstRunOnStart;
     private final DayOfWeek refreshDay;
     private final AtomicBoolean running = new AtomicBoolean();
     /** Package-private so the test can shorten it; two minutes lets croissant come up after `compose up`. */
     Duration firstRunGrace = Duration.ofMinutes(2);
 
-    public CuratorScheduler(CuratorClient client,
+    public CuratorScheduler(CuratorClient client, InstallSettingsRepository settings,
                             @Value("${curator.url:}") String url,
                             @Value("${curator.token:}") String token,
                             @Value("${curator.cron:}") String cron,
@@ -59,20 +66,27 @@ public class CuratorScheduler {
                             @Value("${curator.run-budget-ms}") Duration runBudget,
                             @Value("${curator.first-run-on-start:false}") Boolean firstRunOnStart) {
         this.client = client;
+        this.settings = settings;
         this.pollInterval = pollInterval;
         this.runBudget = runBudget;
-        this.enabled = !url.isBlank() && !token.isBlank();
+        this.configured = !url.isBlank() && !token.isBlank();
         // Boxed: an empty CURATOR_FIRST_RUN_ON_START= line in a copied .env.example is null, not a start-up crash.
         this.firstRunOnStart = Boolean.TRUE.equals(firstRunOnStart);
         this.refreshDay = refreshDay(cron);
-        if (!enabled) {
-            log.info("Weekly curator refresh OFF: suggested playlists are not refreshed. Set CURATOR_URL "
-                    + "and CURATOR_TOKEN (the same token croissant is started with) to turn it on.");
+        if (!configured) {
+            log.info("Weekly curator refresh OFF: this install has no playlist maker. Set CURATOR_URL "
+                    + "and CURATOR_TOKEN (the same token croissant is started with) to have one.");
         }
     }
 
-    public boolean isEnabled() {
-        return enabled;
+    /** This install has a playlist maker to talk to ({@code curator.url} and {@code curator.token} set). */
+    public boolean isConfigured() {
+        return configured;
+    }
+
+    /** Configured AND the person switched weekly playlists on (one SELECT on the one-row table; no cache to get wrong). */
+    public Mono<Boolean> isOn() {
+        return configured ? settings.suggestedPlaylists() : Mono.just(false);
     }
 
     public boolean isFirstRunOnStart() {
@@ -104,36 +118,50 @@ public class CuratorScheduler {
     /** On boot: one refresh when the curator holds no editions at all, so a new install does not wait for Monday. */
     @PostConstruct
     void onStart() {
-        if (enabled && firstRunOnStart) {
-            firstRun().subscribe();
+        if (configured && firstRunOnStart) {
+            whenOn(firstRun()).subscribe();
         }
     }
 
-    /**
-     * Wait the grace period, list the curator's editions, and refresh only when the list is empty (same
-     * trigger, polling and log lines as a cron tick). An error while asking is one WARN line, not a run:
-     * a 90-minute job must not start on a guess, and the weekly cron still stands.
-     */
     Mono<Void> firstRun() {
-        return Mono.delay(firstRunGrace)
+        return firstRun(firstRunGrace);
+    }
+
+    /**
+     * Wait the grace period, list the curator's editions, and when the list is empty start one refresh in the
+     * background (same trigger, polling and log lines as a cron tick). Completes once the curator has answered,
+     * not when the run ends, so the switch in Settings can say what happened; an error while asking is the
+     * caller's to word (a WARN at boot, a sentence on the screen), never a run: a 90-minute job must not start
+     * on a guess, and the weekly cron still stands. No grace when the switch was just turned on in the app.
+     */
+    public Mono<Void> firstRun(Duration grace) {
+        return Mono.delay(grace)
                 .then(Mono.defer(client::getEditions))
                 .filter(List::isEmpty)
-                .doOnNext(none -> log.info("No suggested playlists yet: asking the curator for a first edition"))
-                .flatMap(none -> refresh())
-                .onErrorResume(error -> {
-                    log.warn("Could not check for suggested playlists at start; the weekly refresh still stands: {}",
-                            error.getMessage());
-                    return Mono.empty();
-                });
+                .doOnNext(none -> {
+                    log.info("No suggested playlists yet: asking the curator for a first edition");
+                    refresh().subscribe();
+                })
+                .then();
     }
 
     /** The cron entry point. Never throws: refresh() swallows its own errors into a log line. */
     @Scheduled(cron = "${curator.cron}")
     public void tick() {
-        if (!enabled) {
+        if (!configured) {
             return;
         }
-        refresh().subscribe();
+        whenOn(refresh()).subscribe();
+    }
+
+    /** {@code work} only while the switch is on; a database or a curator that does not answer is one WARN, not a run. */
+    private Mono<Void> whenOn(Mono<Void> work) {
+        return isOn().filter(on -> on).flatMap(on -> work)
+                .onErrorResume(error -> {
+                    log.warn("No suggested-playlists refresh this time (the switch could not be read, or the playlist maker "
+                            + "did not answer); the weekly refresh still stands: {}", error.getMessage());
+                    return Mono.empty();
+                });
     }
 
     /**

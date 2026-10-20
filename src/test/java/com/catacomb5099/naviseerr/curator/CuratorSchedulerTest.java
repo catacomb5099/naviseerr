@@ -1,5 +1,6 @@
 package com.catacomb5099.naviseerr.curator;
 
+import com.catacomb5099.naviseerr.settings.InstallSettingsRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.Disposable;
@@ -21,21 +22,58 @@ class CuratorSchedulerTest {
     private static final Duration BUDGET = Duration.ofMillis(200);
 
     private CuratorClient client;
+    private InstallSettingsRepository settings;
     private CuratorScheduler scheduler;
 
     @BeforeEach
     void setUp() {
         client = mock(CuratorClient.class);
-        scheduler = new CuratorScheduler(client, "http://curator", "token", "0 0 3 * * MON", POLL, BUDGET, true);
+        settings = mock(InstallSettingsRepository.class);
+        when(settings.suggestedPlaylists()).thenReturn(Mono.just(true));
+        scheduler = new CuratorScheduler(client, settings, "http://curator", "token", "0 0 3 * * MON", POLL, BUDGET, true);
         scheduler.firstRunGrace = Duration.ZERO;
         when(client.triggerRun()).thenReturn(Mono.just(run("queued")));
     }
 
     @Test
-    void offWhenTokenMissing() {
-        assertTrue(!new CuratorScheduler(client, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET, true).isEnabled());
-        assertTrue(!new CuratorScheduler(client, "", "token", "0 0 3 * * MON", POLL, BUDGET, true).isEnabled());
-        assertTrue(scheduler.isEnabled());
+    void notConfiguredWhenTokenOrUrlMissing() {
+        assertFalse(new CuratorScheduler(client, settings, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET, true).isConfigured());
+        assertFalse(new CuratorScheduler(client, settings, "", "token", "0 0 3 * * MON", POLL, BUDGET, true).isConfigured());
+        assertTrue(scheduler.isConfigured());
+    }
+
+    @Test
+    void isOn_needsBothTheConfigurationAndTheSwitch() {
+        assertEquals(Boolean.TRUE, scheduler.isOn().block());
+
+        when(settings.suggestedPlaylists()).thenReturn(Mono.just(false));
+        assertEquals(Boolean.FALSE, scheduler.isOn().block(), "configured but nobody said yes");
+
+        when(settings.suggestedPlaylists()).thenReturn(Mono.just(true));
+        CuratorScheduler noToken = new CuratorScheduler(client, settings, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET, true);
+        assertEquals(Boolean.FALSE, noToken.isOn().block(), "switched on but no playlist maker to ask");
+    }
+
+    @Test
+    void tick_doesNothingWhileTheSwitchIsOff_andRefreshesOnceItIsOn() {
+        when(client.getRun("r1")).thenReturn(Mono.just(run("succeeded")));
+        when(settings.suggestedPlaylists()).thenReturn(Mono.just(false));
+
+        scheduler.tick();
+        verify(client, after(POLL.toMillis() * 5).never()).triggerRun();
+
+        when(settings.suggestedPlaylists()).thenReturn(Mono.just(true));
+        scheduler.tick();
+        verify(client, timeout(BUDGET.toMillis() * 3)).triggerRun();
+    }
+
+    @Test
+    void tick_whenTheSwitchCannotBeRead_isOneWarningNotARun() {
+        when(settings.suggestedPlaylists()).thenReturn(Mono.error(new IllegalStateException("database away")));
+
+        scheduler.tick();
+
+        verify(client, after(POLL.toMillis() * 5).never()).triggerRun();
     }
 
     @Test
@@ -183,7 +221,7 @@ class CuratorSchedulerTest {
         StepVerifier.create(scheduler.firstRun()).verifyComplete();
 
         verify(client).triggerRun();
-        verify(client).getRun("r1");
+        verify(client, timeout(BUDGET.toMillis() * 3)).getRun("r1");   // the run itself goes on in the background
     }
 
     @Test
@@ -197,12 +235,23 @@ class CuratorSchedulerTest {
     }
 
     @Test
-    void firstRun_whenTheCuratorIsDown_isLoggedNotThrown() {
+    void firstRun_whenTheCuratorIsDown_tellsTheCaller_andStartsNoRun() {
         when(client.getEditions()).thenReturn(
                 Mono.error(new CuratorException("curator list of editions failed: Connection refused", true)));
 
-        StepVerifier.create(scheduler.firstRun()).verifyComplete();
+        StepVerifier.create(scheduler.firstRun()).expectError(CuratorException.class).verify();
 
+        verify(client, never()).triggerRun();
+    }
+
+    @Test
+    void onStart_whenTheCuratorIsDown_isOneWarningNotARun() {
+        when(client.getEditions()).thenReturn(
+                Mono.error(new CuratorException("curator list of editions failed: Connection refused", true)));
+
+        scheduler.onStart();
+
+        verify(client, timeout(BUDGET.toMillis() * 3)).getEditions();
         verify(client, never()).triggerRun();
     }
 
@@ -211,13 +260,16 @@ class CuratorSchedulerTest {
         when(client.getEditions()).thenReturn(Mono.just(List.of(
                 new CuratorEditionSummary("80s-indie-pop", "80s indie pop", "1980-1989", "2026-10-05", 40))));
 
-        CuratorScheduler off = new CuratorScheduler(client, "http://curator", "token", "0 0 3 * * MON", POLL, BUDGET, false);
+        CuratorScheduler off = new CuratorScheduler(client, settings, "http://curator", "token", "0 0 3 * * MON", POLL, BUDGET, false);
         off.firstRunGrace = Duration.ZERO;
         off.onStart();
-        CuratorScheduler noToken = new CuratorScheduler(client, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET, true);
+        CuratorScheduler noToken = new CuratorScheduler(client, settings, "http://curator", "", "0 0 3 * * MON", POLL, BUDGET, true);
         noToken.firstRunGrace = Duration.ZERO;
         noToken.onStart();
+        when(settings.suggestedPlaylists()).thenReturn(Mono.just(false));
+        scheduler.onStart();                              // configured and first-run-on-start, but nobody said yes
         verify(client, after(POLL.toMillis() * 5).never()).getEditions();
+        when(settings.suggestedPlaylists()).thenReturn(Mono.just(true));
 
         scheduler.onStart();
         verify(client, timeout(BUDGET.toMillis() * 3)).getEditions();

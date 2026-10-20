@@ -44,6 +44,14 @@ public class InstallSettingsRepository {
     private static final String CLEAR_JELLYFIN_SQL = "UPDATE install_settings SET jellyfin_url = NULL, jellyfin_api_key = NULL, "
             + "updated_at = now()";
 
+    private static final String SET_SUGGESTED_PLAYLISTS_SQL = """
+            INSERT INTO install_settings (suggested_playlists) VALUES (:on)
+            ON CONFLICT (one) DO UPDATE SET suggested_playlists = EXCLUDED.suggested_playlists, updated_at = now()
+            """;
+
+    /** False with no row at all: a fresh install makes no playlists until someone says yes. */
+    private static final String SUGGESTED_PLAYLISTS_SQL = "SELECT COALESCE((SELECT suggested_playlists FROM install_settings), FALSE) AS switched_on";
+
     private final DatabaseClient client;
 
     public InstallSettingsRepository(R2dbcEntityTemplate entityTemplate) {
@@ -85,5 +93,15 @@ public class InstallSettingsRepository {
 
     public Mono<Void> clearJellyfin() {
         return client.sql(CLEAR_JELLYFIN_SQL).fetch().rowsUpdated().then();
+    }
+
+    /** "Make weekly playlists for me": the switch the setup's third screen and Settings flip. */
+    public Mono<Void> setSuggestedPlaylists(boolean on) {
+        return client.sql(SET_SUGGESTED_PLAYLISTS_SQL).bind("on", on).fetch().rowsUpdated().then();
+    }
+
+    /** Asked at every cron tick and on every suggested-playlists request: one SELECT on a one-row table. */
+    public Mono<Boolean> suggestedPlaylists() {
+        return client.sql(SUGGESTED_PLAYLISTS_SQL).map(row -> Boolean.TRUE.equals(row.get("switched_on", Boolean.class))).one();
     }
 }
