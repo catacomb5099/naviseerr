@@ -216,8 +216,8 @@ public final class YtMusicDetailResponse {
     /**
      * One entry of an artist's {@code albums[]} or {@code singles[]}. Carries no artists of its own.
      * {@code albums[]} is the whole discography by YouTube's popularity (up to 100) from adapter
-     * 12-10-2026 on, the page's ten newest releases from an older one; {@code singles[]} is always
-     * the page shelf.
+     * 12-10-2026 on, the page's ten newest releases from an older one; {@code singles[]} is every single
+     * and EP, newest first (up to 100), from adapter 20-10-2026 on, the page shelf of ten from an older one.
      */
     @Data
     @NoArgsConstructor
