@@ -113,6 +113,22 @@ class AuthFilterTest {
         assertNull(exchange.getAttribute(AuthFilter.SUBJECT));
     }
 
+    /** The setup and settings routes are not listed anywhere: default-deny covers them, and this pins that down. */
+    @Test
+    void loginOn_theSetupAndSettingsRoutes_needASession() {
+        loginOn(true);
+        for (MockServerHttpRequest.BaseBuilder<?> request : new MockServerHttpRequest.BaseBuilder<?>[] {
+                MockServerHttpRequest.get("/settings/setup"), MockServerHttpRequest.post("/settings/setup/done"),
+                MockServerHttpRequest.get("/settings/media-servers"), MockServerHttpRequest.put("/settings/suggested-playlists"),
+                MockServerHttpRequest.get("/settings/soulseek"), MockServerHttpRequest.put("/settings/slskd")}) {
+            reachedHandler.set(false);
+            MockServerWebExchange exchange = MockServerWebExchange.from(request);
+            filter.filter(exchange, chain).block();
+            assertFalse(reachedHandler.get(), exchange.getRequest().getPath().value());
+            assertEquals(HttpStatus.UNAUTHORIZED, exchange.getResponse().getStatusCode());
+        }
+    }
+
     @Test
     void pathTricks_doNotReachAnOpenPath() {
         loginOn(true);

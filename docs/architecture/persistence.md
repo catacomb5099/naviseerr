@@ -256,6 +256,25 @@ sign-in (`deleteExpired`), so no scheduler. A restart keeps everyone signed in. 
 [AuthRepository.java](../../src/main/java/com/catacomb5099/naviseerr/auth/AuthRepository.java). No foreign
 key: there is no users table, Authentik is the directory.
 
+### V18: `install_settings` (first-run setup, 19-10-2026)
+
+[V18__install_settings.sql](../../src/main/resources/db/migration/V18__install_settings.sql) adds the one-row
+table (same `one BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (one)` trick as V16) that remembers what the web app's
+first-run setup asked: `setup_completed_at` (null = show the setup; stamped by Finish or by skipping every screen),
+`suggested_playlists` (the weekly-playlists opt-in, default false), `navidrome_url` / `navidrome_user` /
+`navidrome_password` and `jellyfin_url` / `jellyfin_api_key` (the music app that is told to rescan; null = the install
+file's `NAVIDROME_*` / `JELLYFIN_*` lines apply), `slskd_url` / `slskd_api_key` (your own slskd; null = the install
+file's `SLSKD_URL` / `SLSKD_API_KEY`), `updated_at`. Every column of the setup chain is created here so the later PRs
+add no DDL. Secrets are stored as typed (like V16's client secret) and never read back out through the API. The one
+data statement: where the database already holds a suggested-playlist download (`downloads.download_type = 'CURATED'`,
+the one trace of the feature this database holds: the playlists themselves live in croissant) the row is created with
+`suggested_playlists = TRUE`, so an upgrade does not stop a weekly run whose playlists were downloaded; an install that made
+playlists but never downloaded one starts OFF and sees the switch pre-filled on the setup's third screen; `setup_completed_at` stays null on purpose, so the setup shows once after the upgrade. Not here: the
+Soulseek account (slskd reads it from its own files, `settings/SoulseekAccountFiles`) and the Authentik connection
+(V16). All SQL in
+[InstallSettingsRepository.java](../../src/main/java/com/catacomb5099/naviseerr/settings/InstallSettingsRepository.java):
+`find()` answers `InstallSettings.NONE` with no row, every write is `INSERT ... ON CONFLICT (one) DO UPDATE SET <its columns>`.
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.
