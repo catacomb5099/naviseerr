@@ -17,8 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Plays the whole picker over the labelled search-lab fixture, one song at a time: keep the files the matcher
- * accepts that have a quality tier (a lossless suffix or a reported bit rate), take the one nearest the chosen
- * quality and, among those, the one whose length the most accepted files share (what SlskdSearchResultProcessor
+ * accepts that have a quality tier (a lossless suffix or a reported bit rate), take the one in the chosen
+ * quality (else the next tier up, lower ones last) and, among those, the one whose length the most accepted files share (what SlskdSearchResultProcessor
  * does), and ask whether that single download is the right song in the right version. This is the number a
  * listener feels; per-file precision and recall in TrackMatchingServiceLabelledTest are the parts that build it.
  * <p>

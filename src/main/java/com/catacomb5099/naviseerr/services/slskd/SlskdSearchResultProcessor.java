@@ -48,7 +48,8 @@ public class SlskdSearchResultProcessor {
      * The files worth trying, in the order to try them: every file in the requested version before any
      * other version of the song (the candidate list is walked in order, so a live take or remix is only
      * downloaded once every exact option has failed), then within each grade the chosen quality tier first
-     * and the nearest tier after it ({@link DownloadQuality#distance}, ties going up), then the length most
+     * and, when it has nothing, every higher tier before any lower one, nearest first either way
+     * ({@link DownloadQuality#distance}, the owner's call of 20-10-2026), then the length most
      * files share, then who can serve fastest; then spread so that no sharer's second file comes before
      * every other sharer's first within the same grade and tier ({@link #spreadAcrossSharers}). A lossy file whose bit rate slskd did not report has no tier
      * and is not tried (2.7% of files, mostly m4a and opus); it stays on the manual list. Capped at
@@ -156,7 +157,7 @@ public class SlskdSearchResultProcessor {
                 .toList();
     }
 
-    /** The picker's order: grade, overloaded sharers last, the chosen tier then the nearest, the length most files share, availability. */
+    /** The picker's order: grade, overloaded sharers last, the chosen tier then the higher ones then the lower ones, the length most files share, availability. */
     private List<Pick> rank(List<Pick> candidates, DownloadQuality chosen) {
         Map<TrackMatchingService.Match, Map<Integer, Long>> countByLength = candidates.stream()
                 .filter(pick -> pick.file().getLength().isPresent())
@@ -182,7 +183,7 @@ public class SlskdSearchResultProcessor {
      * candidate, not the whole list. Within a round the ranking above still decides who goes first.
      * Done within each run of files that share the ranking's first three keys (grade, overloaded, tier
      * distance), so every file in the requested version still comes before any other version, and every
-     * file in the nearest tier before any file of the next one: the spread never promotes a fallback above
+     * file in the next tier of the fallback order before any file of the one after: the spread never promotes a fallback above
      * an exact match, nor (review of 20-10-2026; until 19-10 the list held lossless and 320 kbps files
      * only, so a spread per grade never cost a tier) another sharer's 128 kbps file above the first
      * sharer's second lossless copy. The price: a sharer alone in its run keeps its files in a row, so
