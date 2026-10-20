@@ -41,16 +41,19 @@ class DownloadQualityTest {
     }
 
     @Test
-    void theChosenTierComesFirst_thenTheNearest_tiesGoingUp() {
-        assertEquals(List.of(LOSSLESS, VERY_HIGH, HIGH, NORMAL, LOW), nearestFirst(LOSSLESS));
-        assertEquals(List.of(VERY_HIGH, LOSSLESS, HIGH, NORMAL, LOW), nearestFirst(VERY_HIGH));
-        assertEquals(List.of(HIGH, VERY_HIGH, NORMAL, LOSSLESS, LOW), nearestFirst(HIGH));
-        assertEquals(List.of(NORMAL, HIGH, LOW, VERY_HIGH, LOSSLESS), nearestFirst(NORMAL));
-        assertEquals(List.of(LOW, NORMAL, HIGH, VERY_HIGH, LOSSLESS), nearestFirst(LOW));
+    void theChosenTierComesFirst_thenEveryHigherOne_nearestFirst_thenTheLowerOnes_nearestFirst() {
+        // The owner's call of 20-10-2026: "high should check very high and lossless before it checks normal, same
+        // with normal - check all higher options before going lower". Until then the nearest tier won, ties going
+        // up (High: High, Very high, Normal, Lossless, Low; Normal: Normal, High, Low, Very high, Lossless).
+        assertEquals(List.of(LOSSLESS, VERY_HIGH, HIGH, NORMAL, LOW), fallbackOrder(LOSSLESS), "nothing above: down, nearest first");
+        assertEquals(List.of(VERY_HIGH, LOSSLESS, HIGH, NORMAL, LOW), fallbackOrder(VERY_HIGH));
+        assertEquals(List.of(HIGH, VERY_HIGH, LOSSLESS, NORMAL, LOW), fallbackOrder(HIGH), "the owner's example: High > Very high > Lossless > Normal > Low");
+        assertEquals(List.of(NORMAL, HIGH, VERY_HIGH, LOSSLESS, LOW), fallbackOrder(NORMAL), "Low only once every higher tier is empty");
+        assertEquals(List.of(LOW, NORMAL, HIGH, VERY_HIGH, LOSSLESS), fallbackOrder(LOW), "everything is above: up, nearest first");
         assertEquals(LOSSLESS, DEFAULT, "what the picker effectively preferred before the setting existed");
     }
 
-    private static List<DownloadQuality> nearestFirst(DownloadQuality chosen) {
+    private static List<DownloadQuality> fallbackOrder(DownloadQuality chosen) {
         return Arrays.stream(values()).sorted(Comparator.comparingInt(chosen::distance)).toList();
     }
 }

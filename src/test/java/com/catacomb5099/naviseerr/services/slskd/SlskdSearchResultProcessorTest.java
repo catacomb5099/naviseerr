@@ -103,7 +103,7 @@ class SlskdSearchResultProcessorTest {
     }
 
     @Test
-    void selectBestFiles_keepsEveryTier_theChosenOneFirst_thenTheNearest_tiesGoingUp() {
+    void selectBestFiles_keepsEveryTier_theChosenOneFirst_thenEveryHigherOne_thenTheLowerOnes() {
         when(trackMatchingService.grade(anyString(), anyString(), anyString())).thenReturn(Match.EXACT);
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 10);
         // Real shapes: the lossless file carries no bit rate, the lossy ones their rung (267 is a LAME V0 average: High).
@@ -117,8 +117,9 @@ class SlskdSearchResultProcessorTest {
 
         assertEquals(List.of("flac", "320", "267", "192", "128"), names(pick(state, LOSSLESS)));
         assertEquals(List.of("320", "flac", "267", "192", "128"), names(pick(state, VERY_HIGH)));
-        assertEquals(List.of("267", "320", "192", "flac", "128"), names(pick(state, HIGH)));
-        assertEquals(List.of("192", "267", "128", "320", "flac"), names(pick(state, NORMAL)));
+        // The owner's call of 20-10-2026: every higher tier before any lower one (until then High went 267, 320, 192, flac, 128).
+        assertEquals(List.of("267", "320", "flac", "192", "128"), names(pick(state, HIGH)), "High > Very high > Lossless > Normal > Low");
+        assertEquals(List.of("192", "267", "320", "flac", "128"), names(pick(state, NORMAL)));
         assertEquals(List.of("128", "192", "267", "320", "flac"), names(pick(state, LOW)));
         // The m4a with no reported bit rate has no tier: never picked, on the manual list last.
         assertEquals("norate", processor.allFiles(state, "track", "track", LOSSLESS).getLast().peer().getUsername());

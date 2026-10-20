@@ -23,8 +23,8 @@ import java.util.regex.Pattern;
 
 /**
  * P5 and P6: which sharers' folders hold the album, a sharer that never serves last (as for a song), the ones
- * nearest the chosen download quality first ({@link DownloadQuality}), then whole ones before the ones holding
- * the most of it. Pure apart from its
+ * in the chosen download quality first, then the higher tiers, then the lower ({@link DownloadQuality#distance}),
+ * then whole ones before the ones holding the most of it. Pure apart from its
  * two collaborators, which supply the rules a single song is already judged by: {@link TrackMatchingService#grade}
  * must call a file the requested version (EXACT) of one track, and the file must have a quality tier
  * ({@link DownloadQuality#of}: a lossless suffix or a reported bit rate), as the song picker asks.
@@ -91,8 +91,9 @@ public class AlbumFolderPicker {
      * tier, as the song picker does -- every song the best folder holds is pointed at that sharer first, so
      * one that never answers would cost the whole album its download budget before the next folder (review
      * of 20-10-2026: the term sat after "most tracks", and a Lossless chooser's eleven songs went to the one
-     * overloaded FLAC sharer before a free 320 kbps whole folder); then nearest the chosen quality (a folder
-     * is as far from the choice as its farthest matched file; ties go up, as for a song), then the most
+     * overloaded FLAC sharer before a free 320 kbps whole folder); then the chosen quality, every higher
+     * tier before any lower one, nearest first (a folder is as far from the choice as its farthest matched
+     * file; {@link DownloadQuality#distance}, as for a song), then the most
      * tracks, so within a tier every whole folder comes before any part; then a sharer that can start now,
      * the shortest queue, the fewest extra files, and only then the sharer's own speed claim. The tier sits
      * before "most tracks" on purpose: with no bit-rate floor a 128 kbps whole folder exists for a popular
@@ -149,7 +150,7 @@ public class AlbumFolderPicker {
         return found;
     }
 
-    /** An overloaded sharer last (the song picker's never-serves protection, never overridden by the tier), nearest the chosen quality, the most tracks, a free slot, the shortest queue, the fewest extras, speed. */
+    /** An overloaded sharer last (the song picker's never-serves protection, never overridden by the tier), the chosen quality then the higher tiers then the lower, the most tracks, a free slot, the shortest queue, the fewest extras, speed. */
     private Comparator<Folder> bestFirst(DownloadQuality chosen) {
         return Comparator
                 .comparing((Folder f) -> files.isOverloaded(f.peer()))

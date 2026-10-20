@@ -11,8 +11,8 @@ import java.util.Set;
  * every download: songs, playlists and albums alike. Stored as the word in {@code install_settings.download_quality}
  * (V19), null until chosen. Lowest first, so the order of the values is the order of the tiers.
  *
- * <p>A preference, not a floor: the picker takes the chosen tier first and the nearest tier when that has
- * nothing, ties going up ({@link #distance}); the song's Choose-a-file pop-up ({@code GET /downloads/{id}/candidates},
+ * <p>A preference, not a floor: the picker takes the chosen tier first and, when that has nothing, every
+ * higher tier before any lower one, nearest first either way ({@link #distance}); the song's Choose-a-file pop-up ({@code GET /downloads/{id}/candidates},
  * the person icon on a Downloads row) shows every file's quality and marks the one taken.
  */
 public enum DownloadQuality {
@@ -59,11 +59,15 @@ public enum DownloadQuality {
     }
 
     /**
-     * How far {@code tier} is from this chosen one: 0 for the tier itself, then the neighbours, the one above
-     * nearer than the one below (ties go up). Normal: Normal, High, Low, Very high, Lossless; Lossless:
-     * Lossless, Very high, High, Normal, Low.
+     * Where {@code tier} comes in this chosen one's fallback order: 0 for the tier itself, then every higher
+     * tier, nearest first, and only then the lower tiers, nearest first (the owner's call of 20-10-2026:
+     * "check all higher options before going lower"). High: High, Very high, Lossless, Normal, Low; Normal:
+     * Normal, High, Very high, Lossless, Low; Lossless: Lossless, Very high, High, Normal, Low. A lower
+     * tier's place is its distance from the top, which is past every higher tier's whatever was chosen.
+     * Until 20-10 the nearest tier won, ties going up (High: High, Very high, Normal, Lossless, Low).
      */
     public int distance(DownloadQuality tier) {
-        return Math.abs(tier.ordinal() - ordinal()) * 2 + (tier.ordinal() < ordinal() ? 1 : 0);
+        int up = tier.ordinal() - ordinal();
+        return up >= 0 ? up : LOSSLESS.ordinal() - tier.ordinal();
     }
 }

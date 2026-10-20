@@ -22,9 +22,16 @@ a song shared only below 320 kbps failed with `NO_CANDIDATES` (1 of 718 in the l
 - **One setting for every download**: songs, playlists and albums alike (Spotify mobile and Apple Music keep one
   download-quality setting; we have only downloads).
 - **A preference, not a floor.** The picker prefers files (and album folders) in the chosen tier; when the tier has
-  nothing acceptable it takes the nearest tier, ties going up: Lossless → Very high → High → Normal → Low; Very high →
-  Lossless → High → Normal → Low; High → Very high → Normal → Lossless → Low; Normal → High → Low → Very high → Lossless;
-  Low → Normal → High → Very high → Lossless. The 320 kbps floor goes with it: a song shared only at 192 kbps now
+  nothing acceptable it tries every higher tier, nearest first, and only then the lower tiers, nearest first:
+  Lossless → Very high → High → Normal → Low; Very high → Lossless → High → Normal → Low; High → Very high → Lossless →
+  Normal → Low; Normal → High → Very high → Lossless → Low; Low → Normal → High → Very high → Lossless.
+  **Owner's call (20-10-2026, 10:50):** "high should check very high and lossless before it checks normal, same with
+  normal - check all higher options before going lower." The 19-10 rule was the nearest tier with ties going up
+  (High → Very high → Normal → Lossless → Low; Normal → High → Low → Very high → Lossless): a High chooser whose song
+  was shared at 192 kbps and in FLAC got the 192. Only the High and Normal orders change; the song list, the sharer
+  round-robin and the album folder order all key on `DownloadQuality.distance`, so the change is that one method.
+  Flip: back to the nearest tier, ties going up (`distance` = `|tier - chosen| * 2 + (tier below chosen ? 1 : 0)`).
+  The 320 kbps floor goes with it: a song shared only at 192 kbps now
   downloads at 192 instead of failing. What was taken shows in the song's Choose-a-file pop-up (the person icon on
   a Downloads row, `GET /downloads/{id}/candidates`): every file's quality, the one being taken marked. The Downloads
   row itself names the sharer only (review of 20-10-2026: the first wording said "the Downloads page's Quality column",

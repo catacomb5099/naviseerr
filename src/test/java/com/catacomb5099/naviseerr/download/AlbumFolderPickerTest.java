@@ -28,6 +28,7 @@ import java.util.function.Predicate;
 
 import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.LOSSLESS;
 import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.LOW;
+import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.NORMAL;
 import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.VERY_HIGH;
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.T0;
 import static org.junit.jupiter.api.Assertions.*;
@@ -360,7 +361,9 @@ class AlbumFolderPickerTest {
         assertEquals(List.of("flacpart", "low"), names(picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS)),
                 "a Lossless chooser takes the FLAC part and searches for Supersonic alone");
         assertEquals(List.of("flacpart", "low"), names(picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, VERY_HIGH)),
-                "ties go up: Lossless is nearer Very high than Low is");
+                "a Very high chooser: the FLAC part (a tier up) before the 128 kbps whole folder (a tier down)");
+        assertEquals(List.of("flacpart", "low"), names(picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, NORMAL)),
+                "a Normal chooser too (owner's call of 20-10-2026: every higher tier before any lower one; until then Low was nearer than Lossless)");
         assertEquals(List.of("low", "flacpart"), names(picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOW)));
         // Lossy files with no reported bit rate have no tier: the folder is nobody's to judge, but a person may still take it (last).
         assertEquals(List.of("flacpart", "low", "norate"), names(picker.allFolders(responses, tracks, "Definitely Maybe", List.of("Oasis"), LOSSLESS)));
