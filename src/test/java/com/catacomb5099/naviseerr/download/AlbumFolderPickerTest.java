@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.util.TrackMatchingService;
@@ -25,13 +26,17 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 
+import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.LOSSLESS;
+import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.LOW;
+import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.VERY_HIGH;
 import static com.catacomb5099.naviseerr.support.DownloadTaskFixtures.T0;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
 /**
  * The album folder picker on real slskd answers (04-10-2026, trimmed to the folders each test needs, in
- * src/test/resources/slskd/) against YouTube Music's own track lists for the same albums.
+ * src/test/resources/slskd/) against YouTube Music's own track lists for the same albums. The chooser is
+ * Lossless, the default, unless a test says otherwise.
  */
 class AlbumFolderPickerTest {
 
@@ -43,7 +48,6 @@ class AlbumFolderPickerTest {
     void setUp() {
         SlskdSearchResultProcessor processor =
                 new SlskdSearchResultProcessor(mock(SlskdService.class), new TrackMatchingService());
-        ReflectionTestUtils.setField(processor, "minBitRate", 320);
         ReflectionTestUtils.setField(processor, "maxSharerQueue", 50);
         picker = new AlbumFolderPicker(new TrackMatchingService(), processor);
     }
@@ -60,14 +64,39 @@ class AlbumFolderPickerTest {
     @Test
     void definitelyMaybe_everyWholeFolderIsFound_bestFirst_thenThePartOnes() {
         List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-definitely-maybe.json"),
-                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING);
+                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS);
 
-        // Free slot, then queue, then extra files, then speed; niccage has no free slot and 52 queued
-        // (past max-sharer-queue), so it goes last of the whole ones. raphyduck's folder lacks Live
-        // Forever: 10 of 11, after every whole folder.
-        assertEquals(List.of("noochieplexMatt", "ComputerYeti", "fennyfom", "TheDrewCareyShow", "niccage", "raphyduck"),
+        // The FLAC folders first (the chooser is Lossless), among them free slot, then queue, then extra files,
+        // then speed. fennyfom's whole folder is MP3 at 320 kbps: after every free FLAC one. raphyduck's folder
+        // (320 kbps too) lacks Live Forever: 10 of 11. niccage has no free slot and 52 queued (past
+        // max-sharer-queue): a sharer that never serves goes last whatever its tier, as for a song.
+        assertEquals(List.of("noochieplexMatt", "ComputerYeti", "TheDrewCareyShow", "fennyfom", "raphyduck", "niccage"),
                 whole.stream().map(f -> f.peer().getUsername()).toList());
         assertEquals(0, whole.getFirst().extras());
+    }
+
+    @Test
+    void definitelyMaybe_withTheFreeFlacSharersStalling_aLosslessChooserGetsTheFree320Folder_notTheOverloadedFlacOne() {
+        // Review of 20-10-2026: with the tier ranked before the overloaded term, every song of a Lossless chooser's
+        // album was pointed at niccage (no slot, 52 queued) first and waited out its budget before fennyfom, who
+        // could have started at once. Overloaded is the first key now, as in the song picker.
+        Predicate<String> freeFlacSharersStalling = List.of("noochieplexMatt", "ComputerYeti", "TheDrewCareyShow")::contains;
+
+        List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-definitely-maybe.json"),
+                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), freeFlacSharersStalling, LOSSLESS);
+
+        assertEquals(List.of("fennyfom", "raphyduck", "niccage"), whole.stream().map(f -> f.peer().getUsername()).toList());
+    }
+
+    @Test
+    void definitelyMaybe_aVeryHighChooser_takesThe320Folders_thePartBeforeAnyFlacWholeFolder() {
+        List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-definitely-maybe.json"),
+                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, VERY_HIGH);
+
+        // The tier sits before "most tracks": raphyduck's 10 of 11 at 320 kbps ranks above every FLAC whole folder,
+        // and Live Forever searches on its own (the flip is the tier after "most tracks").
+        assertEquals(List.of("fennyfom", "raphyduck", "noochieplexMatt", "ComputerYeti", "TheDrewCareyShow", "niccage"),
+                whole.stream().map(f -> f.peer().getUsername()).toList());
     }
 
     @Test
@@ -77,7 +106,7 @@ class AlbumFolderPickerTest {
                 List.of("noochieplexMatt", "ComputerYeti", "fennyfom", "TheDrewCareyShow", "niccage")::contains;
 
         List<AlbumFolderPicker.Folder> parts = picker.folders(responses("album-definitely-maybe.json"), songs,
-                "Definitely Maybe", List.of("Oasis"), wholeSharersStalling);
+                "Definitely Maybe", List.of("Oasis"), wholeSharersStalling, LOSSLESS);
 
         // Its bonus disc ("Definitely Maybe (Bonus Disc)") is another folder holding none of the 11, and its
         // one Live Forever sits in a compilation folder of one file: neither is a part.
@@ -94,7 +123,7 @@ class AlbumFolderPickerTest {
     void eachSongGetsItsOwnFile_matchedByTitle_notByPosition() {
         List<DownloadTask> songs = definitelyMaybe();
         AlbumFolderPicker.Folder best = picker.folders(responses("album-definitely-maybe.json"), songs,
-                "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING).getFirst();
+                "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS).getFirst();
 
         for (DownloadTask song : songs) {
             String leaf = leaf(best.files().get(song.taskId()));
@@ -107,7 +136,7 @@ class AlbumFolderPickerTest {
     void aDeluxeFolder_givesEachSongTheAlbumTake_neverTheDemoLiveOrAcousticOneBesideIt() {
         List<DownloadTask> songs = definitelyMaybe();
         AlbumFolderPicker.Folder deluxe = picker.folders(responses("album-definitely-maybe.json"), songs,
-                "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING).stream()
+                "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS).stream()
                 .filter(f -> f.peer().getUsername().equals("ComputerYeti")).findFirst().orElseThrow();
 
         // 44 files: disc 1 (101-111) is the album; 201-317 are demos, live takes, B-sides.
@@ -121,7 +150,7 @@ class AlbumFolderPickerTest {
     @Test
     void discSubfoldersOfOneAlbumFolder_areOneFolder() {
         AlbumFolderPicker.Folder split = picker.folders(responses("album-definitely-maybe.json"),
-                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING).stream()
+                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS).stream()
                 .filter(f -> f.peer().getUsername().equals("TheDrewCareyShow")).findFirst().orElseThrow();
 
         // CD 01 holds the album, CD 02 three B-sides; the share alias (@@nfwmp) is not part of the path.
@@ -133,7 +162,7 @@ class AlbumFolderPickerTest {
     @Test
     void aStallingSharer_isLeftOut() {
         List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-definitely-maybe.json"),
-                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), "noochieplexMatt"::equals);
+                definitelyMaybe(), "Definitely Maybe", List.of("Oasis"), "noochieplexMatt"::equals, LOSSLESS);
 
         assertEquals("ComputerYeti", whole.getFirst().peer().getUsername());
     }
@@ -142,13 +171,14 @@ class AlbumFolderPickerTest {
     void eachSongsCandidates_areTheBestFolder_thenTheSameTrackFromTheNextSharers() {
         List<DownloadTask> songs = definitelyMaybe();
         List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-definitely-maybe.json"),
-                songs, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING);
+                songs, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS);
 
         Map<UUID, List<DownloadCandidate>> picks = AlbumFolderPicker.candidates(whole, 3);
 
         assertEquals(songs.size(), picks.size());
         List<DownloadCandidate> supersonic = picks.get(songs.get(5).taskId());
-        assertEquals(List.of("noochieplexMatt", "ComputerYeti", "fennyfom"),
+        // The three best folders of a Lossless chooser are the three free FLAC ones; fennyfom's 320 kbps folder is fourth.
+        assertEquals(List.of("noochieplexMatt", "ComputerYeti", "TheDrewCareyShow"),
                 supersonic.stream().map(DownloadCandidate::username).toList());
         assertTrue(supersonic.stream().allMatch(c -> c.filename().contains("Supersonic")));
         assertTrue(supersonic.stream().allMatch(c -> DownloadCandidate.ALBUM_FOLDER.equals(c.source())
@@ -169,11 +199,11 @@ class AlbumFolderPickerTest {
         List<DownloadTask> songs = discovery();
 
         List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-discovery.json"), songs,
-                "Discovery", List.of("Daft Punk"), NOBODY_STALLING);
+                "Discovery", List.of("Daft Punk"), NOBODY_STALLING, LOSSLESS);
 
         // Shockwave__42's "Discovery (2001)" has the right files but names nobody: from the folder alone it
-        // could be anyone's Discovery. Sbonzo's is a cover album with the same track list (another artist,
-        // 128 kbps, other lengths). soneo_app has 11 of the 14: a part, after the whole one.
+        // could be anyone's Discovery. Sbonzo's is another artist's cover album with the same track list (names
+        // no Daft Punk; its 128 kbps alone would no longer keep it out). soneo_app has 11 of the 14: a part, after the whole one.
         assertEquals(List.of("GraMoore", "soneo_app"), whole.stream().map(f -> f.peer().getUsername()).toList());
     }
 
@@ -182,7 +212,7 @@ class AlbumFolderPickerTest {
         List<DownloadTask> songs = discovery();
 
         List<AlbumFolderPicker.Folder> parts = picker.folders(responses("album-discovery.json"), songs,
-                "Discovery", List.of("Daft Punk"), "GraMoore"::equals);
+                "Discovery", List.of("Daft Punk"), "GraMoore"::equals, LOSSLESS);
 
         // soneo_app's folder lacks One More Time, Digital Love and Something About Us; bugliker's has
         // only six (One More Time to Something About Us, gaps included): under half of 14.
@@ -201,15 +231,17 @@ class AlbumFolderPickerTest {
                 "After The Flood", 567, "Taphead", 422, "New Grass", 587, "Runeii", 299);
 
         List<AlbumFolderPicker.Folder> whole = picker.folders(responses("album-laughing-stock.json"), songs,
-                "Laughing Stock", List.of("Talk Talk"), NOBODY_STALLING);
+                "Laughing Stock", List.of("Talk Talk"), NOBODY_STALLING, LOSSLESS);
 
-        // moburma's Taphead runs 37 s long, so it has 5 of 6: a part, after the whole ones; llafnwod's is
-        // an interview tape with the songs cut down; filfil's folder never names Talk Talk. Baron53 (free,
-        // nobody queued) beats Nilkse (11 queued).
-        assertEquals(List.of("Baron53", "Nilkse", "moburma"), whole.stream().map(f -> f.peer().getUsername()).toList());
-        AlbumFolderPicker.Folder best = whole.getFirst();
-        assertEquals("1-03 After The Flood.mp3", leaf(best.files().get(songs.get(2).taskId())));
-        assertEquals(4, best.extras(), "the bonus disc, its outtake included, is left alone");
+        // Nilkse's FLAC folder is whole; moburma's Taphead runs 37 s long, so it has 5 of 6: a FLAC part, which
+        // a Lossless chooser takes before Baron53's whole folder at 320 kbps (free, nobody queued; it led before
+        // 19-10-2026, when FLAC and 320 were equals). llafnwod's is an interview tape with the songs cut down;
+        // filfil's folder never names Talk Talk.
+        assertEquals(List.of("Nilkse", "moburma", "Baron53"), whole.stream().map(f -> f.peer().getUsername()).toList());
+        assertEquals("03 After the Flood.flac", leaf(whole.getFirst().files().get(songs.get(2).taskId())));
+        AlbumFolderPicker.Folder mp3 = whole.getLast();
+        assertEquals("1-03 After The Flood.mp3", leaf(mp3.files().get(songs.get(2).taskId())));
+        assertEquals(4, mp3.extras(), "the bonus disc, its outtake included, is left alone");
     }
 
     // ---- rules on small hand-made folders ----------------------------------------------------------
@@ -220,17 +252,17 @@ class AlbumFolderPickerTest {
 
         assertTrue(picker.folders(List.of(peer("a", "Oasis\\Definitely Maybe\\",
                         file("01 - Up In The Sky (Sawmills Outtake).flac", 270), file("02 - Digsy's Dinner.flac", 153))),
-                songs, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING).isEmpty());
+                songs, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS).isEmpty());
         assertEquals(1, picker.folders(List.of(peer("a", "Oasis\\Definitely Maybe\\",
                         file("01 - Up In The Sky.flac", 270), file("02 - Digsy's Dinner (Monnow Valley Version).flac", 153),
                         file("03 - Digsy's Dinner (Album Version).flac", 153))),
-                songs, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING).size(),
+                songs, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS).size(),
                 "'Album Version' is the plain take");
         // When YouTube's own title names the take, that take is the one asked for.
         List<DownloadTask> outtakes = album("Oasis", "Up In The Sky (Sawmills Outtake)", 273, "Digsy's Dinner", 153);
         assertEquals(1, picker.folders(List.of(peer("a", "Oasis\\Definitely Maybe\\",
                         file("01 - Up In The Sky (Sawmills Outtake).flac", 273), file("02 - Digsy's Dinner.flac", 153))),
-                outtakes, "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"), NOBODY_STALLING).size());
+                outtakes, "Definitely Maybe (30th Anniversary Deluxe Edition)", List.of("Oasis"), NOBODY_STALLING, LOSSLESS).size());
     }
 
     @Test
@@ -243,13 +275,13 @@ class AlbumFolderPickerTest {
                 file("05 - Columbia.flac", 377));
 
         assertEquals(List.of("three"), picker.folders(List.of(three, two), five, "Definitely Maybe", List.of("Oasis"),
-                NOBODY_STALLING).stream().map(f -> f.peer().getUsername()).toList(), "3 of 5 is a part, 2 is not");
+                NOBODY_STALLING, LOSSLESS).stream().map(f -> f.peer().getUsername()).toList(), "3 of 5 is a part, 2 is not");
         // With two songs left, a part would be one song: only a whole folder will do.
         SearchResponseItem one = peer("one", "Oasis\\Definitely Maybe\\", file("04 - Up in the Sky.flac", 268));
         assertTrue(picker.folders(List.of(one), five.subList(3, 5), "Definitely Maybe", List.of("Oasis"),
-                NOBODY_STALLING).isEmpty());
+                NOBODY_STALLING, LOSSLESS).isEmpty());
         assertEquals(1, picker.folders(List.of(two), five.subList(3, 5), "Definitely Maybe", List.of("Oasis"),
-                NOBODY_STALLING).size());
+                NOBODY_STALLING, LOSSLESS).size());
     }
 
     @Test
@@ -264,7 +296,7 @@ class AlbumFolderPickerTest {
         List<AlbumFolderPicker.Folder> ranked = picker.folders(List.of(peer("a", folder, first, second, third, fourth),
                         peer("b", folder, first, second, third), peer("c", folder, first, second, third),
                         peer("d", folder, second, third, fourth)),
-                five, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING);
+                five, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS);
 
         Map<UUID, List<DownloadCandidate>> picks = AlbumFolderPicker.candidates(ranked, 3);
 
@@ -287,7 +319,7 @@ class AlbumFolderPickerTest {
                 file("03 - Africa.flac", 296));
 
         List<AlbumFolderPicker.Folder> whole = picker.folders(List.of(named, nameless), songs, "Driving",
-                List.of("Various Artists"), NOBODY_STALLING);
+                List.of("Various Artists"), NOBODY_STALLING, LOSSLESS);
 
         assertEquals(List.of("a"), whole.stream().map(f -> f.peer().getUsername()).toList());
     }
@@ -313,6 +345,27 @@ class AlbumFolderPickerTest {
         assertFalse(AlbumFolderPicker.sameTitle("Up in the Sky", "209 - Up in the Sky (acoustic).flac"));
     }
 
+    @Test
+    void withNoBitRateFloor_a128kbpsWholeFolderIsJudged_whereTheChooserPutsIt_andNoBitRateIsStillNoTier() {
+        List<DownloadTask> tracks = album("Oasis", "Live Forever", 277, "Wonderwall", 258, "Supersonic", 284);
+        SearchResponseItem low = peer("low", "Oasis\\Definitely Maybe\\", file("03 Live Forever.mp3", 277, 128),
+                file("04 Wonderwall.mp3", 258, 128), file("05 Supersonic.mp3", 284, 128));
+        SearchResponseItem flacPart = peer("flacpart", "Oasis\\Definitely Maybe\\", file("03 Live Forever.flac", 277),
+                file("04 Wonderwall.flac", 258));
+        SearchResponseItem noRate = peer("norate", "Oasis\\Definitely Maybe\\", file("03 Live Forever.m4a", 277, null),
+                file("04 Wonderwall.m4a", 258, null), file("05 Supersonic.m4a", 284, null));
+        List<SearchResponseItem> responses = List.of(noRate, low, flacPart);
+
+        // Until 19-10-2026 the 128 kbps folder failed the 320 floor; now it is a judged folder, ranked by the chooser.
+        assertEquals(List.of("flacpart", "low"), names(picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS)),
+                "a Lossless chooser takes the FLAC part and searches for Supersonic alone");
+        assertEquals(List.of("flacpart", "low"), names(picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, VERY_HIGH)),
+                "ties go up: Lossless is nearer Very high than Low is");
+        assertEquals(List.of("low", "flacpart"), names(picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOW)));
+        // Lossy files with no reported bit rate have no tier: the folder is nobody's to judge, but a person may still take it (last).
+        assertEquals(List.of("flacpart", "low", "norate"), names(picker.allFolders(responses, tracks, "Definitely Maybe", List.of("Oasis"), LOSSLESS)));
+    }
+
     // ---- helpers -------------------------------------------------------------------------------------
 
     /** The album's songs as admission writes them: "Title - Artist", the row's title, number and length. */
@@ -327,8 +380,8 @@ class AlbumFolderPickerTest {
         SearchResponseItem art = peer("art", "Oasis\\Definitely Maybe\\", file("cover.jpg", 0));
         List<SearchResponseItem> responses = List.of(oneSong, art, whole);
 
-        List<AlbumFolderPicker.Folder> judged = picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING);
-        List<AlbumFolderPicker.Folder> all = picker.allFolders(responses, tracks, "Definitely Maybe", List.of("Oasis"));
+        List<AlbumFolderPicker.Folder> judged = picker.folders(responses, tracks, "Definitely Maybe", List.of("Oasis"), NOBODY_STALLING, LOSSLESS);
+        List<AlbumFolderPicker.Folder> all = picker.allFolders(responses, tracks, "Definitely Maybe", List.of("Oasis"), LOSSLESS);
 
         assertEquals(List.of("whole"), judged.stream().map(f -> f.peer().getUsername()).toList(), "the search itself takes the whole folder only");
         assertEquals(List.of("whole", "onesong"), all.stream().map(f -> f.peer().getUsername()).toList(), "the person also sees the one-song folder; cover art is no option");
@@ -350,14 +403,23 @@ class AlbumFolderPickerTest {
                 .trackTitle(title).trackNumber(number).durationSeconds(seconds).build();
     }
 
+    /** A lossless file as slskd sends it: no bit rate, the format in the name only. */
     private static SearchFile file(String name, int seconds) {
-        return new SearchFile(name, 30_000_000L, 1L, false, "", Optional.empty(), Optional.of(seconds));
+        return file(name, seconds, null);
+    }
+
+    private static SearchFile file(String name, int seconds, Integer bitRate) {
+        return new SearchFile(name, 30_000_000L, 1L, false, "", Optional.ofNullable(bitRate), Optional.of(seconds));
+    }
+
+    private static List<String> names(List<AlbumFolderPicker.Folder> folders) {
+        return folders.stream().map(f -> f.peer().getUsername()).toList();
     }
 
     private static SearchResponseItem peer(String username, String folder, SearchFile... files) {
         List<SearchFile> inFolder = java.util.Arrays.stream(files)
                 .map(f -> new SearchFile(folder + f.getFilename(), f.getSize(), f.getCode(), false, "",
-                        Optional.empty(), f.getLength()))
+                        f.getBitRate(), f.getLength()))
                 .toList();
         return new SearchResponseItem(inFolder.size(), inFolder, true, 0, List.of(), 0, 1, 1_000_000, username);
     }

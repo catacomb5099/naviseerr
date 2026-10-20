@@ -82,7 +82,6 @@ slskd-service:
     # No default, same reasoning as LASTFM_API_KEY above.
     api_key: ${SLSKD_API_KEY}
     timeout: 10000
-    min-bit-rate: 320
     retry-count: 2
     max-files-per-download: 10
 

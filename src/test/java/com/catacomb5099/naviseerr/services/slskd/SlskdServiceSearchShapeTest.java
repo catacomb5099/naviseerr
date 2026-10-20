@@ -109,11 +109,10 @@ class SlskdServiceSearchShapeTest {
         TrackMatchingService matching = mock(TrackMatchingService.class);
         when(matching.grade(anyString(), anyString(), anyString())).thenReturn(TrackMatchingService.Match.EXACT);
         SlskdSearchResultProcessor processor = new SlskdSearchResultProcessor(mock(SlskdService.class), matching);
-        ReflectionTestUtils.setField(processor, "minBitRate", 320);
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 10);
         ReflectionTestUtils.setField(processor, "maxSharerQueue", 50);
 
-        List<Pick> picks = processor.selectBestFiles(state, "One More Time - Daft Punk", "One More Time").block();
+        List<Pick> picks = processor.selectBestFiles(state, "One More Time - Daft Punk", "One More Time", null, DownloadQuality.DEFAULT).block();
 
         // M3H9X has 574 people queued but a slot free right now; acrossma has 39 queued and no slot.
         assertEquals(List.of("M3H9X", "acrossma"), picks.stream().map(pick -> pick.peer().getUsername()).toList());

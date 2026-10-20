@@ -8,11 +8,13 @@ import com.catacomb5099.naviseerr.util.TrackMatchingService.Match;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.List;
 import java.util.Optional;
 
+import static com.catacomb5099.naviseerr.services.slskd.DownloadQuality.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -25,8 +27,7 @@ class SlskdSearchResultProcessorTest {
 
     @BeforeEach
     void setUp() {
-        // sensible defaults
-        ReflectionTestUtils.setField(processor, "minBitRate", 128);
+        // sensible defaults; the chosen tier is a parameter, see pick()
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 5);
         ReflectionTestUtils.setField(processor, "maxSharerQueue", 50);
     }
@@ -37,7 +38,7 @@ class SlskdSearchResultProcessorTest {
         when(state.getResponses()).thenReturn(List.of());
         when(state.getFileCount()).thenReturn(0);
 
-        StepVerifier.create(processor.selectBestFiles(state, "track", "track"))
+        StepVerifier.create(pick(state, "track", "track"))
                 .expectNextMatches(List::isEmpty)
                 .verifyComplete();
     }
@@ -66,7 +67,7 @@ class SlskdSearchResultProcessorTest {
         when(state.getResponses()).thenReturn(List.of(itemA, itemB));
         when(state.getFileCount()).thenReturn(2);
 
-        StepVerifier.create(processor.selectBestFiles(state, "track", "track"))
+        StepVerifier.create(pick(state, "track", "track"))
                 .expectNextMatches(list -> list.size() == 1 && list.getFirst().file().getFilename().equals("match.mp3"))
                 .verifyComplete();
     }
@@ -92,60 +93,64 @@ class SlskdSearchResultProcessorTest {
         when(trackMatchingService.grade(eq("Believe - Cher"), eq("Top 1000/Believe.mp3"), eq("Believe"))).thenReturn(Match.UNVERIFIED);
 
         // beside a file that names the artist, the nameless one is dropped
-        var both = processor.selectBestFiles(state(verified, unverified), "Believe - Cher", "Believe").block();
+        var both = pick(state(verified, unverified), "Believe - Cher", "Believe").block();
         assertEquals(List.of("verified"), both.stream().map(pick -> pick.peer().getUsername()).toList());
 
         // alone, it is the last resort and is kept
-        var alone = processor.selectBestFiles(state(unverified), "Believe - Cher", "Believe").block();
+        var alone = pick(state(unverified), "Believe - Cher", "Believe").block();
         assertEquals(List.of("unverified"), alone.stream().map(pick -> pick.peer().getUsername()).toList());
         assertEquals(Match.UNVERIFIED, alone.getFirst().grade());
     }
 
     @Test
-    void selectBestFiles_keepsAboveMinAndFlac_filtersOutBelowMin() {
-        ReflectionTestUtils.setField(processor, "minBitRate", 160);
-
-        SearchResponseItem above = mock(SearchResponseItem.class);
-        SearchResponseItem below = mock(SearchResponseItem.class);
-        SearchResponseItem flacItem = mock(SearchResponseItem.class);
-
-        SearchFile fileAbove = mock(SearchFile.class);
-        SearchFile fileBelow = mock(SearchFile.class);
-        SearchFile fileFlac = mock(SearchFile.class);
-
-        when(above.getFiles()).thenReturn(List.of(fileAbove));
-        when(below.getFiles()).thenReturn(List.of(fileBelow));
-        when(flacItem.getFiles()).thenReturn(List.of(fileFlac));
-
-        when(fileAbove.getFilename()).thenReturn("a.mp3");
-        when(fileBelow.getFilename()).thenReturn("b.mp3");
-        when(fileFlac.getFilename()).thenReturn("c.flac");
-
-        when(fileAbove.getBitRate()).thenReturn(Optional.of(192));
-        when(fileBelow.getBitRate()).thenReturn(Optional.of(128));
-        when(fileFlac.getBitRate()).thenReturn(Optional.empty());
-
-        when(fileAbove.getExtension()).thenReturn("mp3");
-        when(fileBelow.getExtension()).thenReturn("mp3");
-        when(fileFlac.getExtension()).thenReturn("flac");
-
+    void selectBestFiles_keepsEveryTier_theChosenOneFirst_thenTheNearest_tiesGoingUp() {
         when(trackMatchingService.grade(anyString(), anyString(), anyString())).thenReturn(Match.EXACT);
+        ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 10);
+        // Real shapes: the lossless file carries no bit rate, the lossy ones their rung (267 is a LAME V0 average: High).
+        SearchResponseItem flac = peer("flac", 1_000_000, true, 0, file("a\\song.flac", null));
+        SearchResponseItem at320 = peer("320", 1_000_000, true, 0, file("b\\song.mp3", null, 320));
+        SearchResponseItem at267 = peer("267", 1_000_000, true, 0, file("c\\song.mp3", null, 267));
+        SearchResponseItem at192 = peer("192", 1_000_000, true, 0, file("d\\song.mp3", null, 192));
+        SearchResponseItem at128 = peer("128", 1_000_000, true, 0, file("e\\song.mp3", null, 128));
+        SearchResponseItem noRate = peer("norate", 1_000_000, true, 0, file("f\\song.m4a", null, null));
+        SearchState state = state(at128, at192, noRate, at267, at320, flac);
 
-        SearchState state = mock(SearchState.class);
-        when(state.getResponses()).thenReturn(List.of(above, below, flacItem));
-        when(state.getFileCount()).thenReturn(3);
+        assertEquals(List.of("flac", "320", "267", "192", "128"), names(pick(state, LOSSLESS)));
+        assertEquals(List.of("320", "flac", "267", "192", "128"), names(pick(state, VERY_HIGH)));
+        assertEquals(List.of("267", "320", "192", "flac", "128"), names(pick(state, HIGH)));
+        assertEquals(List.of("192", "267", "128", "320", "flac"), names(pick(state, NORMAL)));
+        assertEquals(List.of("128", "192", "267", "320", "flac"), names(pick(state, LOW)));
+        // The m4a with no reported bit rate has no tier: never picked, on the manual list last.
+        assertEquals("norate", processor.allFiles(state, "track", "track", LOSSLESS).getLast().peer().getUsername());
+    }
 
-        StepVerifier.create(processor.selectBestFiles(state, "track", "track"))
-                .expectNextMatches(list -> list.size() == 2
-                        && list.stream().anyMatch(e -> e.file().getFilename().equals("a.mp3"))
-                        && list.stream().anyMatch(e -> e.file().getFilename().equals("c.flac"))
-                        && list.stream().noneMatch(e -> e.file().getFilename().equals("b.mp3")))
-                .verifyComplete();
+    @Test
+    void selectBestFiles_theTierDecidesBeforeWhoIsQuickest_andBeforeTheLengthVote_butAfterTheGradeAndTheOverloadedSharer() {
+        // The one change of 19-10-2026: until then a FLAC and a 320 kbps file were equals and the quicker sharer won.
+        when(trackMatchingService.grade(anyString(), anyString(), anyString())).thenReturn(Match.EXACT);
+        SearchResponseItem busyFlac = peer("busyFlac", 1_000_000, false, 10, file("a\\song.flac", 213));
+        SearchResponseItem freeMp3 = peer("freeMp3", 9_000_000, true, 0, file("b\\song.mp3", 213, 320));
+        SearchResponseItem overloadedFlac = peer("overloadedFlac", 9_000_000, false, 80, file("c\\song.flac", 213));
+        String liveName = "d\\song (live).flac";
+        SearchFile liveFlac = file(liveName, 301);
+        when(trackMatchingService.grade(anyString(), eq(liveName), anyString())).thenReturn(Match.OTHER_VERSION);
+        SearchResponseItem otherVersion = peer("liveFlac", 9_000_000, true, 0, liveFlac);
+
+        assertEquals(List.of("busyFlac", "freeMp3", "overloadedFlac", "liveFlac"),
+                names(pick(state(otherVersion, freeMp3, overloadedFlac, busyFlac), LOSSLESS)),
+                "a Lossless chooser waits for the busier FLAC sharer; one that never serves still goes last, another version after everything");
+        assertEquals(List.of("freeMp3", "busyFlac", "overloadedFlac", "liveFlac"),
+                names(pick(state(otherVersion, freeMp3, overloadedFlac, busyFlac), VERY_HIGH)));
+
+        // Before the length vote too (measured 97.8% against 95.9% lossless picks on the lab, the right version as often).
+        SearchResponseItem oddFlac = peer("oddFlac", 1_000_000, true, 0, file("e\\song.flac", 214));
+        SearchResponseItem a = peer("a", 1_000_000, true, 0, file("a\\song.mp3", 213, 320));
+        SearchResponseItem b = peer("b", 1_000_000, true, 0, file("b\\song.mp3", 213, 320));
+        assertEquals(List.of("oddFlac", "a", "b"), names(pick(state(a, b, oddFlac), LOSSLESS)));
     }
 
     @Test
     void selectBestFiles_takesTheFormatFromTheFileName_notSlskdsExtensionField() {
-        ReflectionTestUtils.setField(processor, "minBitRate", 320);
         when(trackMatchingService.grade(anyString(), anyString(), anyString())).thenReturn(Match.EXACT);
 
         // Shapes as slskd sent them on 04-10-2026: lossless files carry no bitRate, and extension is
@@ -164,7 +169,7 @@ class SlskdSearchResultProcessorTest {
                 8000000, 1, false, "", Optional.of(320), Optional.empty());
         SearchFile mp3At128 = new SearchFile("Music\\Daft Punk\\Discovery\\04 - Harder Better.mp3",
                 3000000, 1, false, "", Optional.of(128), Optional.empty());
-        // no suffix and no extension at all: must not throw, and has nothing to pass on
+        // no suffix and no extension at all: must not throw; no format and no bit rate is no tier, so it is left out
         SearchFile noFormat = new SearchFile("Music\\Mr. Big\\To Be With You",
                 3000000, 1, false, null, Optional.empty(), Optional.empty());
         // no suffix: the extension field is all there is
@@ -175,10 +180,11 @@ class SlskdSearchResultProcessorTest {
         when(sharer.getFiles()).thenReturn(List.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, mp3At128, noFormat, suffixlessFlac));
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 10);
 
-        var result = processor.selectBestFiles(state(sharer), "track", "track").block();
+        var result = pick(state(sharer), "track", "track").block();
 
-        assertEquals(java.util.Set.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, suffixlessFlac),
+        assertEquals(java.util.Set.of(blankFlac, upperFlac, flacClaimingMp3, blankWav, mp3At320, mp3At128, suffixlessFlac),
                 java.util.Set.copyOf(result.stream().map(SlskdSearchResultProcessor.Pick::file).toList()));
+        assertEquals(mp3At128, result.getLast().file(), "every tier is kept; Low is the farthest from the default, Lossless");
     }
 
     @Test
@@ -218,7 +224,7 @@ class SlskdSearchResultProcessorTest {
         when(state.getResponses()).thenReturn(List.of(fast, med, slow));
         when(state.getFileCount()).thenReturn(3);
 
-        StepVerifier.create(processor.selectBestFiles(state, "track", "track"))
+        StepVerifier.create(pick(state, "track", "track"))
                 .expectNextMatches(list ->
                         list.size() == 3 &&
                                 list.getFirst().peer().getUploadSpeed() == 300 &&
@@ -236,7 +242,7 @@ class SlskdSearchResultProcessorTest {
         // slower, but can start right now
         SearchResponseItem free = peer("free", 2_000_000, true, 0, file("free/song.flac"));
 
-        var result = processor.selectBestFiles(state(busy, free), "song", "song").block();
+        var result = pick(state(busy, free), "song", "song").block();
 
         assertEquals("free", result.getFirst().peer().getUsername());
     }
@@ -248,7 +254,7 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem longer = peer("longer", 9_000_000, true, 5, file("longer/song.flac"));
         SearchResponseItem shorter = peer("shorter", 8_000_000, true, 1, file("shorter/song.flac"));
 
-        var result = processor.selectBestFiles(state(longer, shorter), "song", "song").block();
+        var result = pick(state(longer, shorter), "song", "song").block();
 
         assertEquals("shorter", result.getFirst().peer().getUsername());
     }
@@ -260,7 +266,7 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem slow = peer("slow", 1_000_000, true, 0, file("slow/song.flac"));
         SearchResponseItem fast = peer("fast", 9_000_000, true, 0, file("fast/song.flac"));
 
-        var result = processor.selectBestFiles(state(slow, fast), "song", "song").block();
+        var result = pick(state(slow, fast), "song", "song").block();
 
         assertEquals("fast", result.getFirst().peer().getUsername());
     }
@@ -274,7 +280,7 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
         SearchResponseItem b = peer("b", 2_000_000, false, 9, file("b/song.flac", 213));
 
-        var result = processor.selectBestFiles(state(remix, a, b), "song", "song").block();
+        var result = pick(state(remix, a, b), "song", "song").block();
 
         assertEquals(List.of("a", "b", "remix"), result.stream().map(e -> e.peer().getUsername()).toList());
     }
@@ -287,7 +293,7 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
         SearchResponseItem b = peer("b", 1_000_000, false, 3, file("b/song.flac", 213));
 
-        var result = processor.selectBestFiles(state(unknown, a, b), "song", "song").block();
+        var result = pick(state(unknown, a, b), "song", "song").block();
 
         assertEquals(3, result.size());
         assertEquals("unknown", result.getLast().peer().getUsername());
@@ -300,7 +306,7 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem busy = peer("busy", 9_000_000, false, 40, file("busy/song.flac", 213));
         SearchResponseItem free = peer("free", 1_000_000, true, 0, file("free/song.flac", 213));
 
-        var result = processor.selectBestFiles(state(busy, free), "song", "song").block();
+        var result = pick(state(busy, free), "song", "song").block();
 
         assertEquals("free", result.getFirst().peer().getUsername());
     }
@@ -314,7 +320,7 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
         SearchResponseItem odd = peer("odd", 2_000_000, true, 0, file("odd/song.flac", 312));
 
-        var result = processor.selectBestFiles(state(overloaded, a, odd), "song", "song").block();
+        var result = pick(state(overloaded, a, odd), "song", "song").block();
 
         assertEquals(List.of("a", "odd", "overloaded"),
                 result.stream().map(e -> e.peer().getUsername()).toList());
@@ -328,7 +334,7 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem a = peer("a", 1_000_000, false, 3, file("a/song.flac", 213));
         SearchResponseItem odd = peer("odd", 2_000_000, true, 0, file("odd/song.flac", 312));
 
-        var result = processor.selectBestFiles(state(busy, a, odd), "song", "song").block();
+        var result = pick(state(busy, a, odd), "song", "song").block();
 
         assertEquals(List.of("a", "busy", "odd"),
                 result.stream().map(e -> e.peer().getUsername()).toList());
@@ -340,7 +346,6 @@ class SlskdSearchResultProcessorTest {
         // Everything After, 270 s on YouTube; the 2011 live album repeats the number and the title, so
         // the matcher, which reads names only, calls it the requested version.
         SlskdSearchResultProcessor real = new SlskdSearchResultProcessor(slskdService, new TrackMatchingService());
-        ReflectionTestUtils.setField(real, "minBitRate", 320);
         ReflectionTestUtils.setField(real, "maxFilesPerDownload", 10);
         ReflectionTestUtils.setField(real, "maxSharerQueue", 50);
         SearchResponseItem live = peer("live", 9_000_000, true, 0,
@@ -350,8 +355,8 @@ class SlskdSearchResultProcessorTest {
         SearchResponseItem unknown = peer("unknown", 1_000_000, true, 0,
                 file("Counting Crows/August and Everything After (1993)/03 - Mr. Jones.flac", null));
 
-        var albumSong = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones", 270).block();
-        var song = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones").block();
+        var albumSong = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones", 270, LOSSLESS).block();
+        var song = real.selectBestFiles(state(live, studio, unknown), "Mr. Jones - Counting Crows", "Mr. Jones", null, LOSSLESS).block();
 
         // A file with no length is no evidence against it and stays, behind the one that agrees.
         assertEquals(List.of("studio", "unknown"), albumSong.stream().map(pick -> pick.peer().getUsername()).toList());
@@ -363,7 +368,6 @@ class SlskdSearchResultProcessorTest {
     void allFiles_keepsEveryAudioFileWhateverItsFormatOrGrade_inThePickersOrder_theOtherSongsLast() {
         // The manual picker's list: the 192 kbps MP3, the other version and the file the matcher calls
         // another song are a person's to refuse, and nothing is capped. Cover art is no option at all.
-        ReflectionTestUtils.setField(processor, "minBitRate", 320);
         ReflectionTestUtils.setField(processor, "maxFilesPerDownload", 1);
         SearchFile exactFlac = new SearchFile("Oasis\\Definitely Maybe\\05 - Live Forever.flac", 30_000_000L, 1, false, "",
                 Optional.empty(), Optional.of(276));
@@ -382,12 +386,12 @@ class SlskdSearchResultProcessorTest {
         SearchFile cover = new SearchFile("Oasis\\Definitely Maybe\\cover.jpg", 300_000L, 1, false, "", Optional.empty(), Optional.empty());
         SearchResponseItem art = peer("art", 9_000_000, true, 0, cover);
 
-        var files = processor.allFiles(state(busy, free, other, noise, art), "Live Forever - Oasis", "Live Forever");
+        var files = processor.allFiles(state(busy, free, other, noise, art), "Live Forever - Oasis", "Live Forever", LOSSLESS);
 
         assertEquals(List.of("free", "busy", "other", "noise"), files.stream().map(pick -> pick.peer().getUsername()).toList(),
                 "exact files first (the free slot ahead of the busy sharer), then the other version, then the other song; the cover is gone");
         assertEquals(Match.NONE, files.getLast().grade());
-        assertEquals(List.of("free"), processor.selectBestFiles(state(busy, free, other, noise), "Live Forever - Oasis", "Live Forever")
+        assertEquals(List.of("free"), pick(state(busy, free, other, noise), "Live Forever - Oasis", "Live Forever")
                 .block().stream().map(pick -> pick.peer().getUsername()).toList(), "the automatic pick is unchanged by the refactor");
     }
 
@@ -414,15 +418,33 @@ class SlskdSearchResultProcessorTest {
         return item;
     }
 
+    /** The automatic pick for a song or playlist track (no album length) on an install that never chose a quality. */
+    private Mono<List<SlskdSearchResultProcessor.Pick>> pick(SearchState state, String query, String wording) {
+        return processor.selectBestFiles(state, query, wording, null, DownloadQuality.DEFAULT);
+    }
+
+    private List<SlskdSearchResultProcessor.Pick> pick(SearchState state, DownloadQuality chosen) {
+        return processor.selectBestFiles(state, "track", "track", null, chosen).block();
+    }
+
+    private static List<String> names(List<SlskdSearchResultProcessor.Pick> picks) {
+        return picks.stream().map(pick -> pick.peer().getUsername()).toList();
+    }
+
     private SearchFile file(String filename) {
         return file(filename, null);
     }
 
     private SearchFile file(String filename, Integer lengthSeconds) {
+        return file(filename, lengthSeconds, null);
+    }
+
+    /** As slskd sends it: the extension field blank, the format in the name, a bit rate on lossy files only. */
+    private SearchFile file(String filename, Integer lengthSeconds, Integer bitRate) {
         SearchFile searchFile = mock(SearchFile.class);
         when(searchFile.getFilename()).thenReturn(filename);
-        when(searchFile.getExtension()).thenReturn("flac");
-        when(searchFile.getBitRate()).thenReturn(Optional.empty());
+        when(searchFile.getExtension()).thenReturn("");
+        when(searchFile.getBitRate()).thenReturn(Optional.ofNullable(bitRate));
         when(searchFile.getLength()).thenReturn(Optional.ofNullable(lengthSeconds));
         return searchFile;
     }
@@ -450,8 +472,26 @@ class SlskdSearchResultProcessorTest {
                 new SlskdSearchResultProcessor.Pick(a, a3, exact), new SlskdSearchResultProcessor.Pick(b, b1, exact),
                 new SlskdSearchResultProcessor.Pick(c, c1, exact));
 
-        List<SlskdSearchResultProcessor.Pick> spread = SlskdSearchResultProcessor.spreadAcrossSharers(ranked);
+        List<SlskdSearchResultProcessor.Pick> spread = processor.spreadAcrossSharers(ranked, LOSSLESS);
 
         assertEquals(List.of(a1, b1, c1, a2, a3), spread.stream().map(SlskdSearchResultProcessor.Pick::file).toList());
+    }
+
+    @Test
+    void selectBestFiles_spreadsAcrossSharersWithinATier_neverPromotingAFartherTierAboveASecondCopy() {
+        // Review of 20-10-2026: a spread per grade put another sharer's 128 kbps file second, ahead of the first
+        // sharer's second lossless copy; one failed file and a Lossless chooser got 128 kbps.
+        when(trackMatchingService.grade(anyString(), anyString(), anyString())).thenReturn(Match.EXACT);
+        SearchFile rip1 = file("a\\rip1\\song.flac", 213), rip2 = file("a\\rip2\\song.flac", 213);
+        SearchResponseItem a = peer("a", 1_000_000, true, 0, rip1);
+        when(a.getFiles()).thenReturn(List.of(rip1, rip2));
+        SearchResponseItem b = peer("b", 1_000_000, true, 0, file("b\\song.mp3", 213, 128));
+        SearchResponseItem c = peer("c", 1_000_000, true, 0, file("c\\song.flac", 213));
+
+        assertEquals(List.of("a", "a", "b"), names(pick(state(a, b), LOSSLESS)), "the second lossless copy before the 128 kbps file");
+        assertEquals(List.of("a", "a", "b"), names(pick(state(a, b), VERY_HIGH)));
+        assertEquals(List.of("a", "c", "a", "b"), names(pick(state(a, b, c), LOSSLESS)),
+                "within the tier the spread still holds: c's copy before a's second");
+        assertEquals(List.of("b", "a", "a"), names(pick(state(a, b), LOW)), "a Low chooser: the 128 first, then the lossless pair");
     }
 }

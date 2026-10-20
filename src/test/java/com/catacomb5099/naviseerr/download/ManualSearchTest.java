@@ -4,7 +4,9 @@ import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
 import com.catacomb5099.naviseerr.schema.slskd.SearchState;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
+import com.catacomb5099.naviseerr.settings.InstallSettingsRepository;
 import com.catacomb5099.naviseerr.support.SlskdFixtures;
 import com.catacomb5099.naviseerr.util.TrackMatchingService;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,7 +40,8 @@ class ManualSearchTest {
     private final SlskdSearchResultProcessor processor = mock(SlskdSearchResultProcessor.class);
     private final AlbumFolderPicker picker = mock(AlbumFolderPicker.class);
     private final DownloadTaskRepository repository = mock(DownloadTaskRepository.class);
-    private final ManualSearch search = new ManualSearch(slskd, processor, picker, repository, Clock.fixed(NOW, ZoneOffset.UTC), POLL, BUDGET);
+    private final InstallSettingsRepository settings = mock(InstallSettingsRepository.class);
+    private final ManualSearch search = new ManualSearch(slskd, processor, picker, repository, settings, Clock.fixed(NOW, ZoneOffset.UTC), POLL, BUDGET);
 
     private final SearchFile file = new SearchFile("@@music\\Pulp\\Different Class\\06 - Common People.flac", 30_000_000L, 1L,
             false, "flac", Optional.empty(), Optional.of(350));
@@ -52,6 +55,7 @@ class ManualSearchTest {
 
     @BeforeEach
     void defaults() {
+        when(settings.downloadQuality()).thenReturn(Mono.just(DownloadQuality.DEFAULT));
         when(repository.cachedSearch(downloadId, taskId)).thenReturn(Mono.just(song()));
         when(repository.saveSearchResults(eq(taskId), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskd.searchResults("Common People Pulp 1995")).thenReturn(Mono.just(SlskdFixtures.searchState("new-1", false, "InProgress")));
@@ -62,7 +66,7 @@ class ManualSearchTest {
         SearchState running = SlskdFixtures.searchStateWithResponses("new-1", false, "InProgress", List.of());
         SearchState done = SlskdFixtures.searchStateWithResponses("new-1", true, "Completed, TimedOut", List.of(peer));
         when(slskd.getSearchWithResponses("new-1")).thenReturn(Mono.just(running), Mono.just(running), Mono.just(done));
-        when(processor.allFiles(done, "Common People - Pulp", "Common People Pulp 1995")).thenReturn(List.of(pick));
+        when(processor.allFiles(done, "Common People - Pulp", "Common People Pulp 1995", DownloadQuality.DEFAULT)).thenReturn(List.of(pick));
 
         StepVerifier.withVirtualTime(() -> search.song(downloadId, taskId, "Common People Pulp 1995"))
                 .expectSubscription()
@@ -90,7 +94,7 @@ class ManualSearchTest {
     void atTheBudget_theAnswersSoFarAreUsed_andTheSearchIsNotWaitedForAnyLonger() {
         SearchState partial = SlskdFixtures.searchStateWithResponses("new-1", false, "InProgress", List.of(peer));
         when(slskd.getSearchWithResponses("new-1")).thenReturn(Mono.just(partial));
-        when(processor.allFiles(eq(partial), any(), any())).thenReturn(List.of(pick));
+        when(processor.allFiles(eq(partial), any(), any(), any())).thenReturn(List.of(pick));
 
         StepVerifier.withVirtualTime(() -> search.song(downloadId, taskId, "Common People Pulp 1995"))
                 .expectSubscription()
@@ -107,7 +111,7 @@ class ManualSearchTest {
     void nothingFound_isNoneWithNoResults_andTheEmptyListIsStillOfferedToTheGuardedSave() {
         SearchState done = SlskdFixtures.searchStateWithResponses("new-1", true, "Completed, TimedOut", List.of());
         when(slskd.getSearchWithResponses("new-1")).thenReturn(Mono.just(done));
-        when(processor.allFiles(eq(done), any(), any())).thenReturn(List.of());
+        when(processor.allFiles(eq(done), any(), any(), any())).thenReturn(List.of());
 
         StepVerifier.withVirtualTime(() -> search.song(downloadId, taskId, "Common People Pulp 1995"))
                 .expectSubscription()
@@ -142,7 +146,7 @@ class ManualSearchTest {
     void oneFailedPoll_isReadAgain_notTheEndOfTheWait() {
         SearchState done = SlskdFixtures.searchStateWithResponses("new-1", true, "Completed, TimedOut", List.of(peer));
         when(slskd.getSearchWithResponses("new-1")).thenReturn(Mono.error(SlskdFixtures.transportFailure()), Mono.just(done));
-        when(processor.allFiles(eq(done), any(), any())).thenReturn(List.of(pick));
+        when(processor.allFiles(eq(done), any(), any(), any())).thenReturn(List.of(pick));
 
         StepVerifier.withVirtualTime(() -> search.song(downloadId, taskId, "Common People Pulp 1995"))
                 .expectSubscription()
@@ -208,9 +212,9 @@ class ManualSearchTest {
         when(slskd.getSearchWithResponses("new-2")).thenReturn(Mono.just(doneState));
         AlbumFolderPicker.Folder whole = folder("vinyl", "@@music\\Oasis\\(1994) Definitely Maybe", done, waiting);
         AlbumFolderPicker.Folder part = folder("mp3mike", "Music\\Oasis - Discography\\Definitely Maybe", waiting);
-        when(picker.folders(eq(List.of(peer)), eq(List.of(songDone, songWaiting)), eq("Definitely Maybe"), eq(List.of("Oasis")), any()))
+        when(picker.folders(eq(List.of(peer)), eq(List.of(songDone, songWaiting)), eq("Definitely Maybe"), eq(List.of("Oasis")), any(), eq(DownloadQuality.DEFAULT)))
                 .thenReturn(List.of(whole));
-        when(picker.allFolders(List.of(peer), List.of(songDone, songWaiting), "Definitely Maybe", List.of("Oasis")))
+        when(picker.allFolders(List.of(peer), List.of(songDone, songWaiting), "Definitely Maybe", List.of("Oasis"), DownloadQuality.DEFAULT))
                 .thenReturn(List.of(whole, part));
 
         StepVerifier.withVirtualTime(() -> search.album(downloadId, "Definitely Maybe 1994 flac"))
@@ -231,7 +235,7 @@ class ManualSearchTest {
         verify(repository).saveAlbumFolders(eq(downloadId), argThat(folders -> folders.size() == 2
                 && folders.get(0).username().equals("vinyl") && Boolean.TRUE.equals(folders.get(0).judged())), eq(NOW), eq("new-2"));
         // Every folder is shown, stalling sharer or not: the filter the album search applies is not applied here.
-        verify(picker).folders(any(), any(), any(), any(), argThat(stalling -> !stalling.test("anyone")));
+        verify(picker).folders(any(), any(), any(), any(), argThat(stalling -> !stalling.test("anyone")), any());
     }
 
     @Test
@@ -241,8 +245,8 @@ class ManualSearchTest {
         when(repository.songPicks(downloadId)).thenReturn(reactor.core.publisher.Flux.empty());
         when(slskd.searchResults("xyzzy")).thenReturn(Mono.just(SlskdFixtures.searchState("new-3", false, "InProgress")));
         when(slskd.getSearchWithResponses("new-3")).thenReturn(Mono.just(SlskdFixtures.searchStateWithResponses("new-3", true, "Completed, TimedOut", List.of())));
-        when(picker.folders(any(), any(), any(), any(), any())).thenReturn(List.of());
-        when(picker.allFolders(any(), any(), any(), any())).thenReturn(List.of());
+        when(picker.folders(any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(picker.allFolders(any(), any(), any(), any(), any())).thenReturn(List.of());
 
         StepVerifier.withVirtualTime(() -> search.album(downloadId, "xyzzy"))
                 .expectSubscription()

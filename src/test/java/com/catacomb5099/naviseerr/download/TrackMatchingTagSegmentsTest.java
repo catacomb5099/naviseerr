@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.schema.slskd.SearchFile;
 import com.catacomb5099.naviseerr.schema.slskd.SearchResponseItem;
+import com.catacomb5099.naviseerr.services.slskd.DownloadQuality;
 import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
 import com.catacomb5099.naviseerr.services.slskd.SlskdService;
 import com.catacomb5099.naviseerr.util.TrackMatchingService;
@@ -35,7 +36,6 @@ class TrackMatchingTagSegmentsTest {
     void setUp() {
         matching = new TrackMatchingService();
         SlskdSearchResultProcessor processor = new SlskdSearchResultProcessor(mock(SlskdService.class), matching);
-        ReflectionTestUtils.setField(processor, "minBitRate", 320);
         ReflectionTestUtils.setField(processor, "maxSharerQueue", 50);
         picker = new AlbumFolderPicker(matching, processor);
     }
@@ -71,7 +71,7 @@ class TrackMatchingTagSegmentsTest {
                 file("Definitely Maybe (ESCA 6045) - 03 Live Forever - Oasis.flac", 277));
 
         List<AlbumFolderPicker.Folder> whole = picker.folders(List.of(japanese), songs, "Definitely Maybe",
-                List.of("Oasis"), s -> false);
+                List.of("Oasis"), s -> false, DownloadQuality.DEFAULT);
 
         assertEquals(1, whole.size(), "the folder holds every song");
         assertEquals(3, whole.getFirst().files().size());
@@ -104,7 +104,7 @@ class TrackMatchingTagSegmentsTest {
                 file("1-02 - Tonight, Tonight.flac", 254), file("1-05 - 1979.flac", 266), file("1-04 - Zero.flac", 161));
 
         List<AlbumFolderPicker.Folder> whole = picker.folders(List.of(folder), mellon, "Mellon Collie and the Infinite Sadness",
-                List.of("The Smashing Pumpkins"), s -> false);
+                List.of("The Smashing Pumpkins"), s -> false, DownloadQuality.DEFAULT);
 
         assertEquals(1, whole.size());
         assertEquals(3, whole.getFirst().files().size(), "'1979' is in the folder too");

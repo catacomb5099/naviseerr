@@ -59,8 +59,8 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
   complete or has used `search-budget-ms`, fetch its responses once and judge them with
   `AlbumFolderPicker`.
 - **The picker.** Reuses the song rules: `TrackMatchingService.grade` must call a file the requested
-  version (EXACT) of the track, and the file must pass the same format rule (lossless, or at least
-  `min-bit-rate`). New only for albums: files grouped by sharer and folder with disc subfolders merged;
+  version (EXACT) of the track, and the file must have a quality tier (lossless, or a reported bit rate; since
+  19-10-2026, before that lossless or at least `min-bit-rate`). New only for albums: files grouped by sharer and folder with disc subfolders merged;
   each file's length within max(10 s, 3%) of the YouTube row's (the last track may run longer: a hidden
   track), files under 30 s rejected; one file per track and one track per file (the title exactly as
   YouTube writes it beats the title without brackets, then the smaller length gap, then the file's own
@@ -122,7 +122,7 @@ scratchpad, trimmed fixtures in `src/test/resources/slskd/`):
 | Album songs' own searches hold files to the album length | `DownloadTask.albumTrackSeconds`: return null and every song keeps any length |
 | Length tolerance (max(10 s, 3%)), shared by both | `SlskdSearchResultProcessor.lengthTolerance` |
 | Compilation rule (80%) | `AlbumFolderPicker.COMPILATION_ARTIST_SHARE` |
-| File format | `slskd-service.min-bit-rate`, shared with song searches |
+| File format | the tier rule, `DownloadQuality.of`, shared with song searches; the folder order follows the chosen quality since 19-10-2026 ([download-quality-19-10-2026.md](download-quality-19-10-2026.md)) |
 
 ## Trade-offs
 
