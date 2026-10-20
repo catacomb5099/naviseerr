@@ -213,7 +213,9 @@ library:
 # refresh), the way Lidarr's "Update Library" connections do. Their own folder watchers see nothing over
 # a NAS share, from another machine or under Docker Desktop. OFF unless a URL is set; a server is
 # ignored (one WARN at start) when its URL is set without its login. Use the address naviseerr can
-# reach, e.g. the LAN http one. See docs/decisions/media-server-rescan-19-10-2026.md.
+# reach, e.g. the LAN http one. These lines are the install file's defaults: what the web app's Settings
+# (Music app, "Save and test") saved in install_settings wins over them, live. See
+# docs/decisions/media-server-rescan-19-10-2026.md.
 media-servers:
   navidrome:
     url: ${NAVIDROME_URL:}

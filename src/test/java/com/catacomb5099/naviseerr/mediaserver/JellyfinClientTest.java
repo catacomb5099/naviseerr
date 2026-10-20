@@ -6,7 +6,6 @@ import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpHeaders;
 import reactor.test.StepVerifier;
 
 import java.io.IOException;
@@ -34,9 +33,7 @@ class JellyfinClientTest {
         server = new MockWebServer();
         server.start();
         String url = server.url("/").toString();
-        client = new JellyfinClient(MediaServerConfig.http(url, Duration.ofSeconds(2))
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "MediaBrowser Token=\"k3y\"").build(),
-                url, "k3y", Duration.ofSeconds(2));
+        client = new JellyfinClient(url, "k3y", Duration.ofSeconds(2));
     }
 
     @AfterEach
@@ -92,7 +89,7 @@ class JellyfinClientTest {
         StepVerifier.create(client.rescan())
                 .expectErrorSatisfies(error -> {
                     assertInstanceOf(MediaServerException.class, error);
-                    assertEquals("Jellyfin rejected the API key (JELLYFIN_API_KEY)", error.getMessage());
+                    assertEquals("Jellyfin refused the API key.", error.getMessage());
                 })
                 .verify();
     }
@@ -103,13 +100,13 @@ class JellyfinClientTest {
         StepVerifier.create(client.rescan())
                 .expectErrorSatisfies(error -> {
                     assertTrue(error.getMessage().startsWith("Jellyfin at http://"), error.getMessage());
-                    assertTrue(error.getMessage().endsWith("did not answer: HTTP 500"), error.getMessage());
+                    assertTrue(error.getMessage().endsWith(" answered HTTP 500."), error.getMessage());
                 })
                 .verify();
 
         server.shutdown();
         StepVerifier.create(client.rescan())
-                .expectErrorSatisfies(error -> assertTrue(error.getMessage().contains("did not answer"), error.getMessage()))
+                .expectErrorSatisfies(error -> assertTrue(error.getMessage().endsWith(". Is Jellyfin running, and can this server reach it?"), error.getMessage()))
                 .verify();
     }
 
@@ -164,13 +161,33 @@ class JellyfinClientTest {
     void configuredAndCredentials_followTheSettings() {
         assertTrue(client.isConfigured());
         assertTrue(client.hasCredentials());
-        JellyfinClient unset = new JellyfinClient(MediaServerConfig.http("", Duration.ofSeconds(1)).build(), "", "", Duration.ofSeconds(1));
+        JellyfinClient unset = new JellyfinClient("", "", Duration.ofSeconds(1));
         assertFalse(unset.isConfigured());
-        JellyfinClient noKey = new JellyfinClient(MediaServerConfig.http("http://nas:8096/", Duration.ofSeconds(1)).build(),
-                "http://nas:8096/", " ", Duration.ofSeconds(1));
+        JellyfinClient noKey = new JellyfinClient("http://nas:8096/", " ", Duration.ofSeconds(1));
         assertTrue(noKey.isConfigured());
         assertFalse(noKey.hasCredentials());
         assertEquals("http://nas:8096", noKey.url());
+    }
+
+    @Test
+    void test_sendsTheTypedKey_andKeepsNothing_reconfigure_switchesTheKeyLive() throws InterruptedException {
+        server.enqueue(json(200, MEDIA_FOLDERS));
+        server.enqueue(new MockResponse().setResponseCode(204));
+        StepVerifier.create(client.test(server.url("/").toString(), "typed-key")).verifyComplete();
+        assertEquals("MediaBrowser Token=\"typed-key\"", server.takeRequest().getHeader("Authorization"));
+        server.takeRequest();
+
+        server.enqueue(json(200, MEDIA_FOLDERS));
+        server.enqueue(new MockResponse().setResponseCode(204));
+        StepVerifier.create(client.rescan()).verifyComplete();
+        assertEquals("MediaBrowser Token=\"k3y\"", server.takeRequest().getHeader("Authorization"), "the test changed nothing");
+        server.takeRequest();
+
+        client.reconfigure(server.url("/").toString(), "new-key");
+        server.enqueue(json(200, MEDIA_FOLDERS));
+        server.enqueue(new MockResponse().setResponseCode(204));
+        StepVerifier.create(client.rescan()).verifyComplete();
+        assertEquals("MediaBrowser Token=\"new-key\"", server.takeRequest().getHeader("Authorization"));
     }
 
     private static MockResponse json(int status, String body) {

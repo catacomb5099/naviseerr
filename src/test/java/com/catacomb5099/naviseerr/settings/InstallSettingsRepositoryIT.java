@@ -80,4 +80,32 @@ class InstallSettingsRepositoryIT {
         db.sql("DELETE FROM downloads WHERE download_id = '00000000-0000-0000-0000-000000000018'").fetch().rowsUpdated().block();
         assertTrue(seeded, "an upgrade keeps the weekly run where a suggested playlist was downloaded");
     }
+
+    @Test
+    void theMusicApp_isSavedPerServer_leavesTheOtherAlone_andIsClearedBackToNull() {
+        repository.saveNavidrome("http://nas:4533", "admin", "pw").block();
+        repository.saveJellyfin("http://nas:8096", "k3y").block();
+        InstallSettings both = repository.find().block();
+        assertEquals("http://nas:4533", both.navidromeUrl());
+        assertEquals("admin", both.navidromeUser());
+        assertEquals("pw", both.navidromePassword());
+        assertEquals("http://nas:8096", both.jellyfinUrl());
+        assertEquals("k3y", both.jellyfinApiKey());
+        assertFalse(both.setupCompleted(), "saving a section does not finish the setup");
+        assertEquals(1L, rows());
+
+        repository.saveNavidrome("http://nas:4534", "root", "pw2").block();
+        assertEquals("http://nas:4534", repository.find().block().navidromeUrl());
+        assertEquals("k3y", repository.find().block().jellyfinApiKey(), "Jellyfin untouched by a Navidrome save");
+
+        repository.clearNavidrome().block();
+        InstallSettings cleared = repository.find().block();
+        assertNull(cleared.navidromeUrl());
+        assertNull(cleared.navidromePassword());
+        assertEquals("http://nas:8096", cleared.jellyfinUrl());
+
+        repository.clearJellyfin().block();
+        assertNull(repository.find().block().jellyfinUrl());
+        assertEquals(1L, rows(), "clearing keeps the row");
+    }
 }

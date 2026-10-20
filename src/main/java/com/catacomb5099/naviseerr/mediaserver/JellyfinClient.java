@@ -1,16 +1,15 @@
 package com.catacomb5099.naviseerr.mediaserver;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import tools.jackson.databind.JsonNode;
-
-import org.springframework.http.MediaType;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -19,11 +18,11 @@ import java.util.List;
 
 /**
  * Jellyfin through its REST API with an API key ({@code Authorization: MediaBrowser Token="<key>"}, set on
- * the client by {@link MediaServerConfig}; keys carry the Administrator role, so every call below is
- * allowed). The rescan is what Jellyfin's own "Scan Library" button on a library sends: one
- * {@code POST /Items/{libraryId}/Refresh?Recursive=true} per library of type music or of no type (a
- * "Mixed" library, which Jellyfin's audio and playlist resolvers serve too), immediate and queued behind
- * a running scan rather than cancelling it. With no such library at all it falls back to
+ * the client; keys carry the Administrator role, so every call below is allowed; the key never travels in a
+ * URL, the {@code ?api_key=} form is legacy). The rescan is what Jellyfin's own "Scan Library" button on a
+ * library sends: one {@code POST /Items/{libraryId}/Refresh?Recursive=true} per library of type music or of
+ * no type (a "Mixed" library, which Jellyfin's audio and playlist resolvers serve too), immediate and queued
+ * behind a running scan rather than cancelling it. With no such library at all it falls back to
  * {@code POST /Library/Refresh}, the full scan of every library.
  *
  * <p>Measured 19-10-2026 on Jellyfin 12.2.0 with a fresh mp3 in a new artist folder: this call showed it
@@ -31,55 +30,86 @@ import java.util.List;
  * own real-time monitor reports) waits out Jellyfin's 60 s monitor delay (70-84 s) and, given the
  * library's own path, imported nothing at all while the library was still empty; {@code POST
  * /Library/Refresh} took 21 s, scans every library and cancels a scan already running.
+ *
+ * <p>Which Jellyfin: the install file's lines at boot, then whatever the Settings page saves
+ * ({@link #reconfigure}), live; {@link #reset} goes back to the install file. {@link #test} is the
+ * Settings page's "Save and test": one rescan with the typed values, nothing kept.
  */
 @Slf4j
 @Service
 public class JellyfinClient {
 
-    private final WebClient http;
-    private final String url;
-    private final String apiKey;
-    private final Duration timeout;
+    /** One Jellyfin as reached: address, key and the client carrying the key, in one object so a change is atomic. */
+    private record Connection(String url, String apiKey, WebClient http) {
+        static Connection to(String url, String apiKey, Duration timeout) {
+            String base = MediaServerConfig.baseUrl(url);
+            String key = apiKey == null ? "" : apiKey.strip();
+            return new Connection(base, key, MediaServerConfig.http(base, timeout)
+                    .defaultHeader(HttpHeaders.AUTHORIZATION, "MediaBrowser Token=\"" + key + "\"").build());
+        }
+    }
 
-    public JellyfinClient(@Qualifier("jellyfinWebClient") WebClient http,
-                          @Value("${media-servers.jellyfin.url}") String url,
+    private final Duration timeout;
+    /** The install file's {@code JELLYFIN_URL} / {@code JELLYFIN_API_KEY}: the fallback. */
+    private final Connection installFile;
+    private volatile Connection current;
+
+    public JellyfinClient(@Value("${media-servers.jellyfin.url}") String url,
                           @Value("${media-servers.jellyfin.api-key}") String apiKey,
                           @Value("${media-servers.timeout-ms}") Duration timeout) {
-        this.http = http;
-        this.url = MediaServerConfig.baseUrl(url);
-        this.apiKey = apiKey == null ? "" : apiKey.strip();
         this.timeout = timeout;
+        this.installFile = Connection.to(url, apiKey, timeout);
+        this.current = installFile;
     }
 
-    /** {@code JELLYFIN_URL} is set. */
+    /** Talk to this Jellyfin from now on (what the Settings page saved). */
+    public void reconfigure(String url, String apiKey) {
+        current = Connection.to(url, apiKey, timeout);
+    }
+
+    /** Back to the install file's lines, or to none. */
+    public void reset() {
+        current = installFile;
+    }
+
+    /** A URL is set (in the app or the install file). */
     public boolean isConfigured() {
-        return !"http://unset.invalid".equals(url);
+        return !MediaServerConfig.UNSET.equals(current.url());
     }
 
-    /** {@code JELLYFIN_API_KEY} is set. */
+    /** An API key is set. */
     public boolean hasCredentials() {
-        return !apiKey.isBlank();
+        return !current.apiKey().isBlank();
     }
 
     public String url() {
-        return url;
+        return current.url();
     }
 
     /** Asks every music (or untyped) library to scan for new files; all of Jellyfin when there is none. */
     public Mono<Void> rescan() {
-        return http.get().uri("/Library/MediaFolders")
+        return rescan(current);
+    }
+
+    /** "Save and test": one rescan with these values, which proves the address and the key. Nothing kept. */
+    public Mono<Void> test(String url, String apiKey) {
+        return rescan(Connection.to(url, apiKey, timeout));
+    }
+
+    private Mono<Void> rescan(Connection c) {
+        return c.http().get().uri("/Library/MediaFolders")
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .map(JellyfinClient::musicLibraryIds)
                 .flatMap(ids -> ids.isEmpty()
-                        ? http.post().uri("/Library/Refresh").retrieve().toBodilessEntity().then()
+                        ? c.http().post().uri("/Library/Refresh").retrieve().toBodilessEntity().then()
                         : Flux.fromIterable(ids)
-                                .flatMap(id -> http.post()
+                                .flatMap(id -> c.http().post()
                                         .uri("/Items/{id}/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=Default", id)
                                         .retrieve().toBodilessEntity())
                                 .then())
                 .timeout(timeout)
-                .onErrorMap(error -> !(error instanceof MediaServerException), this::translate);
+                .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
     }
 
     /**
@@ -91,27 +121,29 @@ public class JellyfinClient {
      * no {@code userId} here.
      */
     public Mono<String> findPlaylist(String fileName) {
+        Connection c = current;
         String title = fileName.endsWith(".m3u8") ? fileName.substring(0, fileName.length() - 5) : fileName;
-        return http.get()
+        return c.http().get()
                 .uri(b -> b.path("/Items").queryParam("includeItemTypes", "Playlist").queryParam("recursive", "true")
                         .queryParam("searchTerm", "{q}").queryParam("fields", "Path").build(title))
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .flatMap(body -> Mono.justOrEmpty(playlistId(body, fileName)))
                 .timeout(timeout)
-                .onErrorMap(error -> !(error instanceof MediaServerException), this::translate);
+                .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
     }
 
     /** {@code POST /Items/{id}/Images/Primary}: Jellyfin takes the picture as base64 text with the image's content type. */
     public Mono<Void> setPrimaryImage(String itemId, byte[] jpeg) {
-        return http.post().uri("/Items/{id}/Images/Primary", itemId)
+        Connection c = current;
+        return c.http().post().uri("/Items/{id}/Images/Primary", itemId)
                 .contentType(MediaType.IMAGE_JPEG)
                 .bodyValue(Base64.getEncoder().encodeToString(jpeg))
                 .retrieve()
                 .toBodilessEntity()
                 .then()
                 .timeout(timeout)
-                .onErrorMap(error -> !(error instanceof MediaServerException), this::translate);
+                .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
     }
 
     static String playlistId(JsonNode body, String fileName) {
@@ -136,11 +168,11 @@ public class JellyfinClient {
         return ids;
     }
 
-    private MediaServerException translate(Throwable error) {
+    private static MediaServerException translate(String url, Throwable error) {
         if (error instanceof WebClientResponseException http
                 && (http.getStatusCode().value() == 401 || http.getStatusCode().value() == 403)) {
-            return new MediaServerException("Jellyfin rejected the API key (JELLYFIN_API_KEY)");
+            return new MediaServerException("Jellyfin refused the API key.");
         }
-        return new MediaServerException("Jellyfin at " + url + " did not answer: " + MediaServerException.reason(error));
+        return MediaServerException.transport("Jellyfin", url, error);
     }
 }
