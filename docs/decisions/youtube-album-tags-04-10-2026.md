@@ -129,7 +129,10 @@ the format (the tag library reads by extension; a FLAC named `.mp3` fails cleanl
 - **Cover:** YouTube Music album art only (`lh3`/`yt3.googleusercontent.com`, asked for at
   `=w1200-h1200-l90-rj`: 1200 px JPEG, about 450 KB), never an `i.ytimg.com` video frame. It replaces
   the file's picture under P1 and fills a file with none otherwise (the song's own picture then). Fetched
-  once per album and kept in memory (the last 16 albums); a failed fetch files the song without one. No
+  once per album and kept in memory (the last 16 albums). A failed fetch is asked again every 30 s and
+  holds an album's song back up to 5 minutes; then it is filed keeping the sharer's picture, with a WARN
+  ([album-cover-match-20-10-2026.md](album-cover-match-20-10-2026.md)). A FLAC's Vorbis-comment pictures
+  go too when YouTube's is written. No
   `cover.jpg` is written (Navidrome would prefer it to every file's own picture).
 - **Never blocks filing (P10):** Opus, APE and WavPack (no writer in the library) are filed exactly as
   they came with one INFO line; broken and mislabelled files likewise, with a WARN. Tagging twice gives the same file, so a

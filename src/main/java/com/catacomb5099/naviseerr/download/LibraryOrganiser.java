@@ -66,6 +66,12 @@ public class LibraryOrganiser {
      * slow YouTube.
      */
     static final Duration ALBUM_LOOKUP_GRACE = Duration.ofMinutes(2);
+    /**
+     * How long a finished song of a trusted album waits for YouTube's cover when it will not load, before
+     * it is filed with the picture it came with (album-cover-match-20-10-2026.md). Stays below
+     * {@link #GIVE_UP_AFTER}, so the wait never leaves a song unfiled.
+     */
+    static final Duration COVER_GRACE = Duration.ofMinutes(5);
 
     private static final Pattern SEPARATORS = Pattern.compile("[\\\\/]+");
     private static final Pattern DRIVE = Pattern.compile("^[A-Za-z]:$");
@@ -206,10 +212,12 @@ public class LibraryOrganiser {
 
     /**
      * Tags one song's file and moves it into the library. The album cover is fetched first (once per
-     * album, see {@link SongTagger#cover}); a song without one is filed all the same.
+     * album, see {@link SongTagger#cover}). A song of a trusted album whose cover will not load waits up
+     * to {@link #COVER_GRACE} for it, then is filed with the picture it came with and one WARN.
      *
      * @return the file's new absolute path, or empty when the file is not in the downloads folder
-     *         (slskd may still be moving it out of incomplete; the row is left for the next pass)
+     *         (slskd may still be moving it out of incomplete) or is waiting for its cover; the row is
+     *         left for the next pass
      */
     public Mono<Path> file(Job job, Instant now) {
         return tagger.cover(job.tags())
@@ -399,6 +407,15 @@ public class LibraryOrganiser {
                         job.taskId(), job.filedCopy(), source);
             }
             return Path.of(job.filedCopy());
+        }
+        SongTagger.Tags tags = job.tags();
+        if (cover.length == 0 && tags != null && tags.album() != null && SongTagger.coverUrl(tags.coverUrl()) != null) {
+            // Filed now, it would keep the sharer's picture for good: nothing re-tags a filed song.
+            if (job.finishedAt().plus(COVER_GRACE).isAfter(now)) {
+                return null;
+            }
+            log.warn("Filing song {} without the cover of album '{}': YouTube's picture would not load within {} minutes; "
+                    + "the file keeps the picture it came with", job.taskId(), tags.album(), COVER_GRACE.toMinutes());
         }
         // Tagged where it lies, complete and outside the library, so a scanner never reads it mid-write
         // and the real extension picks the format. A move that fails after this tags it again next
