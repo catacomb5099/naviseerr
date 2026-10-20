@@ -170,6 +170,42 @@ class ArtistControllerTest {
                 .jsonPath("$.topSongs[1].plays").isEmpty();
     }
 
+    /** The "Show all" link opens the playlist page, which takes the bare id every Playlist carries. */
+    @Test
+    void topSongsPlaylistId_isTheBareIdOfYouTubesTopSongsPlaylist_andNullFromAnOlderAdapter() {
+        YtMusicDetailResponse.Artist artist = pixies();
+        artist.setSongsPlaylistId("VLOLAK5uy_kGykcqHKDHRHuJ2sE8EcduYEr1FtafoQs");
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(artist), Mono.just(pixies()));
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(playlists(0)));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.topSongsPlaylistId").isEqualTo("OLAK5uy_kGykcqHKDHRHuJ2sE8EcduYEr1FtafoQs");
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.topSongsPlaylistId").isEmpty();
+    }
+
+    /** The adapter sends ten top songs from 20-10-2026 on; the web app shows five and expands to all ten. */
+    @Test
+    void topSongs_passTenThrough() {
+        YtMusicDetailResponse.Artist artist = pixies();
+        YtMusicDetailResponse.Track song = artist.getTopSongs().get(0);
+        artist.setTopSongs(IntStream.range(0, 12).mapToObj(i -> YtMusicDetailResponse.Track.builder()
+                .videoId("video" + i).title("Song " + i).artists(song.getArtists()).views(i + "M plays").build()).toList());
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(artist));
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(playlists(0)));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.topSongs.length()").isEqualTo(10)
+                .jsonPath("$.topSongs[9].id").isEqualTo("video9")
+                .jsonPath("$.topSongs[9].plays").isEqualTo("9M plays");
+    }
+
     /**
      * The real answer for Oasis is "Presenting Oasis" and "Oasis 2025 Setlist" next to "'70s Lite
      * Hits" and "Presenting The Kooks" (a related act). The fixture's related artists are The
