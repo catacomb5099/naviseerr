@@ -68,6 +68,6 @@ public enum DownloadQuality {
      */
     public int distance(DownloadQuality tier) {
         int up = tier.ordinal() - ordinal();
-        return up >= 0 ? up : LOSSLESS.ordinal() - tier.ordinal();
+        return up >= 0 ? up : values().length - 1 - tier.ordinal();
     }
 }
