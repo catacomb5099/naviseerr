@@ -117,7 +117,8 @@ public class AuthController {
     /**
      * Leg two: Authentik sent the browser back with a code. Check the state against the login cookie,
      * swap the code (plus the PKCE verifier and the client secret) for an ID token, check the token's
-     * claims, open OUR session, set OUR cookie, turn the login on if it was not yet, and land on {@code to}.
+     * claims, open OUR session, set OUR cookie and land on {@code to}. It does not touch
+     * {@code login_settings.enabled}: "Save and test" is the switch (19-10-2026 22:40).
      * A failure is a plain page saying what happened, with a link back; never a session.
      */
     @GetMapping("/authentik/callback")
@@ -160,7 +161,6 @@ public class AuthController {
         Instant now = clock.instant();
         return sessions.deleteExpired(now)
                 .then(sessions.createSession(id, subject, now.plus(sessionLength)))
-                .then(settings.setEnabled(true))   // the first successful sign-in is what turns the door on
                 .thenReturn(ResponseEntity.status(HttpStatus.FOUND).location(URI.create(attempt.to()))
                         .header(HttpHeaders.SET_COOKIE, cookie(request, AuthFilter.COOKIE, id, sessionLength).toString())
                         .header(HttpHeaders.SET_COOKIE, cookie(request, LOGIN_COOKIE, "", Duration.ZERO).toString())

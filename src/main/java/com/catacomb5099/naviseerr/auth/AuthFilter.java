@@ -20,7 +20,8 @@ import java.util.Set;
 
 /**
  * The door (19-10-2026). While Authentik is not connected, or the login was turned off, every request
- * passes as it always did. Once someone has signed in through Authentik ({@code login_settings.enabled}),
+ * passes as it always did. From the moment "Save and test" has connected Authentik
+ * ({@code login_settings.enabled}, read afresh on every request, so the very next one is behind the door),
  * every request needs a live session cookie, except the handful of paths that exist to get one.
  * Default-deny, so a new controller is protected without anyone remembering to say so.
  *

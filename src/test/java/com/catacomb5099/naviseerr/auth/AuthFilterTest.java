@@ -113,6 +113,22 @@ class AuthFilterTest {
         assertNull(exchange.getAttribute(AuthFilter.SUBJECT));
     }
 
+    /** What makes "the request after Save and test is already behind the door" true: the row is read every time, never cached. */
+    @Test
+    void theSwitchIsReadOnEveryRequest_soTheRequestAfterSaveAndTestIsAlready401() {
+        when(settings.isEnabled()).thenReturn(Mono.just(false), Mono.just(true));
+        MockServerWebExchange before = MockServerWebExchange.from(MockServerHttpRequest.get("/downloads/active"));
+        filter.filter(before, chain).block();
+        assertTrue(reachedHandler.get(), "open: through");
+
+        reachedHandler.set(false);
+        MockServerWebExchange after = MockServerWebExchange.from(MockServerHttpRequest.get("/downloads/active"));
+        filter.filter(after, chain).block();
+        assertFalse(reachedHandler.get(), "the very next request without a session: 401");
+        assertEquals(HttpStatus.UNAUTHORIZED, after.getResponse().getStatusCode());
+        verify(settings, times(2)).isEnabled();
+    }
+
     /** The setup and settings routes are not listed anywhere: default-deny covers them, and this pins that down. */
     @Test
     void loginOn_theSetupAndSettingsRoutes_needASession() {

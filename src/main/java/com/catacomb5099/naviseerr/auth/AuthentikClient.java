@@ -18,6 +18,7 @@ import java.net.ConnectException;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -86,7 +87,9 @@ public class AuthentikClient {
      * client and the redirect URI first ({@code invalid_client}, RFC 6749 5.2) and only then looks the
      * code up ({@code invalid_grant}), so the error word says which, and nothing is issued either way.
      * A wrong secret saved while the login is on would otherwise show only at the next sign-in, with
-     * Settings already behind the door.
+     * Settings already behind the door. Only a 4xx carrying a token error word counts as a pass: a 5xx,
+     * an HTML page from a proxy, or a token issued for the bogus code fail the test too, since a pass is
+     * the switch and such a provider could not complete the sign-in that follows.
      */
     // ponytail: Authentik's error words; Keycloak says unauthorized_client for a wrong secret and would pass here.
     public Mono<Void> checkClient(OpenIdConfiguration openId, String clientId, String clientSecret, String redirectUri) {
@@ -98,11 +101,18 @@ public class AuthentikClient {
         form.add("client_secret", clientSecret);
         return webClient.post().uri(openId.tokenEndpoint()).contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .body(BodyInserters.fromFormData(form))
-                .exchangeToMono(response -> response.bodyToMono(String.class).defaultIfEmpty(""))
+                .exchangeToMono(response -> response.bodyToMono(String.class).defaultIfEmpty("")
+                        .map(body -> Map.entry(response.statusCode(), body)))
                 .timeout(TIMEOUT)
                 .onErrorMap(error -> unreachable(openId.issuer(), error))
-                .flatMap(body -> "invalid_client".equals(read(body).path("error").asString(null))
-                        ? Mono.<Void>error(new LoginProblem(REFUSED)) : Mono.<Void>empty());
+                .flatMap(answer -> {
+                    String error = read(answer.getValue()).path("error").asString(null);
+                    if ("invalid_client".equals(error)) return Mono.<Void>error(new LoginProblem(REFUSED));
+                    if (answer.getKey().is4xxClientError() && error != null) return Mono.<Void>empty();
+                    return Mono.<Void>error(new LoginProblem("Authentik's token endpoint at " + URI.create(openId.issuer()).getAuthority()
+                            + " answered " + answer.getKey().value() + " instead of refusing the test code. Check that Authentik is "
+                            + "healthy; nothing was changed."));
+                });
     }
 
     /**

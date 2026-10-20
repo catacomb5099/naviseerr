@@ -163,9 +163,20 @@ class AuthentikClientTest {
                 .expectErrorMatches(e -> e instanceof LoginProblem && e.getMessage().equals(AuthentikClient.REFUSED))
                 .verify();
 
-        // Anything else the token endpoint says about a bogus code is not about the client.
-        server.enqueue(new MockResponse().setResponseCode(500).setBody("boom"));
-        StepVerifier.create(client.checkClient(openId(), "client-1", "s3cret", "http://nas/cb")).verifyComplete();
+        // Anything that is not a token error about the bogus code fails the test too: a pass is the switch now,
+        // and a token endpoint that cannot answer (a proxy's 502 page, say) could not complete the sign-in after it.
+        String host = server.url("/").host() + ":" + server.getPort();
+        server.enqueue(new MockResponse().setResponseCode(502).setBody("<html>Bad Gateway</html>"));
+        StepVerifier.create(client.checkClient(openId(), "client-1", "s3cret", "http://nas/cb"))
+                .expectErrorMatches(e -> e instanceof LoginProblem && e.getMessage().equals("Authentik's token endpoint at " + host
+                        + " answered 502 instead of refusing the test code. Check that Authentik is healthy; nothing was changed."))
+                .verify();
+
+        // A token issued for a code that does not exist is not a pass either.
+        server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody("{\"id_token\":\"h.p.s\"}"));
+        StepVerifier.create(client.checkClient(openId(), "client-1", "s3cret", "http://nas/cb"))
+                .expectErrorMatches(e -> e instanceof LoginProblem && e.getMessage().contains("answered 200 instead of refusing the test code"))
+                .verify();
     }
 
     @Test
