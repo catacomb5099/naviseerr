@@ -304,6 +304,17 @@ The cover lives in the row, not a file: the naviseerr container mounts its confi
 `INSERT ... SELECT`, it is backed up with the database, and Postgres keeps large values out of line (TOAST), so
 statements that do not name the column never read it. Decision: [custom-playlists-20-10-2026.md](../decisions/custom-playlists-20-10-2026.md).
 
+### V21: what each remembered list was searched with (persistent manual search, 20-10-2026)
+
+[V21__search_list_query.sql](../../src/main/resources/db/migration/V21__search_list_query.sql) adds four nullable TEXT
+columns: `download_tasks.search_results_query` / `search_results_search_id` and `album_searches.folders_query` /
+`folders_search_id`, the words and slskd id of the search that found the remembered list. `SAVE_SEARCH_RESULTS_SQL` /
+`SAVE_ALBUM_FOLDERS_SQL` write them in the same statement as the list, so they move together under the empty-list guard
+(a later wording that finds nothing leaves the list AND its words). The manual pop-up names these instead of the loop's
+latest wording; null on older rows, which fall back to the derived wording and the row's `search_id`. No data
+statement. (V20 belongs to custom playlists in the same sweep.) Decision:
+[persistent-manual-search-20-10-2026.md](../decisions/persistent-manual-search-20-10-2026.md).
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.

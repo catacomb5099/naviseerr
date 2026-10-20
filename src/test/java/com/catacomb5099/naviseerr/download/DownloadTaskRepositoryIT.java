@@ -2073,7 +2073,7 @@ class DownloadTaskRepositoryIT {
         UUID id = partlyDownloadedAlbum();
         StoredFolder folder = new StoredFolder("Baron53", "TALK TALK\\LAUGHING STOCK", true, 3, 1_500_000, 2,
                 java.util.Map.of(taskIdsOf(id).get(1), DownloadTaskFixtures.albumFolderCandidates("Baron53").getFirst()), true);
-        repository.saveAlbumFolders(id, List.of(folder), NOW).block();
+        repository.saveAlbumFolders(id, List.of(folder), NOW, null, null).block();
 
         assertEquals(1L, repository.retry(id, null, NOW.plusSeconds(60), NOW.plusSeconds(300)).block());
 
@@ -2326,7 +2326,7 @@ class DownloadTaskRepositoryIT {
         assertNull(before.searchedAt(), "nothing searched yet reads as never searched");
         assertNull(before.current(), "no candidate chosen yet");
 
-        assertEquals(1L, repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice", "bob"), NOW).block());
+        assertEquals(1L, repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice", "bob"), NOW, null, null).block());
 
         DownloadTaskRepository.CachedSearch after = repository.cachedSearch(id, task).block();
         assertEquals(List.of("alice", "bob"), after.files().stream().map(DownloadCandidate::username).toList());
@@ -2334,12 +2334,17 @@ class DownloadTaskRepositoryIT {
         assertEquals(NOW, after.searchedAt());
         assertEquals("song", after.songName());
         assertEquals(0, after.searchTier());
-        assertNull(after.searchId(), "the loop's save leaves the row's search id alone");
+        assertNull(after.searchId(), "a save without an id leaves the row's search id alone");
+        assertNull(after.filesQuery(), "nothing said what was searched");
 
         // A person's own search (ManualSearch) makes its slskd id the row's, so the reopened pop-up points at it.
-        assertEquals(1L, repository.saveSearchResults(task, DownloadTaskFixtures.candidates("carol"), NOW.plusSeconds(5), "manual-1").block());
-        assertEquals("manual-1", repository.cachedSearch(id, task).block().searchId());
-        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("dave"), NOW.plusSeconds(9)).block();
+        assertEquals(1L, repository.saveSearchResults(task, DownloadTaskFixtures.candidates("carol"), NOW.plusSeconds(5),
+                "Common People Pulp", "manual-1").block());
+        DownloadTaskRepository.CachedSearch manual = repository.cachedSearch(id, task).block();
+        assertEquals("manual-1", manual.searchId());
+        assertEquals("Common People Pulp", manual.filesQuery(), "the words go with the list (V21)");
+        assertEquals("manual-1", manual.filesSearchId());
+        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("dave"), NOW.plusSeconds(9), null, null).block();
         assertEquals("manual-1", repository.cachedSearch(id, task).block().searchId(), "a save without an id keeps the one there");
     }
 
@@ -2348,16 +2353,18 @@ class DownloadTaskRepositoryIT {
         UUID id = admitOneSong("PENDING");
         UUID task = taskIdOf(id);
 
-        assertEquals(1L, repository.saveSearchResults(task, List.of(), NOW).block(), "searched, nothing relevant: stamped");
+        assertEquals(1L, repository.saveSearchResults(task, List.of(), NOW, "song", "s0").block(), "searched, nothing relevant: stamped");
         assertEquals(NOW, repository.cachedSearch(id, task).block().searchedAt());
 
-        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice"), NOW.plusSeconds(5)).block();
-        assertEquals(0L, repository.saveSearchResults(task, List.of(), NOW.plusSeconds(9)).block(),
+        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice"), NOW.plusSeconds(5), "song", "s1").block();
+        assertEquals(0L, repository.saveSearchResults(task, List.of(), NOW.plusSeconds(9), "song - artist", "s2").block(),
                 "the next wording finding nothing leaves the files the first one found");
 
         DownloadTaskRepository.CachedSearch cached = repository.cachedSearch(id, task).block();
         assertEquals(1, cached.files().size());
         assertEquals(NOW.plusSeconds(5), cached.searchedAt());
+        assertEquals("song", cached.filesQuery(), "and the words and id of the search that found them");
+        assertEquals("s1", cached.filesSearchId());
     }
 
     @Test
@@ -2382,7 +2389,7 @@ class DownloadTaskRepositoryIT {
     void retry_leavesTheRememberedFilesInPlace() {
         UUID id = failedSong();
         UUID task = taskIdOf(id);
-        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice"), NOW).block();
+        repository.saveSearchResults(task, DownloadTaskFixtures.candidates("alice"), NOW, null, null).block();
 
         assertEquals(1L, retry(id, null, NOW.plusSeconds(1)));
 
@@ -2405,7 +2412,7 @@ class DownloadTaskRepositoryIT {
 
         StoredFolder folder = new StoredFolder("Baron53", "TALK TALK\\LAUGHING STOCK", true, 3, 1_500_000, 2,
                 java.util.Map.of(songs.get(0), DownloadTaskFixtures.albumFolderCandidates("Baron53").getFirst()), true);
-        assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW).block());
+        assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW, null, null).block());
 
         DownloadTaskRepository.CachedAlbumSearch after = repository.cachedAlbumSearch(id).block();
         assertEquals(NOW, after.foldersAt());
@@ -2419,11 +2426,15 @@ class DownloadTaskRepositoryIT {
         assertEquals(DownloadCandidate.ALBUM_FOLDER, read.files().get(songs.get(0)).source());
         assertEquals(1, after.holding(songs.get(0)).size());
         assertTrue(after.holding(songs.get(1)).isEmpty(), "a song the folder lacks has no folder to choose");
-        assertNull(after.searchId(), "the loop's save leaves the album search's id alone");
+        assertNull(after.searchId(), "a save without an id leaves the album search's id alone");
+        assertNull(after.foldersQuery());
 
-        // A person's own album search (ManualSearch) makes its slskd id the row's.
-        assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW.plusSeconds(5), "manual-2").block());
-        assertEquals("manual-2", repository.cachedAlbumSearch(id).block().searchId());
+        // A person's own album search (ManualSearch) makes its slskd id the row's, and its words go with the folders.
+        assertEquals(1L, repository.saveAlbumFolders(id, List.of(folder), NOW.plusSeconds(5), "Laughing Stock flac", "manual-2").block());
+        DownloadTaskRepository.CachedAlbumSearch manual = repository.cachedAlbumSearch(id).block();
+        assertEquals("manual-2", manual.searchId());
+        assertEquals("Laughing Stock flac", manual.foldersQuery());
+        assertEquals("manual-2", manual.foldersSearchId());
     }
 
     @Test

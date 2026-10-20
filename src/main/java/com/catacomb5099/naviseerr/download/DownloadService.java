@@ -183,14 +183,23 @@ public class DownloadService {
     /**
      * Every file one song's search found, best first, for a person to choose from. The song's own
      * remembered list when it has one; else, for an album's song that got its file from the album
-     * search and never searched on its own, one entry per remembered folder that holds it. Empty for an
-     * unknown download or song.
+     * search and never searched on its own, one entry per remembered folder that holds it, named with
+     * the album search's words, id and time. Empty for an unknown download or song.
      */
     public Mono<TaskCandidatesView> candidates(UUID downloadId, UUID taskId) {
-        return repository.cachedSearch(downloadId, taskId).flatMap(song -> listFor(downloadId, taskId, song)
-                .map(files -> files.isEmpty()
-                        ? view(song, files, statusOf(song), reasonOf(song))
-                        : view(song, files, PickListStatus.READY, null)));
+        return repository.cachedSearch(downloadId, taskId).flatMap(song -> {
+            if (!song.files().isEmpty()) {
+                return Mono.just(view(song, song.files(), PickListStatus.READY, null));
+            }
+            return repository.cachedAlbumSearch(downloadId)
+                    .flatMap(album -> {
+                        List<DownloadCandidate> files = album.holding(taskId).stream()
+                                .map(folder -> folder.files().get(taskId)).toList();
+                        return files.isEmpty() ? Mono.<TaskCandidatesView>empty() : Mono.just(view(song, files,
+                                PickListStatus.READY, null, albumQuery(album), albumSearchId(album), album.foldersAt()));
+                    })
+                    .defaultIfEmpty(view(song, List.of(), statusOf(song), reasonOf(song)));
+        });
     }
 
     /** The song's own remembered files, else one file per remembered album folder that holds the song. */
@@ -203,12 +212,17 @@ public class DownloadService {
                 .defaultIfEmpty(List.of());
     }
 
-    /** The view for the song's remembered list: the loop's own wording and slskd's id and time for it. */
+    /**
+     * The view for the song's remembered list, named with the words and slskd id of the search that found it;
+     * a row from before V21 (or with no list) names the loop's current wording and the row's search id.
+     */
     private static TaskCandidatesView view(DownloadTaskRepository.CachedSearch song, List<DownloadCandidate> files,
                                            PickListStatus status, String reason) {
         List<String> wordings = SearchQueryTiers.of(song.songName());
-        return view(song, files, status, reason, wordings.get(Math.clamp(song.searchTier(), 0, wordings.size() - 1)),
-                song.searchId(), song.searchedAt());
+        String query = song.filesQuery() != null ? song.filesQuery()
+                : wordings.get(Math.clamp(song.searchTier(), 0, wordings.size() - 1));
+        return view(song, files, status, reason, query,
+                song.filesSearchId() != null ? song.filesSearchId() : song.searchId(), song.searchedAt());
     }
 
     /** The same view over any list: a person's own search ({@link ManualSearch}) names its text, id and time. */
@@ -278,17 +292,23 @@ public class DownloadService {
         });
     }
 
-    /** The view for the album's remembered folders, named with the wording the album search used. */
-    private static AlbumCandidatesView albumView(UUID downloadId, DownloadTaskRepository.CachedAlbumSearch album,
-                                                 List<DownloadTaskRepository.SongPick> songs) {
-        String query = album.title() == null ? null : AlbumSearch.builder().title(album.title()).artists(album.artists())
+    /** The words of the search that found the album's folders; before V21, the wording the album search is on. */
+    private static String albumQuery(DownloadTaskRepository.CachedAlbumSearch album) {
+        if (album.foldersQuery() != null) {
+            return album.foldersQuery();
+        }
+        return album.title() == null ? null : AlbumSearch.builder().title(album.title()).artists(album.artists())
                 .searchTier(album.searchTier() == null ? 0 : album.searchTier()).build().searchQuery();
-        return albumView(downloadId, album, songs, query);
     }
 
-    /** The same view over any folders: a person's own search ({@link ManualSearch}) names its text as the query. */
+    /** slskd's id for the search that found the folders; before V21, the album search's own. */
+    private static String albumSearchId(DownloadTaskRepository.CachedAlbumSearch album) {
+        return album.foldersSearchId() != null ? album.foldersSearchId() : album.searchId();
+    }
+
+    /** The view for the album's remembered folders, named with the search that found them. */
     static AlbumCandidatesView albumView(UUID downloadId, DownloadTaskRepository.CachedAlbumSearch album,
-                                         List<DownloadTaskRepository.SongPick> songs, String query) {
+                                         List<DownloadTaskRepository.SongPick> songs) {
         Map<UUID, DownloadTaskRepository.SongPick> byTask = songs.stream()
                 .collect(Collectors.toMap(DownloadTaskRepository.SongPick::taskId, song -> song));
         List<AlbumCandidatesView.Folder> folders = album.folders().stream().map(folder -> {
@@ -331,8 +351,8 @@ public class DownloadService {
                     ? "BEFORE_CACHE" : album.outcome();
         }
         Instant searchedAt = album.foldersAt() != null ? album.foldersAt() : album.finishedAt();
-        return new AlbumCandidatesView(downloadId, status, reason, query, album.searchId(), searchedAt, songs.size(),
-                folders);
+        return new AlbumCandidatesView(downloadId, status, reason, albumQuery(album), albumSearchId(album), searchedAt,
+                songs.size(), folders);
     }
 
     // ---- manual pick: re-pointing songs at a chosen file ----------------------------------------------

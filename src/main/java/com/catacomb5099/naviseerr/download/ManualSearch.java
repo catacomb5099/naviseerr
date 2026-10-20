@@ -32,10 +32,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * against {@code max-concurrent-searches} so it starts no new search while a person's runs (slskd runs two
  * at a time and queues the rest, memory of 27-09-2026).
  *
- * <p>ponytail: nothing stores the typed text, so a reopened pop-up names the loop's own wording over the
- * manual list (whose slskd id and time it does carry); a {@code search_results_query} column (the next
- * migration) is the fix. And each
- * poll re-reads the search with its responses (about 1 MiB for a popular song, 2-15 times); a summary-only
+ * <p>The typed text and slskd's id are stored with the list (V21), so a reopened pop-up names this search.
+ *
+ * <p>ponytail: each poll re-reads the search with its responses (about 1 MiB for a popular song, 2-15 times); a summary-only
  * {@code GET /searches/{id}} on {@link SlskdService} is the upgrade if a remote slskd makes that slow.
  */
 @Slf4j
@@ -106,7 +105,7 @@ public class ManualSearch {
                     .stream().map(DownloadCandidate::from).toList();
             log.info("Manual search '{}' for song {} of download {}: slskd search {} ({}), {} file(s)", text, taskId,
                     downloadId, state.getId(), state.getState(), files.size());
-            return repository.saveSearchResults(taskId, files, now, state.getId()).thenReturn(DownloadService.view(song, files,
+            return repository.saveSearchResults(taskId, files, now, text, state.getId()).thenReturn(DownloadService.view(song, files,
                     files.isEmpty() ? PickListStatus.NONE : PickListStatus.READY, files.isEmpty() ? "NO_RESULTS" : null,
                     text, state.getId(), now));
             });
@@ -147,13 +146,13 @@ public class ManualSearch {
                         .flatMap(folders -> {
                             log.info("Manual album search '{}' for download {}: slskd search {} ({}), {} folder(s)", text,
                                     downloadId, state.getId(), state.getState(), folders.size());
-                            Mono<Long> saved = folders.isEmpty() ? Mono.just(0L) : repository.saveAlbumFolders(downloadId, folders, now, state.getId());
+                            Mono<Long> saved = folders.isEmpty() ? Mono.just(0L) : repository.saveAlbumFolders(downloadId, folders, now, text, state.getId());
                             // The view reads status and reason off the row: DONE with these folders, NO_RESULTS when none.
                             DownloadTaskRepository.CachedAlbumSearch found = new DownloadTaskRepository.CachedAlbumSearch(
                                     album.type(), "DONE", folders.isEmpty() ? "NO_RESULTS" : album.outcome(), album.searchTier(),
-                                    album.title(), album.artists(), folders, now, state.getId(), now);
+                                    album.title(), album.artists(), folders, now, state.getId(), now, text, state.getId());
                             return saved.then(repository.songPicks(downloadId).collectList())
-                                    .map(picks -> DownloadService.albumView(downloadId, found, picks, text));
+                                    .map(picks -> DownloadService.albumView(downloadId, found, picks));
                         });
             }));
         });

@@ -180,7 +180,7 @@ public class AlbumSearchStep {
         if (stored.isEmpty()) {
             return Mono.empty();
         }
-        return repository.saveAlbumFolders(album.downloadId(), stored, now)
+        return repository.saveAlbumFolders(album.downloadId(), stored, now, album.searchQuery(), album.searchId())
                 .onErrorResume(error -> {
                     log.warn("Could not remember the {} folder(s) the album search of download {} found; the "
                             + "manual picker will have nothing to show for it", stored.size(), album.downloadId(), error);
