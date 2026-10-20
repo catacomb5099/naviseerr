@@ -272,11 +272,21 @@ add no DDL. Secrets are stored as typed (like V16's client secret) and never rea
 data statement: where the database already holds a suggested-playlist download (`downloads.download_type = 'CURATED'`,
 the one trace of the feature this database holds: the playlists themselves live in croissant) the row is created with
 `suggested_playlists = TRUE`, so an upgrade does not stop a weekly run whose playlists were downloaded; an install that made
-playlists but never downloaded one starts OFF and sees the switch pre-filled on the setup's third screen; `setup_completed_at` stays null on purpose, so the setup shows once after the upgrade. Not here: the
+playlists but never downloaded one starts OFF and sees the switch pre-filled on the setup's fourth screen; `setup_completed_at` stays null on purpose, so the setup shows once after the upgrade. Not here: the
 Soulseek account (slskd reads it from its own files, `settings/SoulseekAccountFiles`) and the Authentik connection
 (V16). All SQL in
 [InstallSettingsRepository.java](../../src/main/java/com/catacomb5099/naviseerr/settings/InstallSettingsRepository.java):
 `find()` answers `InstallSettings.NONE` with no row, every write is `INSERT ... ON CONFLICT (one) DO UPDATE SET <its columns>`.
+
+### V19: `install_settings.download_quality` (download quality, 19-10-2026)
+
+[V19__download_quality.sql](../../src/main/resources/db/migration/V19__download_quality.sql) adds one nullable TEXT
+column to the V18 row, `download_quality`, the tier the Soulseek picker prefers for every download: `LOW`, `NORMAL`,
+`HIGH`, `VERY_HIGH` or `LOSSLESS` (a CHECK keeps it one of the five; text, not a Postgres enum type, because an enum
+type outlives a dropped table on a shared dev database). Null = nothing chosen = `DownloadQuality.DEFAULT` (Lossless,
+what the picker effectively preferred before the setting existed), so an upgraded install changes nothing until someone
+chooses; no data statement. Read by `InstallSettingsRepository.downloadQuality()` (default applied) once per completed
+search, written by `setDownloadQuality()` (the same one-row upsert). Decision: [download-quality-19-10-2026.md](../decisions/download-quality-19-10-2026.md).
 
 ## Entity and status
 

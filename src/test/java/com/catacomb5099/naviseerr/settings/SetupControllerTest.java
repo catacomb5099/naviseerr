@@ -30,7 +30,7 @@ class SetupControllerTest {
     @Test
     void aFinishedSetup_isCompleted_andADeveloperRunHasNoLibraryRoot() {
         when(repository.find()).thenReturn(Mono.just(new InstallSettings(Instant.parse("2026-10-19T19:00:00Z"), false,
-                null, null, null, null, null, null, null)));
+                null, null, null, null, null, null, null, null)));
         when(organiser.libraryRoot()).thenReturn(null);
 
         http.get().uri("/settings/setup").exchange()
