@@ -285,6 +285,20 @@ adapter image needs the corporate CA, which a GitHub build does not have.
 - Not published: Postgres (it would clash with any Postgres already on the machine), the adapter,
   naviseerr's API (the web app forwards `/api` to it), slskd's web page and the curator.
 
+### Revisited 19-10-2026: the server image knows the install's addresses
+
+The owner's complaint: the paste-in file (188 lines, a quarter of them comments, a third plumbing)
+is not navigable by a non-technical person. Twelve of its lines were `environment:` entries on the
+`naviseerr` service that are the same in every install: the in-stack addresses (`postgres`,
+`ytmusic-adapter`, `slskd`, `croissant`), the four mount points, the config import, the first-run
+switch and the download log level. They are now `ENV` defaults in the `Dockerfile`, so a compose
+file that names its services and folders the same way can drop the whole block (the install file
+goes from 83 lines to 70). `NAVISEERR_DATA_DIR=/data` is among them: it is where the in-app
+Soulseek account page (same day) finds `config/secrets.env` and `slskd/slskd.yml`. Nothing changes
+for the two compose files in this repo: both still set every value, and an environment variable
+beats an image default. A jar started by hand is unaffected, since the defaults live in the image,
+not in `application.yaml`. Held until the owner has confirmed the short install file on TrueNAS.
+
 ## Trade-offs
 
 - The first start builds four images from source and takes several minutes. Builds follow moving
