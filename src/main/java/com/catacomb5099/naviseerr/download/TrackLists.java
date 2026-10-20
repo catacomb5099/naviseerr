@@ -2,6 +2,7 @@ package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.curator.CuratorClient;
 import com.catacomb5099.naviseerr.curator.CuratorEdition;
+import com.catacomb5099.naviseerr.services.PlaylistRepository;
 import com.catacomb5099.naviseerr.services.RadioRepository;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicService;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeCollectionInfo;
@@ -12,6 +13,7 @@ import reactor.core.publisher.Mono;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
 
 /**
  * The one place that turns a (type, id) into its songs, in order: what a download of it fetches.
@@ -24,11 +26,14 @@ public class TrackLists {
     private final YtMusicService ytMusicService;
     private final CuratorClient curatorClient;
     private final RadioRepository radioRepository;
+    private final PlaylistRepository playlists;
 
-    public TrackLists(YtMusicService ytMusicService, CuratorClient curatorClient, RadioRepository radioRepository) {
+    public TrackLists(YtMusicService ytMusicService, CuratorClient curatorClient, RadioRepository radioRepository,
+                      PlaylistRepository playlists) {
         this.ytMusicService = ytMusicService;
         this.curatorClient = curatorClient;
         this.radioRepository = radioRepository;
+        this.playlists = playlists;
     }
 
     /**
@@ -44,19 +49,20 @@ public class TrackLists {
             case ALBUM -> ytMusicService.getAlbumInfo(id);
             case PLAYLIST -> ytMusicService.getPlaylistInfo(id);
             case CURATED -> curatorClient.getEdition(id).map(edition -> curatedCollection(id, edition));
-            case RADIO -> savedRadio(id);
+            case RADIO -> saved(id, radioRepository::find);
+            case CUSTOM -> saved(id, uuid -> playlists.find(uuid).map(PlaylistRepository.Playlist::asCollection));
         };
     }
 
     /**
-     * The saved radio, never a fresh one from YouTube. An id that is not a UUID or names no saved radio
-     * comes back as a radio with no songs, which admission fails as nothing-to-download; an empty Mono
-     * would instead leave the row PENDING and retried forever.
+     * A saved radio or playlist, never a fresh list from YouTube. An id that is not a UUID or names no
+     * saved list comes back as a list with no songs, which admission fails as nothing-to-download; an
+     * empty Mono would instead leave the row PENDING and retried forever.
      */
-    private Mono<YoutubeCollectionInfo> savedRadio(String id) {
+    private static Mono<YoutubeCollectionInfo> saved(String id, Function<UUID, Mono<YoutubeCollectionInfo>> find) {
         YoutubeCollectionInfo none = new YoutubeCollectionInfo(id, List.of(), null, null, List.of(), null);
         try {
-            return radioRepository.find(UUID.fromString(id)).defaultIfEmpty(none);
+            return find.apply(UUID.fromString(id)).defaultIfEmpty(none);
         } catch (IllegalArgumentException notAUuid) {
             return Mono.just(none);
         }

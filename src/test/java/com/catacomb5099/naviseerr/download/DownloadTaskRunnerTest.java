@@ -1,6 +1,7 @@
 package com.catacomb5099.naviseerr.download;
 
 import com.catacomb5099.naviseerr.curator.CuratorClient;
+import com.catacomb5099.naviseerr.services.PlaylistRepository;
 import com.catacomb5099.naviseerr.services.RadioRepository;
 import com.catacomb5099.naviseerr.curator.CuratorEdition;
 import com.catacomb5099.naviseerr.curator.CuratorException;
@@ -57,6 +58,7 @@ class DownloadTaskRunnerTest {
     private LibraryOrganiser organiser;
     private CuratorClient curatorClient;
     private RadioRepository radioRepository;
+    private PlaylistRepository playlists;
     private AlbumSearchStep albumSearches;
     private ManualSearch manualSearch;
     private MediaServerNotifier mediaServers;
@@ -72,6 +74,7 @@ class DownloadTaskRunnerTest {
         organiser = mock(LibraryOrganiser.class);
         curatorClient = mock(CuratorClient.class);
         radioRepository = mock(RadioRepository.class);
+        playlists = mock(PlaylistRepository.class);
         albumSearches = mock(AlbumSearchStep.class);
         manualSearch = mock(ManualSearch.class);   // inFlight() is 0 unless a test says otherwise
         mediaServers = mock(MediaServerNotifier.class);
@@ -98,7 +101,7 @@ class DownloadTaskRunnerTest {
         when(slskdService.getAllDownloads()).thenReturn(Flux.empty());
         when(slskdService.getServerState()).thenReturn(Mono.just(SlskdFixtures.serverState()));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                new TrackLists(ytMusicService, curatorClient, radioRepository), organiser, albumSearches, manualSearch, mediaServers, Clock.fixed(T0, ZoneOffset.UTC),
+                new TrackLists(ytMusicService, curatorClient, radioRepository, playlists), organiser, albumSearches, manualSearch, mediaServers, Clock.fixed(T0, ZoneOffset.UTC),
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
     }
 
@@ -678,7 +681,7 @@ class DownloadTaskRunnerTest {
         Clock clock = mock(Clock.class);
         when(clock.instant()).thenReturn(T0, T0.plusSeconds(45));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                new TrackLists(ytMusicService, curatorClient, radioRepository), organiser, albumSearches, manualSearch, mediaServers, clock,
+                new TrackLists(ytMusicService, curatorClient, radioRepository, playlists), organiser, albumSearches, manualSearch, mediaServers, clock,
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
         when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));
         when(repository.pauseDueWork(any(), any())).thenReturn(Mono.just(1L));
@@ -712,7 +715,7 @@ class DownloadTaskRunnerTest {
         Clock clock = mock(Clock.class);
         when(clock.instant()).thenReturn(T0, T0.plus(DownloadTaskRunner.OFFLINE_PAUSE_CEILING));
         runner = new DownloadTaskRunner(repository, executor, downloadService, slskdService,
-                new TrackLists(ytMusicService, curatorClient, radioRepository), organiser, albumSearches, manualSearch, mediaServers, clock,
+                new TrackLists(ytMusicService, curatorClient, radioRepository, playlists), organiser, albumSearches, manualSearch, mediaServers, clock,
                 Duration.ofSeconds(2), 10, Duration.ofSeconds(60), 20, 20, 2);
         captureRunnerLogs();
         when(slskdService.getServerState()).thenReturn(Mono.just(notLoggedIn()));

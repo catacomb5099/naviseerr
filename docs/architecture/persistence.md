@@ -288,6 +288,22 @@ what the picker effectively preferred before the setting existed), so an upgrade
 chooses; no data statement. Read by `InstallSettingsRepository.downloadQuality()` (default applied) once per completed
 search, written by `setDownloadQuality()` (the same one-row upsert). Decision: [download-quality-19-10-2026.md](../decisions/download-quality-19-10-2026.md).
 
+### V20: `playlists` (your own playlists, 20-10-2026)
+
+[V20__custom_playlists.sql](../../src/main/resources/db/migration/V20__custom_playlists.sql) adds one table and widens
+the `downloads.download_type` CHECK with `CUSTOM` (the V10/V14 widening). `playlists`: `playlist_id UUID`, `title`,
+`description` (default `''`), `songs JSONB` (`YoutubeSongInfo` in your order, one entry per video id, `plays` and
+`trackNumber` always null), `cover BYTEA` and `cover_updated_at` (the picture you uploaded, a JPEG; null = the mosaic),
+`created_at`, `updated_at` (the "last edited first" order), `downloaded_at` (null = a draft). The songs are one document,
+like `radios.songs`, because a draft is read and shown whole; each edit is ONE statement in
+[PlaylistRepository.java](../../src/main/java/com/catacomb5099/naviseerr/services/PlaylistRepository.java), guarded by
+`downloaded_at IS NULL`: add = `songs || (new minus existing)` in a CTE that locks the row first (two tabs adding at once
+queue instead of losing songs) and refuses past 5,000; reorder = `jsonb_agg ... ORDER BY` the listed position, then the
+old one; remove = `jsonb_agg` of the rest. 0 rows means unknown or created; `PlaylistController` tells which (404/409).
+The cover lives in the row, not a file: the naviseerr container mounts its config read-only, Duplicate copies it in one
+`INSERT ... SELECT`, it is backed up with the database, and Postgres keeps large values out of line (TOAST), so
+statements that do not name the column never read it. Decision: [custom-playlists-20-10-2026.md](../decisions/custom-playlists-20-10-2026.md).
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.

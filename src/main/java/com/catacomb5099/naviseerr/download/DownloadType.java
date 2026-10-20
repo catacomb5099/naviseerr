@@ -31,15 +31,20 @@ public enum DownloadType {
      * radio on every call and the download must be the list the person saw. Filed and written out as a
      * playlist file like a {@link #PLAYLIST}.
      */
-    RADIO;
+    RADIO,
+    /**
+     * One of your own playlists ({@code POST /playlists}). The id is the playlist's UUID; the songs are
+     * read from the {@code playlists} table at admission, in your order, like a {@link #RADIO}'s.
+     */
+    CUSTOM;
 
     /** True when this type resolves to a track list rather than a single track. */
     public boolean isCollection() {
         return this != SONG;
     }
 
-    /** True for the kinds that get a playlist file in the library: a YouTube playlist, a curated edition, a radio. */
+    /** True for the kinds that get a playlist file in the library: every kind but a song and an album. */
     public boolean isPlaylist() {
-        return this == PLAYLIST || this == CURATED || this == RADIO;
+        return this == PLAYLIST || this == CURATED || this == RADIO || this == CUSTOM;
     }
 }
