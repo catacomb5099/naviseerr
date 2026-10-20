@@ -34,6 +34,13 @@ list you own and edit, no way to collect songs from several albums into one play
 - **Delete** only a draft: a created playlist is in your music app and your downloads, which are never deleted either.
 - **No user names** on a download of your playlist (auth threat model): its author line is empty.
 
+- **Your own picture** (owner question 4, default a). The web app takes a JPEG, PNG or WebP, crops the centre square,
+  shows a preview and sends a 1200 px JPEG (the size album covers use); the server keeps it in the playlist's row (V20
+  `cover`) and only checks it is a JPEG of at most 4 MB (Spotify's apps take 4 MB too). In the row rather than a file:
+  the naviseerr container's config is read-only, Duplicate copies it in one statement, and it is backed up with the
+  database. No picture = the 2x2 mosaic of the first four different song pictures (Spotify, YouTube Music; Navidrome and
+  Jellyfin draw the same). A created playlist keeps its picture (409). Flip: `MAX_COVER_BYTES` in `PlaylistController`.
+
 ## Not decided here
 
 - Two playlists with one title (two of yours, or yours and a YouTube one) write the same `Playlists/<title>.m3u8`, the

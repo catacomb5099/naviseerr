@@ -81,6 +81,18 @@ public class PlaylistRepository {
               FROM playlists WHERE playlist_id = :id
             """;
 
+    private static final String SET_COVER_SQL = """
+            UPDATE playlists SET cover = :cover, cover_updated_at = now(), updated_at = now()
+             WHERE playlist_id = :id AND downloaded_at IS NULL
+            """;
+
+    private static final String CLEAR_COVER_SQL = """
+            UPDATE playlists SET cover = NULL, cover_updated_at = NULL, updated_at = now()
+             WHERE playlist_id = :id AND downloaded_at IS NULL
+            """;
+
+    private static final String COVER_SQL = "SELECT cover FROM playlists WHERE playlist_id = :id AND cover IS NOT NULL";
+
     private static final String DELETE_SQL = "DELETE FROM playlists WHERE playlist_id = :id AND downloaded_at IS NULL";
 
     private static final TypeReference<List<YoutubeSongInfo>> SONG_LIST = new TypeReference<>() {};
@@ -164,6 +176,21 @@ public class PlaylistRepository {
         UUID newId = UUID.randomUUID();
         return client.sql(COPY_SQL).bind("id", id).bind("newId", newId).fetch().rowsUpdated()
                 .filter(rows -> rows > 0).map(rows -> newId);
+    }
+
+    /** A new picture is a new {@code cover_updated_at}, and so a new {@link Playlist#coverUrl()}. */
+    public Mono<Long> setCover(UUID id, byte[] jpeg) {
+        return client.sql(SET_COVER_SQL).bind("id", id).bind("cover", jpeg).fetch().rowsUpdated();
+    }
+
+    /** Back to the mosaic. */
+    public Mono<Long> clearCover(UUID id) {
+        return client.sql(CLEAR_COVER_SQL).bind("id", id).fetch().rowsUpdated();
+    }
+
+    /** The picture's bytes; empty when there is none. */
+    public Mono<byte[]> cover(UUID id) {
+        return client.sql(COVER_SQL).bind("id", id).map(row -> row.get("cover", byte[].class)).one();
     }
 
     /** Drafts only. */
