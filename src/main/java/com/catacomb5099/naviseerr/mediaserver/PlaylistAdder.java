@@ -68,16 +68,22 @@ public class PlaylistAdder {
         }
     }
 
+    /** Rounds until one adds nothing: a song added this round lets the next song of its album go in right away. */
     Mono<Void> pass(Instant now) {
-        return repository.due(now, BATCH).concatMap(row -> handle(row, now)).then();
+        return round(now).expand(added -> added > 0 ? round(now) : Mono.empty()).take(BATCH).then();
     }
 
-    private Mono<Void> handle(PlaylistAdditionRepository.Due row, Instant now) {
+    private Mono<Long> round(Instant now) {
+        return repository.due(now, BATCH).concatMap(row -> handle(row, now)).filter(Boolean::booleanValue).count();
+    }
+
+    /** True when the song went in (or already was in). */
+    private Mono<Boolean> handle(PlaylistAdditionRepository.Due row, Instant now) {
         if (!items.connected(row.server())) {
-            return giveUp(row, "MEDIA_SERVER_NOT_CONNECTED", now);
+            return giveUp(row, "MEDIA_SERVER_NOT_CONNECTED", now).thenReturn(false);
         }
         if (row.song() == null) {
-            return giveUp(row, "NOT_IN_DOWNLOAD", now);
+            return giveUp(row, "NOT_IN_DOWNLOAD", now).thenReturn(false);
         }
         return items.find(row.server(), row.song())
                 .flatMap(found -> items.playlist(row.server(), row.playlistId(), row.jellyfinUserId())
@@ -92,10 +98,9 @@ public class PlaylistAdder {
                                 row.server().displayName, row.playlistId()))
                         .thenReturn(true))
                 .switchIfEmpty(Mono.defer(() -> missed(row, now)).thenReturn(false))
-                .then()
-                .onErrorResume(PlaylistProblem.class, problem -> giveUp(row, problem.reason.name(), now))
+                .onErrorResume(PlaylistProblem.class, problem -> giveUp(row, problem.reason.name(), now).thenReturn(false))
                 .onErrorResume(error -> repository.tryLater(row.additionId(), row.tries() + 1, now.plus(backoff(row.tries())),
-                        error.getMessage()));
+                        error.getMessage()).thenReturn(false));
     }
 
     private Mono<Void> missed(PlaylistAdditionRepository.Due row, Instant now) {

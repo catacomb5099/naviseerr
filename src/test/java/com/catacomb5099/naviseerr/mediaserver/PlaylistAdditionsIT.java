@@ -239,6 +239,51 @@ class PlaylistAdditionsIT {
     }
 
     @Test
+    void anAlbumGoesInInAlbumOrder_aLaterSongWaitsForAnEarlierOneTheServerDoesNotListYet() {
+        UUID d = download("SUCCEEDED");
+        song(d, "yt-1", "SUCCEEDED", true, Instant.now());
+        song(d, "yt-2", "SUCCEEDED", true, Instant.now());
+        navidromePlaylist("admin", false);
+        client.post().uri("/playlist-additions")
+                .bodyValue(Map.of("server", "NAVIDROME", "playlistId", "pl1", "items", List.of(
+                        Map.of("downloadId", d.toString(), "youtubeId", "yt-1"),
+                        Map.of("downloadId", d.toString(), "youtubeId", "yt-2"))))
+                .exchange().expectStatus().isAccepted();
+        ROUTES.put("GET /rest/search3", r -> subsonic("\"searchResult3\":{}"));
+        SEEN.clear();
+
+        adder.pass(Instant.now()).block();
+
+        assertEquals(List.of("GET /rest/search3"), calls(), "only the first song is tried; the second waits for it");
+    }
+
+    @Test
+    void onceTheFirstSongIsIn_theRestOfTheAlbumFollowsInTheSamePass_inOrder() {
+        UUID d = download("SUCCEEDED");
+        song(d, "yt-1", "SUCCEEDED", true, Instant.now());
+        song(d, "yt-2", "SUCCEEDED", true, Instant.now());
+        navidromePlaylist("admin", false);
+        client.post().uri("/playlist-additions")
+                .bodyValue(Map.of("server", "NAVIDROME", "playlistId", "pl1", "items", List.of(
+                        Map.of("downloadId", d.toString(), "youtubeId", "yt-1"),
+                        Map.of("downloadId", d.toString(), "youtubeId", "yt-2"))))
+                .exchange().expectStatus().isAccepted();
+        navidromeHasTheSong();
+        List<String> added = new CopyOnWriteArrayList<>();
+        ROUTES.put("GET /rest/updatePlaylist", r -> {
+            added.add(r.getRequestUrl().queryParameter("songIdToAdd"));
+            return subsonic("");
+        });
+
+        adder.pass(Instant.now()).block();
+
+        assertEquals(2, added.size(), "the second song is added in the same pass, right after the first");
+        Long left = template.getDatabaseClient().sql("SELECT count(*) AS n FROM playlist_additions WHERE added_at IS NULL")
+                .map(row -> row.get("n", Long.class)).one().block();
+        assertEquals(0L, left, "both in after one pass");
+    }
+
+    @Test
     void navidrome_aPlaylistThatRefusesSongs_isGivenUpAsNotEditable() {
         UUID d = download("SUCCEEDED");
         song(d, "yt-w", "SUCCEEDED", true, Instant.now());

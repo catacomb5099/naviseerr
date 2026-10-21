@@ -65,6 +65,13 @@ public class PlaylistAdditionRepository {
              WHERE a.added_at IS NULL AND a.gave_up_reason IS NULL AND a.next_try_at <= :now
                AND (t.library_path IS NOT NULL
                     OR (t.task_id IS NULL AND d.status IN ('SUCCEEDED', 'FAILED', 'PARTIAL_SUCCESS')))
+               -- Album order: wait while an earlier song of the same request is filed but not in yet (one still
+               -- downloading, or failed, does not hold the rest up).
+               AND NOT EXISTS (SELECT 1 FROM playlist_additions p
+                                 JOIN download_tasks pt ON pt.download_id = p.download_id AND pt.youtube_id = p.youtube_id
+                                WHERE p.media_server = a.media_server AND p.playlist_id = a.playlist_id
+                                  AND p.requested_at = a.requested_at AND p.position < a.position
+                                  AND p.added_at IS NULL AND p.gave_up_reason IS NULL AND pt.library_path IS NOT NULL)
              ORDER BY a.requested_at, a.position
              LIMIT :limit
             """;

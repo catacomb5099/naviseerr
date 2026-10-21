@@ -52,9 +52,11 @@ player because a key has no user of its own) is covered by tests against recorde
 
 ## Choices (flip in one place)
 
-- **Order:** each song goes in as soon as it is ready (an album is filed together, so it lands in album order). Flip:
-  make a row wait while an older unfinished row for the same playlist exists (`PlaylistAdditionRepository.DUE_SQL`);
-  one stuck song then holds the rest.
+- **Order:** each song goes in as soon as it is ready, except that the songs of one request keep their order once
+  filed: a song waits while an earlier song of the same request is filed but not in the playlist yet (measured in the
+  demo: without this, an album's first two songs missed Navidrome's scan by seconds, backed off, and the last two
+  overtook them). A song still downloading, or failed, holds nothing up. Flip, stricter: wait for every older
+  unfinished row of the playlist; looser: drop the `NOT EXISTS` in `PlaylistAdditionRepository.DUE_SQL`.
 - **A whole YouTube playlist into your playlist:** the player posts one item per song. Flip: expand a playlist id on
   the server (ask 1's `TrackLists`) if a player ever wants to send one id.
 - **The music folder (organiser) must be on:** without it no song is ever filed, so nothing is added.
