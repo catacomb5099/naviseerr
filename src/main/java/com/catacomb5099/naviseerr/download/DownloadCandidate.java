@@ -47,7 +47,13 @@ public record DownloadCandidate(
          * The file's length in seconds as slskd reported it, so the manual picker can show it; null when
          * slskd gave none (3.5% of files) and on rows written before 07-10-2026.
          */
-        Integer length) {
+        Integer length,
+        /**
+         * The words of the search that found this file (search learning, 20-10-2026): the loop's wording or a
+         * person's typed text. It travels with the file between wordings and into a manual pick, so a finished song
+         * says which search won. Null for album-folder files and on rows written before 20-10-2026.
+         */
+        String wording) {
 
     /** The candidate came from the album search's whole folder (P5), not from the song's own search. */
     public static final String ALBUM_FOLDER = "ALBUM_FOLDER";
@@ -55,15 +61,20 @@ public record DownloadCandidate(
     public static final String MANUAL = "MANUAL";
 
     public static DownloadCandidate from(Pick pick) {
-        return from(pick, null);
+        return from(pick, null, null);
+    }
+
+    /** A file the search with {@code wording} found. */
+    public static DownloadCandidate from(Pick pick, String wording) {
+        return from(pick, null, wording);
     }
 
     /** One track's file in a whole-album folder; always the requested version (EXACT). */
     public static DownloadCandidate fromAlbumFolder(SearchResponseItem peer, SearchFile file) {
-        return from(new Pick(peer, file, TrackMatchingService.Match.EXACT), ALBUM_FOLDER);
+        return from(new Pick(peer, file, TrackMatchingService.Match.EXACT), ALBUM_FOLDER, null);
     }
 
-    private static DownloadCandidate from(Pick pick, String source) {
+    private static DownloadCandidate from(Pick pick, String source, String wording) {
         SearchFile file = pick.file();
         return new DownloadCandidate(
                 pick.peer().getUsername(),
@@ -78,7 +89,8 @@ public record DownloadCandidate(
                 pick.peer().getUploadSpeed(),
                 pick.grade().name(),
                 source,
-                file.getLength() == null ? null : file.getLength().orElse(null));
+                file.getLength() == null ? null : file.getLength().orElse(null),
+                wording);
     }
 
     /**
@@ -88,7 +100,7 @@ public record DownloadCandidate(
      */
     public DownloadCandidate asManual() {
         return new DownloadCandidate(username, filename, extension, bitRate, size, code, isLocked, hasFreeUploadSlot,
-                queueLength, uploadSpeed, TrackMatchingService.Match.EXACT.name(), MANUAL, length);
+                queueLength, uploadSpeed, TrackMatchingService.Match.EXACT.name(), MANUAL, length, wording);
     }
 
     public SearchFile toSearchFile() {

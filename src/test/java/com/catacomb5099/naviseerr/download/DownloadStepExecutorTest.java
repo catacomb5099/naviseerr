@@ -46,6 +46,7 @@ class DownloadStepExecutorTest {
         searchProcessor = mock(SlskdSearchResultProcessor.class);
         repository = mock(DownloadTaskRepository.class);
         when(repository.saveSearchResults(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.logSearch(any(), any())).thenReturn(Mono.empty());
         InstallSettingsRepository settings = mock(InstallSettingsRepository.class);
         when(settings.downloadQuality()).thenReturn(Mono.just(DownloadQuality.DEFAULT));
         DownloadStateMachine machine = new DownloadStateMachine(
@@ -237,6 +238,10 @@ class DownloadStepExecutorTest {
         assertEquals(240, first.length());
         assertEquals("OTHER_VERSION", first.grade());
         assertEquals(192, first.bitRate(), "a 192 kbps file the automatic picker would drop is kept for a person");
+        assertEquals("never gonna give you up", first.wording(), "each file says which wording found it");
+        // The search log keeps this wording's counts even when a later wording's list replaces these files.
+        verify(repository).logSearch(TASK_ID, new SearchLogEntry("never gonna give you up", 0, false, 0, 501,
+                0, 501, 0, 0, T0));
     }
 
     @Test
@@ -269,6 +274,7 @@ class DownloadStepExecutorTest {
         assertEquals(DownloadPhase.DOWNLOAD_INIT, next.phase());
         assertEquals("alice", next.candidates().getFirst().username());
         assertEquals(240, next.candidates().getFirst().length(), "the length now travels on the candidate too");
+        assertEquals("never gonna give you up", next.candidates().getFirst().wording(), "so a finished song says which search won");
     }
 
     @Test

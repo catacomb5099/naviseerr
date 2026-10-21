@@ -2349,6 +2349,21 @@ class DownloadTaskRepositoryIT {
     }
 
     @Test
+    void logSearch_appendsOneEntryPerSearch_evenWhenTheListIsKept() {
+        UUID id = admitOneSong("PENDING");
+        UUID task = taskIdOf(id);
+
+        repository.logSearch(task, new SearchLogEntry("song", 0, false, 250, 900, 2, 1, 40, 857, NOW)).block();
+        repository.logSearch(task, new SearchLogEntry("song - artist", 1, false, 0, 0, 0, 0, 0, 0, NOW.plusSeconds(9))).block();
+
+        String log = template.getDatabaseClient().sql("SELECT search_log::text AS l FROM download_tasks WHERE task_id = :id").bind("id", task)
+                .map((row, meta) -> row.get("l", String.class)).one().block();
+        assertTrue(log.startsWith("[{") && log.contains("\"wording\": \"song\"") && log.contains("\"responses\": 250")
+                && log.contains("\"wording\": \"song - artist\""), log);
+        assertTrue(log.indexOf("\"song\"") < log.indexOf("\"song - artist\""), "in the order searched: " + log);
+    }
+
+    @Test
     void saveSearchResults_anEmptyListStampsAFreshRow_butNeverWipesAListAnotherWordingFound() {
         UUID id = admitOneSong("PENDING");
         UUID task = taskIdOf(id);

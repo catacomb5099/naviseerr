@@ -383,11 +383,11 @@ class DownloadServiceTest {
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
         DownloadCandidate bob1 = new DownloadCandidate("bob", "music\\bob\\Definitely Maybe\\01 - Rock n Roll Star.flac", "",
-                null, 38_000_000L, 1L, false, true, 2, 1_500_000, "EXACT", DownloadCandidate.ALBUM_FOLDER, 322);
+                null, 38_000_000L, 1L, false, true, 2, 1_500_000, "EXACT", DownloadCandidate.ALBUM_FOLDER, 322, null);
         DownloadCandidate bob2 = new DownloadCandidate("bob", "music\\bob\\Definitely Maybe\\02 - Shakermaker.flac", "",
-                null, 30_000_000L, 1L, false, true, 2, 1_500_000, "EXACT", DownloadCandidate.ALBUM_FOLDER, 308);
+                null, 30_000_000L, 1L, false, true, 2, 1_500_000, "EXACT", DownloadCandidate.ALBUM_FOLDER, 308, null);
         DownloadCandidate carol2 = new DownloadCandidate("carol", "music\\carol\\DM\\02 - Shakermaker.mp3", "",
-                320, 12_000_000L, 1L, false, false, 9, 400_000, "EXACT", DownloadCandidate.ALBUM_FOLDER, 309);
+                320, 12_000_000L, 1L, false, false, 9, 400_000, "EXACT", DownloadCandidate.ALBUM_FOLDER, 309, null);
         when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(album("DONE", "WHOLE_FOLDER", List.of(
                 folder("bob", "music\\bob\\Definitely Maybe", new java.util.LinkedHashMap<>(Map.of(second, bob2, first, bob1))),
                 folder("carol", "music\\carol\\DM", Map.of(second, carol2))))));

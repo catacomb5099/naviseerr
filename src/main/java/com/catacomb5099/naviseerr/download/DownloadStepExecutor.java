@@ -175,7 +175,7 @@ public class DownloadStepExecutor {
                         .then(searchResultProcessor.selectBestFiles(full,
                                 SearchQueryTiers.pickerName(task.songName()), task.searchQuery(),
                                 task.albumTrackSeconds(), chosen))
-                        .map(selected -> selected.stream().map(DownloadCandidate::from).toList())
+                        .map(selected -> selected.stream().map(pick -> DownloadCandidate.from(pick, task.searchQuery())).toList())
                         .map(candidates -> stateMachine.afterSearchPoll(task, full, candidates, now))));
     }
 
@@ -184,7 +184,7 @@ public class DownloadStepExecutor {
      * first, the ones the matcher calls another song last; no cap, the owner's call of 08-10-2026, slskd's
      * own response and file limits bound it) on the row, for a person to choose from later without
      * searching again (manual pick, 07-10-2026; every file since 08-10-2026). This is the one moment the
-     * full result is in hand; slskd may age it out.
+     * full result is in hand; slskd may age it out. The search's counts go on the song's search log too (V22).
      * Its own statement, never part of the decision: a database hiccup here is logged and the song
      * carries on exactly as if nothing had been remembered, since a missing list costs a person a
      * retry while a failed search costs them the song.
@@ -192,8 +192,10 @@ public class DownloadStepExecutor {
     private Mono<Void> remember(DownloadTask task, SearchState full, DownloadQuality chosen, Instant now) {
         return Mono.fromCallable(() -> searchResultProcessor.allFiles(full,
                         SearchQueryTiers.pickerName(task.songName()), task.searchQuery(), chosen))
-                .flatMap(files -> repository.saveSearchResults(task.taskId(),
-                        files.stream().map(DownloadCandidate::from).toList(), now, task.searchQuery(), task.searchId()))
+                .map(files -> files.stream().map(pick -> DownloadCandidate.from(pick, task.searchQuery())).toList())
+                .flatMap(files -> repository.saveSearchResults(task.taskId(), files, now, task.searchQuery(), task.searchId())
+                        .then(repository.logSearch(task.taskId(), SearchLogEntry.of(task.searchQuery(), task.searchTier(),
+                                size(full.getResponses()), files, now))))
                 .onErrorResume(error -> {
                     log.warn("Could not remember the files search {} found for song {} of download {}; the "
                             + "manual picker will have nothing to show for it", task.searchId(), task.taskId(),

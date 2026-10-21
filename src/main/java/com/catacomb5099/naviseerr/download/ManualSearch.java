@@ -197,10 +197,13 @@ public class ManualSearch {
             SearchState state = result.getT1();
             Instant now = clock.instant();
             List<DownloadCandidate> files = processor.allFiles(state, SearchQueryTiers.pickerName(song.songName()), text, result.getT2())
-                    .stream().map(DownloadCandidate::from).toList();
+                    .stream().map(pick -> DownloadCandidate.from(pick, text)).toList();
             log.info("Manual search '{}' for song {} of download {}: slskd search {} ({}), {} file(s)", text, taskId,
                     downloadId, state.getId(), state.getState(), files.size());
-            return repository.saveSearchResults(taskId, files, now, text, state.getId()).thenReturn(DownloadService.view(song, files,
+            return repository.saveSearchResults(taskId, files, now, text, state.getId())
+                    .then(repository.logSearch(taskId, SearchLogEntry.of(text, null,
+                            state.getResponses() == null ? 0 : state.getResponses().size(), files, now)))
+                    .thenReturn(DownloadService.view(song, files,
                     files.isEmpty() ? PickListStatus.NONE : PickListStatus.READY, files.isEmpty() ? "NO_RESULTS" : null,
                     text, state.getId(), now));
             }));
