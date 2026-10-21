@@ -182,6 +182,27 @@ address, or start downloads until the disk is full). What the app does for you, 
 - **Nothing else of the API answers without a login** once it is on: a bot cannot search or download at
   all. Authentik's own login page takes the brute force, with its own limits and logs.
 
+### Help improve search (optional, off by default)
+
+naviseerr can share what worked for each song it downloads, so the search rules can be tuned on real
+results: the song's name, the words searched, how many files each search found and the file picked (its
+name, type, quality and length). Never Soulseek user names, your IP address or where your files are kept.
+Nothing is sent until you set an address AND switch **Settings → Help improve search** on, and only songs
+that finish after that moment are sent. To send to your own croissant (the playlist maker), add to
+`compose.override.yaml` (next to `compose.yaml`; create it if it is not there) and run `docker compose up -d`:
+
+```yaml
+services:
+  naviseerr:
+    environment:
+      SEARCH_LEARNING_URL: http://croissant:8010/v1/search-reports
+      # croissant's token: docker compose exec naviseerr cat /config/curator.token
+      SEARCH_LEARNING_TOKEN: <that token>
+```
+
+`GET /search-learning/reports` on your naviseerr shows the reports themselves (the same text that is sent),
+whether the switch is on or not.
+
 ### Updating
 
 ```sh

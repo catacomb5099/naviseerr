@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.util.Optional;
 
 /**
  * All {@code install_settings} SQL (V18, V19): the one row the first-run setup and the Settings page write.
@@ -67,6 +68,16 @@ public class InstallSettingsRepository {
 
     /** Null with no row, or a row where nothing was chosen: the default applies. */
     private static final String DOWNLOAD_QUALITY_SQL = "SELECT (SELECT download_quality FROM install_settings) AS quality";
+
+    /** On keeps the first switch-on moment (a second "on" does not move it); off clears it. */
+    private static final String SET_SEARCH_LEARNING_SQL = """
+            INSERT INTO install_settings (search_learning_since) VALUES (CASE WHEN :on THEN now() END)
+            ON CONFLICT (one) DO UPDATE SET search_learning_since =
+                CASE WHEN :on THEN COALESCE(install_settings.search_learning_since, now()) END, updated_at = now()
+            """;
+
+    /** Null with no row or the switch off. */
+    private static final String SEARCH_LEARNING_SINCE_SQL = "SELECT (SELECT search_learning_since FROM install_settings) AS since";
 
     private final DatabaseClient client;
 
@@ -148,6 +159,17 @@ public class InstallSettingsRepository {
                     return chosen == null ? DownloadQuality.DEFAULT : chosen;
                 })
                 .one();
+    }
+
+    /** "Help improve search" (search learning, V22): on from now, or off. */
+    public Mono<Void> setSearchLearning(boolean on) {
+        return client.sql(SET_SEARCH_LEARNING_SQL).bind("on", on).fetch().rowsUpdated().then();
+    }
+
+    /** When "Help improve search" was switched on; empty while it is off (the default). */
+    public Mono<Instant> searchLearningSince() {
+        return client.sql(SEARCH_LEARNING_SINCE_SQL).map(row -> Optional.ofNullable(row.get("since", Instant.class))).one()
+                .flatMap(Mono::justOrEmpty);
     }
 
     /** The stored word, or null for nothing chosen; V19's CHECK keeps it one of the five. */

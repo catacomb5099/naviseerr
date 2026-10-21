@@ -277,3 +277,17 @@ curator:
   # holds a CURATOR_TOKEN) must never start a 90-minute Discogs/YouTube run on its own. Empty = off.
   # Gated by the switch above too; switching it on in the app runs the same check at once.
   first-run-on-start: ${CURATOR_FIRST_RUN_ON_START:false}
+
+# "Help improve search" (search learning, 20-10-2026): while the person has switched it on in Settings, new reports of
+# successful searches (GET /search-learning/reports shows them) are POSTed in batches to url. Nothing is sent while
+# url is empty or the switch is off (the default). Point url at your croissant's POST /v1/search-reports with
+# token = its CURATOR_TOKEN, or at any server that accepts {schema, reports} JSON.
+# See docs/decisions/search-learning-20-10-2026.md.
+search-learning:
+  url: ${SEARCH_LEARNING_URL:}
+  # Sent as "Authorization: Bearer <token>" when set.
+  token: ${SEARCH_LEARNING_TOKEN:}
+  interval-ms: ${SEARCH_LEARNING_INTERVAL_MS:600000}
+  initial-delay-ms: 60000
+  batch-size: ${SEARCH_LEARNING_BATCH_SIZE:100}
+  timeout-ms: 30000
