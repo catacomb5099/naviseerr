@@ -42,6 +42,22 @@ public class MediaItems {
         };
     }
 
+    /** The playlist as naviseerr can see it; empty when that server has no such playlist. {@code userId}: Jellyfin's owner. */
+    public Mono<MediaPlaylist> playlist(MediaServer server, String playlistId, String userId) {
+        return switch (server) {
+            case NAVIDROME -> navidrome.playlist(playlistId);
+            case JELLYFIN -> jellyfin.playlist(playlistId, userId);
+        };
+    }
+
+    /** Adds one media-server song to the playlist; a {@link PlaylistProblem} when the server never will. */
+    public Mono<Void> addToPlaylist(MediaServer server, String playlistId, String userId, String songId) {
+        return switch (server) {
+            case NAVIDROME -> navidrome.addToPlaylist(playlistId, songId);
+            case JELLYFIN -> jellyfin.addToPlaylist(playlistId, songId, userId);
+        };
+    }
+
     /** {@code Oasis/Album/01 Wonderwall.mp3}: the filed path under the library root, '/'-separated. */
     String relativePath(String libraryPath) {
         Path file = Path.of(libraryPath).normalize();

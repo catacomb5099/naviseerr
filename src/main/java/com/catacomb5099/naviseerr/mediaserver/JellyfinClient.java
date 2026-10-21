@@ -153,6 +153,49 @@ public class JellyfinClient {
                 .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
     }
 
+    /**
+     * {@code GET /Playlists/{id}/Items?userId=}: the item ids in it as that user sees them. Empty when Jellyfin has
+     * no such playlist; "not editable" when the user may not use it (Jellyfin answers 403, as for a library
+     * {@code .m3u8}, which has no owner).
+     */
+    public Mono<MediaPlaylist> playlist(String playlistId, String userId) {
+        Connection c = current;
+        return c.http().get()
+                .uri(b -> b.path("/Playlists/{id}/Items").queryParam("userId", "{u}").build(playlistId, userId))
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(body -> new MediaPlaylist(false, songs(body).stream().map(SongFinder.Candidate::id).toList()))
+                .timeout(timeout)
+                .onErrorResume(error -> status(error) == 404 ? Mono.empty()
+                        : status(error) == 403 ? Mono.just(new MediaPlaylist(true, List.of())) : Mono.error(error))
+                .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
+    }
+
+    /** {@code POST /Playlists/{id}/Items?ids=&userId=}: only the owner (or an edit share) may; the API key acts as that user. */
+    public Mono<Void> addToPlaylist(String playlistId, String itemId, String userId) {
+        Connection c = current;
+        return c.http().post()
+                .uri(b -> b.path("/Playlists/{id}/Items").queryParam("ids", "{i}").queryParam("userId", "{u}")
+                        .build(playlistId, itemId, userId))
+                .retrieve()
+                .toBodilessEntity()
+                .then()
+                .timeout(timeout)
+                .onErrorMap(error -> status(error) == 404,
+                        error -> new PlaylistProblem(PlaylistProblem.Reason.PLAYLIST_GONE, "Jellyfin has no such playlist any more."))
+                .onErrorMap(error -> status(error) == 403, error -> notEditable())
+                .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
+    }
+
+    private static int status(Throwable error) {
+        return error instanceof WebClientResponseException http ? http.getStatusCode().value() : 0;
+    }
+
+    private static PlaylistProblem notEditable() {
+        return new PlaylistProblem(PlaylistProblem.Reason.NOT_EDITABLE,
+                "Jellyfin does not let this user add songs to this playlist (not theirs, or a playlist file).");
+    }
+
     /** The items of a Jellyfin {@code Items} answer as songs (id, album, path). */
     static List<SongFinder.Candidate> songs(JsonNode body) {
         List<SongFinder.Candidate> songs = new ArrayList<>();

@@ -239,6 +239,9 @@ media-servers:
   # whether it has imported the new playlist (36 tries, 3 minutes) and then sends the playlist's picture
   # through its image API. Navidrome reads the picture file next to the playlist by itself.
   cover-poll-ms: 5000
+  # How often songs people added to a playlist before they had them (POST /playlist-additions, for Feishin)
+  # are checked: once filed and listed by the media server they go in. One indexed SELECT per pass when idle.
+  playlist-additions-interval-ms: 15000
 
 # The install's data folder (NAVISEERR_DATA_DIR, /data in the compose install): where setup keeps
 # config/secrets.env and slskd/slskd.yml, the two files the Soulseek account lives in. Set, the web app
