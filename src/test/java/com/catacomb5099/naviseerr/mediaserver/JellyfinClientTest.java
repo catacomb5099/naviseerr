@@ -190,6 +190,28 @@ class JellyfinClientTest {
         assertEquals("MediaBrowser Token=\"new-key\"", server.takeRequest().getHeader("Authorization"));
     }
 
+    @Test
+    void findSong_listsAudioItemsWithTheirPath_andTakesTheOneEndingWithTheFiledFile() throws InterruptedException {
+        server.enqueue(json(200, """
+                {"Items":[
+                  {"Id":"twin","AlbumId":"b1","Name":"Wonderwall","Path":"/music/Oasis/Best Of/03 Wonderwall.flac"},
+                  {"Id":"jf1","AlbumId":"b2","Name":"Wonderwall","Path":"/music/Oasis/Morning Glory/03 Wonderwall.flac"}
+                ],"TotalRecordCount":2}
+                """));
+
+        StepVerifier.create(client.findSong(new SongFinder.Wanted("Wonderwall", List.of("Oasis"), 259,
+                        "Oasis/Morning Glory/03 Wonderwall.flac")))
+                .expectNext(new SongFinder.Found("jf1", "b2"))
+                .verifyComplete();
+
+        RecordedRequest request = server.takeRequest();
+        assertTrue(request.getPath().startsWith("/Items?"), request.getPath());
+        assertEquals("Audio", request.getRequestUrl().queryParameter("includeItemTypes"));
+        assertEquals("Wonderwall", request.getRequestUrl().queryParameter("searchTerm"));
+        assertEquals("Path", request.getRequestUrl().queryParameter("fields"));
+        assertFalse(request.getPath().contains("k3y"), "the key stays in the header");
+    }
+
     private static MockResponse json(int status, String body) {
         return new MockResponse().setResponseCode(status)
                 .addHeader("Content-Type", "application/json")

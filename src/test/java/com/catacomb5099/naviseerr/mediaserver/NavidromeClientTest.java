@@ -10,6 +10,7 @@ import reactor.test.StepVerifier;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -157,6 +158,50 @@ class NavidromeClientTest {
 
         fromInstallFile.reset();
         assertFalse(fromInstallFile.isConfigured());
+    }
+
+    @Test
+    void findSong_searchesTheTitle_thenTheFileName_andPicksByArtistAndLength() throws InterruptedException {
+        server.enqueue(json(200, """
+                {"subsonic-response":{"status":"ok","searchResult3":{}}}
+                """));
+        server.enqueue(json(200, """
+                {"subsonic-response":{"status":"ok","searchResult3":{"song":[
+                  {"id":"cover","albumId":"a1","title":"Wonderwall","artist":"Ryan Adams","duration":259,"path":"Ryan Adams/x.mp3","created":"2026-10-21T10:00:00Z"},
+                  {"id":"nd1","albumId":"a2","title":"Wonderwall","artist":"Various","albumArtists":[{"id":"x","name":"Oasis"}],"duration":258,"path":"Oasis/y.mp3","created":"2026-10-21T09:00:00Z"}
+                ]}}}
+                """));
+
+        StepVerifier.create(client.findSong(new SongFinder.Wanted("Wonderwall (Remastered)", List.of("Oasis"), 259,
+                        "Oasis/Morning Glory/03 Wonderwall.flac")))
+                .expectNext(new SongFinder.Found("nd1", "a2"))
+                .verifyComplete();
+
+        RecordedRequest first = server.takeRequest();
+        assertTrue(first.getPath().startsWith("/rest/search3?"), first.getPath());
+        assertEquals("Wonderwall (Remastered)", first.getRequestUrl().queryParameter("query"));
+        assertEquals("0", first.getRequestUrl().queryParameter("albumCount"));
+        assertFalse(first.getPath().contains("s3cret"));
+        assertEquals("Wonderwall", server.takeRequest().getRequestUrl().queryParameter("query"));
+    }
+
+    @Test
+    void findSong_nothingMatches_isEmpty_andASubsonicErrorIsASentence() {
+        server.enqueue(json(200, """
+                {"subsonic-response":{"status":"ok","searchResult3":{"song":[{"id":"x","artist":"Other","duration":259}]}}}
+                """));
+        StepVerifier.create(client.findSong(new SongFinder.Wanted("Wonderwall", List.of("Oasis"), 259, "Oasis/A/Wonderwall.mp3")))
+                .verifyComplete();
+
+        server.enqueue(json(200, """
+                {"subsonic-response":{"status":"failed","error":{"code":0,"message":"boom"}}}
+                """));
+        StepVerifier.create(client.findSong(new SongFinder.Wanted("Wonderwall", List.of("Oasis"), 259, "Oasis/A/Wonderwall.mp3")))
+                .expectErrorSatisfies(error -> {
+                    assertInstanceOf(MediaServerException.class, error);
+                    assertEquals("Navidrome refused the search: boom (Subsonic error 0)", error.getMessage());
+                })
+                .verify();
     }
 
     private static MockResponse json(int status, String body) {
