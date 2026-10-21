@@ -83,7 +83,10 @@ public class YtMusicSearchResponseMapper {
                 mapArtistIds(item.getArtists()),
                 item.getAlbum() != null ? orEmpty(item.getAlbum().getBrowseId()) : "",
                 0, // song search items carry no year; Track.year has no reader in the client
-                plays(item.getViews())
+                plays(item.getViews()),
+                item.getDurationSeconds(),
+                item.getAlbum() != null ? item.getAlbum().getName() : null,
+                item.getExplicit()
         );
     }
 
