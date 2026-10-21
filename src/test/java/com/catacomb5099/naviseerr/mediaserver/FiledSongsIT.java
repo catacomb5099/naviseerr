@@ -63,4 +63,18 @@ class FiledSongsIT {
                 new FiledSongs.FiledSong("a", "/music/new.mp3", "Wonderwall", List.of("Oasis"), 259),
                 new FiledSongs.FiledSong("c", "/music/c.mp3", "Album row title", List.of(), null)), songs);
     }
+
+    @Test
+    void newest_takesTheChosenFilesOwnLength_overYoutubes() {
+        template.getDatabaseClient()
+                .sql("INSERT INTO media_items (youtube_id, title, artists, duration_seconds) VALUES ('a', 'Wonderwall', '{Oasis}', 259)")
+                .fetch().rowsUpdated().block();
+        task("a", "/music/a.mp3", null, NOW);
+        template.getDatabaseClient()
+                .sql("UPDATE download_tasks SET candidates = '[{\"filename\":\"x\",\"length\":200},{\"filename\":\"y\",\"length\":301}]', "
+                        + "candidate_index = 1")
+                .fetch().rowsUpdated().block();
+
+        assertEquals(301, filed.newest(List.of("a")).blockFirst().durationSeconds());
+    }
 }

@@ -8,7 +8,7 @@ import reactor.core.publisher.Flux;
 import java.util.Arrays;
 import java.util.List;
 
-/** Songs naviseerr filed into the library, with what it knows about them from YouTube: the input of {@link SongFinder}. */
+/** Songs naviseerr filed into the library, with what it knows about them (from YouTube, and the file's length): the input of {@link SongFinder}. */
 @Repository
 public class FiledSongs {
 
@@ -17,7 +17,9 @@ public class FiledSongs {
     private static final String NEWEST_SQL = """
             SELECT DISTINCT ON (t.youtube_id) t.youtube_id, t.library_path,
                    COALESCE(t.track_title, m.title, t.song_name) AS title, m.artists,
-                   COALESCE(t.duration_seconds, m.duration_seconds) AS duration_seconds
+                   -- the chosen file's own length as slskd reported it, so a manual pick of another length still matches
+                   COALESCE((t.candidates::jsonb -> t.candidate_index ->> 'length')::int,
+                            t.duration_seconds, m.duration_seconds) AS duration_seconds
               FROM download_tasks t
               LEFT JOIN media_items m ON m.youtube_id = t.youtube_id
              WHERE t.youtube_id = ANY(:ids)

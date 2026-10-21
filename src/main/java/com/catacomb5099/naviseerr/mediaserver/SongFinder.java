@@ -1,5 +1,7 @@
 package com.catacomb5099.naviseerr.mediaserver;
 
+import com.catacomb5099.naviseerr.services.slskd.SlskdSearchResultProcessor;
+
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -13,20 +15,20 @@ import java.util.regex.Pattern;
  * path relative to the library root, which is a suffix of the media server's own path whatever its mount.
  * Jellyfin shows real paths, so it is matched by path only (exact). Navidrome's Subsonic API hides them
  * unless the player asks for real paths, so there a path suffix still wins, and otherwise the song must
- * carry the first YouTube artist (case and accents folded) and be within {@link #LENGTH_TOLERANCE_S} of the
- * YouTube length; the newest such song wins a tie (an album twin is the same song).
+ * carry the first YouTube artist (case and accents folded) and be within the picker's own length rule
+ * ({@link SlskdSearchResultProcessor#lengthTolerance}, max(10 s, 3%)) of the filed file's length; the newest
+ * such song wins a tie (an album twin is the same song).
  */
 // ponytail: Navidrome is matched by artist + length, not by file; its native /api/song (with path) is the
 // upgrade if wrong picks ever show up.
 public final class SongFinder {
 
-    static final int LENGTH_TOLERANCE_S = 3;
     private static final Pattern TRACK_NUMBER = Pattern.compile("^\\d{1,3}\\s*[-._)]?\\s*");
     private static final Pattern MARKS = Pattern.compile("\\p{M}+");
 
     private SongFinder() {}
 
-    /** A song naviseerr filed: YouTube's title, artists and length, and the file's path relative to the library root ('/'-separated). */
+    /** A song naviseerr filed: YouTube's title and artists, the file's length (else YouTube's), and its path relative to the library root ('/'-separated). */
     public record Wanted(String title, List<String> artists, Integer durationSeconds, String relativePath) {}
 
     /** One song a media server listed; {@code artists} is every artist text it gave (song and album artist). */
@@ -65,7 +67,8 @@ public final class SongFinder {
         return found.stream()
                 .filter(c -> artist == null || (c.artists() != null && fold(c.artists()).contains(artist)))
                 .filter(c -> wanted.durationSeconds() == null || (c.durationSeconds() != null
-                        && Math.abs(c.durationSeconds() - wanted.durationSeconds()) <= LENGTH_TOLERANCE_S))
+                        && Math.abs(c.durationSeconds() - wanted.durationSeconds())
+                                <= SlskdSearchResultProcessor.lengthTolerance(wanted.durationSeconds())))
                 .max(Comparator.comparing(c -> c.created() == null ? "" : c.created()))
                 .map(SongFinder::found);
     }

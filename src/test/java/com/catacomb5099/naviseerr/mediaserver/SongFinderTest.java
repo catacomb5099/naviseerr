@@ -49,6 +49,16 @@ class SongFinderTest {
     }
 
     @Test
+    void byPathOrTags_takesTheSameLengthRuleAsThePicker() {
+        assertEquals("off6", SongFinder.byPathOrTags(WONDERWALL,
+                List.of(song("off6", "Oasis/A/Wonderwall.mp3", "Oasis", 265, null))).orElseThrow().id(),
+                "a real download 6 s off YouTube's length is still the song");
+        assertTrue(SongFinder.byPathOrTags(WONDERWALL,
+                List.of(song("off11", "Oasis/A/Wonderwall.mp3", "Oasis", 270, null))).isEmpty(),
+                "max(10 s, 3%): 11 s off a 259 s song is another take");
+    }
+
+    @Test
     void byPathOrTags_aRealPathWins_andAccentsAndCaseAreFolded() {
         SongFinder.Wanted beyonce = new SongFinder.Wanted("Halo", List.of("Beyoncé"), 261, "Beyoncé/I Am/01 Halo.mp3");
         List<SongFinder.Candidate> found = List.of(
