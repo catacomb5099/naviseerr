@@ -17,6 +17,9 @@ spring:
     url: ${SPRING_R2DBC_URL:r2dbc:postgresql://localhost:5432/naviseerr}
     username: ${SPRING_R2DBC_USERNAME:naviseerr}
     password: ${SPRING_R2DBC_PASSWORD:naviseerr}
+    # Open one connection at start, not ten: each idle one costs Postgres about 3 MB. max-size stays 10.
+    pool:
+      initial-size: 1
   sql:
     init:
       mode: never

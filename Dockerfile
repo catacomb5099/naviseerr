@@ -44,6 +44,11 @@ ENV SPRING_R2DBC_URL=r2dbc:postgresql://postgres:5432/naviseerr \
     CURATOR_URL=http://croissant:8010 \
     CURATOR_FIRST_RUN_ON_START=true \
     LOGGING_LEVEL_COM_CATACOMB5099_NAVISEERR_DOWNLOAD=INFO
+# A small, mostly idle app: a fixed small heap whatever the host's RAM, and no per-CPU malloc pools
+# (together about 450 -> 180 MB idle, docs/decisions/idle-memory-20-10-2026.md). Set JDK_JAVA_OPTIONS
+# on the container to replace the flags, or to "" for the JVM's own defaults.
+ENV JDK_JAVA_OPTIONS="-XX:+UseSerialGC -Xms32m -Xmx512m -XX:TieredStopAtLevel=1 -XX:+ExitOnOutOfMemoryError" \
+    MALLOC_ARENA_MAX=2
 COPY --from=build /src/build/libs/*.jar app.jar
 # Default user; compose's `user: ${PUID}:${PGID}` overrides it. Numeric, so no passwd entry needed.
 USER 1000:1000
