@@ -182,7 +182,8 @@ Decisions:
    `search_id` to its slskd id (`saveSearchResults` with the id, review of 19-10-2026, so the reopened pop-up's grey
    line points at the right search in slskd), and the response names the text, but a reopened pop-up re-derives the
    loop's own wording for the header. A `search_results_query` column written by `saveSearchResults` and read by
-   `CACHED_SEARCH_SQL` is the fix; the next migration slot belongs to another change this sweep.
+   `CACHED_SEARCH_SQL` is the fix; the next migration slot belongs to another change this sweep. **Done 20-10-2026**
+   (V21, [persistent-manual-search-20-10-2026.md](persistent-manual-search-20-10-2026.md)).
 8. **Refused while the loop's own search runs** (review of 19-10-2026): a song in `SEARCH_INIT`/`SEARCH_POLL`, or an
    album whose `album_searches` phase is not `DONE`, answers 409 `SEARCH_RUNNING` (`ManualSearch.SearchRunningException`;
    the album variant writes `album_searches.search_id` too); the pop-up hides the box then, but its list can be

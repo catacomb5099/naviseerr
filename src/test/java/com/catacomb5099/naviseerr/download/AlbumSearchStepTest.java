@@ -51,7 +51,7 @@ class AlbumSearchStepTest {
         when(repository.waitingAlbumSongs(any(), any())).thenReturn(Flux.just(song));
         when(repository.saveAlbumSearch(any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(repository.releaseAlbumSongs(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
-        when(repository.saveAlbumFolders(any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.saveAlbumFolders(any(), any(), any(), any(), any())).thenReturn(Mono.just(1L));
     }
 
     private static AlbumSearch album(DownloadPhase phase, int tier) {
@@ -282,7 +282,7 @@ class AlbumSearchStepTest {
             StoredFolder f = folders.getFirst();
             return f.username().equals("Baron53") && f.queueLength() == 3 && f.uploadSpeed() == 1_500_000
                     && f.extras() == 2 && f.files().get(song.taskId()).length() == 333;
-        }), eq(T0.plusSeconds(4)));
+        }), eq(T0.plusSeconds(4)), eq("Laughing Stock"), eq("s1"));
         order.verify(repository).releaseAlbumSongs(eq(DOWNLOAD), eq("me"), eq(AlbumSearch.Outcome.WHOLE_FOLDER), any(), any());
     }
 
@@ -306,7 +306,7 @@ class AlbumSearchStepTest {
         verify(repository).saveAlbumFolders(eq(DOWNLOAD), argThat(folders -> folders.size() == 2
                 && folders.get(0).username().equals("a") && Boolean.TRUE.equals(folders.get(0).judged())
                 && folders.get(1).username().equals("b") && Boolean.FALSE.equals(folders.get(1).judged())
-                && folders.get(1).files().get(song.taskId()).bitRate() == 128), eq(T0.plusSeconds(4)));
+                && folders.get(1).files().get(song.taskId()).bitRate() == 128), eq(T0.plusSeconds(4)), any(), any());
         // The search itself still takes the judged folder only.
         verify(repository).releaseAlbumSongs(eq(DOWNLOAD), eq("me"), eq(AlbumSearch.Outcome.WHOLE_FOLDER),
                 eq(Map.of(song.taskId(), List.of(DownloadCandidate.fromAlbumFolder(a, aFile)))), any());
@@ -319,13 +319,13 @@ class AlbumSearchStepTest {
         when(picker.folders(any(), any(), any(), any(), any(), any())).thenReturn(List.of());
         step.step(album(DownloadPhase.SEARCH_POLL, 1),
                 Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
-        verify(repository, never()).saveAlbumFolders(any(), any(), any());
+        verify(repository, never()).saveAlbumFolders(any(), any(), any(), any(), any());
 
         SearchFile file = new SearchFile("A\\1.mp3", 1L, 1L, false, "", Optional.of(320), Optional.of(333));
         SearchResponseItem a = new SearchResponseItem(1, List.of(file), true, 0, List.of(), 0, 1, 1, "a");
         when(picker.folders(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of(new AlbumFolderPicker.Folder(a, "A", Map.of(song.taskId(), file), 0)));
-        when(repository.saveAlbumFolders(any(), any(), any())).thenReturn(Mono.error(new RuntimeException("database away")));
+        when(repository.saveAlbumFolders(any(), any(), any(), any(), any())).thenReturn(Mono.error(new RuntimeException("database away")));
         step.step(album(DownloadPhase.SEARCH_POLL, 1),
                 Map.of("s1", SlskdFixtures.searchState("s1", true, "Completed")), T0.plusSeconds(4), "me").block();
         verify(repository).releaseAlbumSongs(eq(DOWNLOAD), eq("me"), eq(AlbumSearch.Outcome.WHOLE_FOLDER), any(), any());

@@ -1030,11 +1030,14 @@ public class DownloadTaskRepository {
      * cache the loop never reads, written by the step that holds the full result. An EMPTY list only
      * lands on a row that has nothing yet (stamping "searched, nothing relevant"); it never wipes a list
      * an earlier wording found -- the title alone and "title - artist" each see files the other misses.
+     * The words and slskd id go with the list (V21), so the pop-up names the search the list came from.
      */
     private static final String SAVE_SEARCH_RESULTS_SQL = """
             UPDATE download_tasks
                SET search_results = :files::jsonb,
                    search_results_at = :now,
+                   search_results_query = :query,
+                   search_results_search_id = :searchId,
                    search_id = COALESCE(:searchId, search_id)
              WHERE task_id = :id
                AND (search_results_at IS NULL OR jsonb_array_length(:files::jsonb) > 0)
@@ -1044,7 +1047,7 @@ public class DownloadTaskRepository {
     private static final String CACHED_SEARCH_SQL = """
             SELECT task_id, phase, song_name, search_tier, candidates, candidate_index, library_path,
                    slskd_filename, search_results::text AS search_results, search_results_at,
-                   search_id, failure_reason
+                   search_id, failure_reason, search_results_query, search_results_search_id
               FROM download_tasks
              WHERE download_id = :id
                AND task_id = :taskId
@@ -1055,6 +1058,8 @@ public class DownloadTaskRepository {
             UPDATE album_searches
                SET folders = :folders::jsonb,
                    folders_at = :now,
+                   folders_query = :query,
+                   folders_search_id = :searchId,
                    search_id = COALESCE(:searchId, search_id)
              WHERE download_id = :id
             """;
@@ -1066,7 +1071,8 @@ public class DownloadTaskRepository {
      */
     private static final String CACHED_ALBUM_SEARCH_SQL = """
             SELECT d.download_type, a.phase, a.outcome, a.search_tier, m.title, m.artists,
-                   a.folders::text AS folders, a.folders_at, a.search_id, a.finished_at
+                   a.folders::text AS folders, a.folders_at, a.search_id, a.finished_at,
+                   a.folders_query, a.folders_search_id
               FROM downloads d
               LEFT JOIN album_searches a ON a.download_id = d.download_id
               LEFT JOIN media_items m ON m.youtube_id = d.youtube_id
@@ -1619,12 +1625,13 @@ public class DownloadTaskRepository {
      * {@link DownloadPhase} includes the two terminal values. {@code searchId} is slskd's id for the
      * song's own search (null when it never searched on its own: an album's song handed a folder file,
      * or a search slskd never took); {@code failureReason} the row's failure code, so an empty list can
-     * say whether the search ever completed (09-10-2026).
+     * say whether the search ever completed (09-10-2026). {@code filesQuery} and {@code filesSearchId} are the
+     * words and slskd id of the search that found {@code files} (null on rows from before V21).
      */
     public record CachedSearch(UUID taskId, String phase, String songName, int searchTier,
                                List<DownloadCandidate> candidates, int candidateIndex, String libraryPath,
                                String slskdFilename, List<DownloadCandidate> files, Instant searchedAt,
-                               String searchId, String failureReason) {
+                               String searchId, String failureReason, String filesQuery, String filesSearchId) {
         /** The file this song is downloading (or downloaded) from; null before any was chosen. */
         public DownloadCandidate current() {
             return candidateIndex >= 0 && candidateIndex < candidates.size() ? candidates.get(candidateIndex) : null;
@@ -1637,11 +1644,13 @@ public class DownloadTaskRepository {
      * wording it searched with; {@code folders} is empty with a null {@code foldersAt} when nothing was
      * remembered. {@code searchId} is slskd's id for the album search (null when slskd never took it)
      * and {@code finishedAt} when the search ended, so a row from before V15 can still say when it
-     * searched (09-10-2026).
+     * searched (09-10-2026). {@code foldersQuery} and {@code foldersSearchId} are the words and slskd id of the
+     * search that found {@code folders} (null on rows from before V21).
      */
     public record CachedAlbumSearch(DownloadType type, String phase, String outcome, Integer searchTier,
                                     String title, List<String> artists, List<StoredFolder> folders,
-                                    Instant foldersAt, String searchId, Instant finishedAt) {
+                                    Instant foldersAt, String searchId, Instant finishedAt,
+                                    String foldersQuery, String foldersSearchId) {
         /** The folders that hold a file for this song: the list a song inside an album chooses from. */
         public List<StoredFolder> holding(UUID taskId) {
             return folders.stream().filter(folder -> folder.files().containsKey(taskId)).toList();
@@ -1693,21 +1702,17 @@ public class DownloadTaskRepository {
                 .all();
     }
 
-    /** Remembers what a completed search found for the manual picker; see SAVE_SEARCH_RESULTS_SQL. */
-    public Mono<Long> saveSearchResults(UUID taskId, List<DownloadCandidate> files, Instant now) {
-        return saveSearchResults(taskId, files, now, null);
-    }
-
     /**
-     * The same, also making {@code searchId} the song's search id when given: a person's own search
-     * ({@link ManualSearch}) is then the one the reopened pop-up's grey line points at. The loop passes
-     * nothing (its id is already on the row).
+     * Remembers what a completed search found for the manual picker, with the words ({@code query}) and slskd
+     * id of that search; see SAVE_SEARCH_RESULTS_SQL. A non-null {@code searchId} also becomes the row's own,
+     * so a song that never searched on its own still names a person's search.
      */
-    public Mono<Long> saveSearchResults(UUID taskId, List<DownloadCandidate> files, Instant now, String searchId) {
-        return bindNullable(client.sql(SAVE_SEARCH_RESULTS_SQL)
+    public Mono<Long> saveSearchResults(UUID taskId, List<DownloadCandidate> files, Instant now, String query,
+                                        String searchId) {
+        return bindNullable(bindNullable(client.sql(SAVE_SEARCH_RESULTS_SQL)
                 .bind("id", taskId)
                 .bind("files", writeCandidates(files))
-                .bind("now", now), "searchId", searchId)
+                .bind("now", now), "query", query), "searchId", searchId)
                 .fetch()
                 .rowsUpdated();
     }
@@ -1729,27 +1734,25 @@ public class DownloadTaskRepository {
                         readCandidates(row.get("search_results", String.class)),
                         row.get("search_results_at", Instant.class),
                         row.get("search_id", String.class),
-                        row.get("failure_reason", String.class)))
+                        row.get("failure_reason", String.class),
+                        row.get("search_results_query", String.class),
+                        row.get("search_results_search_id", String.class)))
                 .one();
     }
 
-    /** Remembers the folders an album search judged, best first; see SAVE_ALBUM_FOLDERS_SQL. */
-    public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now) {
-        return saveAlbumFolders(downloadId, folders, now, null);
-    }
-
-    /** The same, also making {@code searchId} the album search's id when given (a person's own search, {@link ManualSearch}). */
-    public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now, String searchId) {
+    /** Remembers the folders an album search judged, best first, with that search's words and slskd id; see SAVE_ALBUM_FOLDERS_SQL. */
+    public Mono<Long> saveAlbumFolders(UUID downloadId, List<StoredFolder> folders, Instant now, String query,
+                                       String searchId) {
         String json;
         try {
             json = objectMapper.writeValueAsString(folders);
         } catch (Exception e) {
             return Mono.error(new IllegalStateException("Could not serialise album folders", e));
         }
-        return bindNullable(client.sql(SAVE_ALBUM_FOLDERS_SQL)
+        return bindNullable(bindNullable(client.sql(SAVE_ALBUM_FOLDERS_SQL)
                 .bind("id", downloadId)
                 .bind("folders", json)
-                .bind("now", now), "searchId", searchId)
+                .bind("now", now), "query", query), "searchId", searchId)
                 .fetch()
                 .rowsUpdated();
     }
@@ -1768,7 +1771,9 @@ public class DownloadTaskRepository {
                         readFolders(row.get("folders", String.class)),
                         row.get("folders_at", Instant.class),
                         row.get("search_id", String.class),
-                        row.get("finished_at", Instant.class)))
+                        row.get("finished_at", Instant.class),
+                        row.get("folders_query", String.class),
+                        row.get("folders_search_id", String.class)))
                 .one();
     }
 

@@ -50,14 +50,14 @@ class ManualSearchTest {
 
     private static DownloadTaskRepository.CachedSearch song() {
         return new DownloadTaskRepository.CachedSearch(UUID.randomUUID(), "FAILED", "Common People - Pulp", 1, List.of(), 0,
-                null, null, List.of(), NOW.minusSeconds(600), "old-search", "NO_CANDIDATES");
+                null, null, List.of(), NOW.minusSeconds(600), "old-search", "NO_CANDIDATES", null, null);
     }
 
     @BeforeEach
     void defaults() {
         when(settings.downloadQuality()).thenReturn(Mono.just(DownloadQuality.DEFAULT));
         when(repository.cachedSearch(downloadId, taskId)).thenReturn(Mono.just(song()));
-        when(repository.saveSearchResults(eq(taskId), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.saveSearchResults(eq(taskId), any(), any(), any(), any())).thenReturn(Mono.just(1L));
         when(slskd.searchResults("Common People Pulp 1995")).thenReturn(Mono.just(SlskdFixtures.searchState("new-1", false, "InProgress")));
     }
 
@@ -84,9 +84,9 @@ class ManualSearchTest {
                 .verifyComplete();
 
         verify(slskd, times(3)).getSearchWithResponses("new-1");
-        // The new slskd id lands on the row too, so a reopened pop-up's grey line points at THIS search.
+        // The typed words and the new slskd id are stored with the list, so a reopened pop-up names THIS search.
         verify(repository).saveSearchResults(eq(taskId), argThat(files -> files.size() == 1
-                && files.getFirst().filename().equals(file.getFilename())), eq(NOW), eq("new-1"));
+                && files.getFirst().filename().equals(file.getFilename())), eq(NOW), eq("Common People Pulp 1995"), eq("new-1"));
         assertEquals(0, search.inFlight(), "the slot is given back when the search ends");
     }
 
@@ -125,7 +125,7 @@ class ManualSearchTest {
                 .verifyComplete();
 
         // SAVE_SEARCH_RESULTS_SQL itself decides: an empty list never wipes a remembered one.
-        verify(repository).saveSearchResults(eq(taskId), eq(List.of()), eq(NOW), eq("new-1"));
+        verify(repository).saveSearchResults(eq(taskId), eq(List.of()), eq(NOW), any(), eq("new-1"));
     }
 
     @Test
@@ -139,7 +139,7 @@ class ManualSearchTest {
                 .verify();
 
         assertEquals(0, search.inFlight(), "the slot is given back on an error too");
-        verify(repository, never()).saveSearchResults(any(), any(), any(), any());
+        verify(repository, never()).saveSearchResults(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -160,7 +160,7 @@ class ManualSearchTest {
     @Test
     void whileTheLoopsOwnSearchRuns_theSongIsRefused_withoutSearching() {
         when(repository.cachedSearch(downloadId, taskId)).thenReturn(Mono.just(new DownloadTaskRepository.CachedSearch(
-                taskId, "SEARCH_POLL", "Common People - Pulp", 0, List.of(), 0, null, null, List.of(), null, "loop-1", null)));
+                taskId, "SEARCH_POLL", "Common People - Pulp", 0, List.of(), 0, null, null, List.of(), null, "loop-1", null, null, null)));
 
         StepVerifier.create(search.song(downloadId, taskId, "Common People Pulp 1995"))
                 .expectError(ManualSearch.SearchRunningException.class)
@@ -184,7 +184,7 @@ class ManualSearchTest {
 
     private static DownloadTaskRepository.CachedAlbumSearch album(DownloadType type, String phase) {
         return new DownloadTaskRepository.CachedAlbumSearch(type, phase, "NO_WHOLE_FOLDER", 0, "Definitely Maybe",
-                List.of("Oasis"), List.of(), null, "old-album-search", NOW.minusSeconds(900));
+                List.of("Oasis"), List.of(), null, "old-album-search", NOW.minusSeconds(900), null, null);
     }
 
     private AlbumFolderPicker.Folder folder(String username, String path, UUID... tasks) {
@@ -206,7 +206,7 @@ class ManualSearchTest {
         when(repository.songPicks(downloadId)).thenReturn(reactor.core.publisher.Flux.just(
                 new DownloadTaskRepository.SongPick(done, 3, "Live Forever", "SUCCEEDED", null),
                 new DownloadTaskRepository.SongPick(waiting, 5, "Columbia", "FAILED", null)));
-        when(repository.saveAlbumFolders(eq(downloadId), any(), eq(NOW), eq("new-2"))).thenReturn(Mono.just(1L));
+        when(repository.saveAlbumFolders(eq(downloadId), any(), eq(NOW), any(), eq("new-2"))).thenReturn(Mono.just(1L));
         when(slskd.searchResults("Definitely Maybe 1994 flac")).thenReturn(Mono.just(SlskdFixtures.searchState("new-2", false, "InProgress")));
         SearchState doneState = SlskdFixtures.searchStateWithResponses("new-2", true, "Completed, TimedOut", List.of(peer));
         when(slskd.getSearchWithResponses("new-2")).thenReturn(Mono.just(doneState));
@@ -233,7 +233,7 @@ class ManualSearchTest {
                 .verifyComplete();
 
         verify(repository).saveAlbumFolders(eq(downloadId), argThat(folders -> folders.size() == 2
-                && folders.get(0).username().equals("vinyl") && Boolean.TRUE.equals(folders.get(0).judged())), eq(NOW), eq("new-2"));
+                && folders.get(0).username().equals("vinyl") && Boolean.TRUE.equals(folders.get(0).judged())), eq(NOW), eq("Definitely Maybe 1994 flac"), eq("new-2"));
         // Every folder is shown, stalling sharer or not: the filter the album search applies is not applied here.
         verify(picker).folders(any(), any(), any(), any(), argThat(stalling -> !stalling.test("anyone")), any());
     }
@@ -258,7 +258,7 @@ class ManualSearchTest {
                 })
                 .verifyComplete();
 
-        verify(repository, never()).saveAlbumFolders(any(), any(), any(), any());
+        verify(repository, never()).saveAlbumFolders(any(), any(), any(), any(), any());
     }
 
     @Test

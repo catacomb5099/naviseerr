@@ -193,7 +193,7 @@ public class DownloadStepExecutor {
         return Mono.fromCallable(() -> searchResultProcessor.allFiles(full,
                         SearchQueryTiers.pickerName(task.songName()), task.searchQuery(), chosen))
                 .flatMap(files -> repository.saveSearchResults(task.taskId(),
-                        files.stream().map(DownloadCandidate::from).toList(), now))
+                        files.stream().map(DownloadCandidate::from).toList(), now, task.searchQuery(), task.searchId()))
                 .onErrorResume(error -> {
                     log.warn("Could not remember the files search {} found for song {} of download {}; the "
                             + "manual picker will have nothing to show for it", task.searchId(), task.taskId(),

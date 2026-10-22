@@ -169,7 +169,7 @@ class DownloadServiceTest {
                                                      String searchId, DownloadFailureCode failureReason) {
         return new DownloadTaskRepository.CachedSearch(taskId, phase, "Live Forever (Official Video) - Oasis", 0,
                 candidates, 0, null, candidates.isEmpty() ? null : candidates.getFirst().filename(), files, searchedAt,
-                searchId, failureReason == null ? null : failureReason.name());
+                searchId, failureReason == null ? null : failureReason.name(), null, null);
     }
 
     private static final Instant ENDED = NOW.minusSeconds(30);
@@ -177,7 +177,7 @@ class DownloadServiceTest {
     /** A DONE album search ended at {@link #ENDED} under slskd's id {@code s-album}; folders remembered at NOW. */
     private static DownloadTaskRepository.CachedAlbumSearch album(String phase, String outcome, List<StoredFolder> folders) {
         return new DownloadTaskRepository.CachedAlbumSearch(DownloadType.ALBUM, phase, outcome, 0, "Definitely Maybe",
-                List.of("Oasis"), folders, folders.isEmpty() ? null : NOW, "s-album", "DONE".equals(phase) ? ENDED : null);
+                List.of("Oasis"), folders, folders.isEmpty() ? null : NOW, "s-album", "DONE".equals(phase) ? ENDED : null, null, null);
     }
 
     private static StoredFolder folder(String username, String path, Map<UUID, DownloadCandidate> files) {
@@ -210,7 +210,7 @@ class DownloadServiceTest {
     void candidates_withNothingRemembered_whileSearching_isSearching() {
         when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(song("SEARCH_POLL", List.of(), List.of(), null)));
         when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(new DownloadTaskRepository.CachedAlbumSearch(
-                DownloadType.SONG, null, null, null, null, List.of(), List.of(), null, null, null)));
+                DownloadType.SONG, null, null, null, null, List.of(), List.of(), null, null, null, null, null)));
 
         TaskCandidatesView view = service.candidates(id, taskId).block();
 
@@ -236,13 +236,13 @@ class DownloadServiceTest {
 
         when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(new DownloadTaskRepository.CachedSearch(taskId,
                 "SUCCEEDED", "Live Forever - Oasis", 0, List.of(), 0, "/music/Oasis/Live Forever.flac", null, List.of(), null,
-                null, null)));
+                null, null, null, null)));
         assertEquals("ALREADY_IN_LIBRARY", service.candidates(id, taskId).block().reason());
 
         // An album's copy of another album's file (19-10-2026): a file name, no library path yet, never searched.
         when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(new DownloadTaskRepository.CachedSearch(taskId,
                 "SUCCEEDED", "Supersonic - Oasis", 0, List.of(), 0, null,
-                LibraryOrganiser.COPY_PREFIX + "abc\\06 - Supersonic.flac", List.of(), null, null, null)));
+                LibraryOrganiser.COPY_PREFIX + "abc\\06 - Supersonic.flac", List.of(), null, null, null, null, null)));
         assertEquals("ALREADY_IN_LIBRARY", service.candidates(id, taskId).block().reason());
     }
 
@@ -322,6 +322,48 @@ class DownloadServiceTest {
     }
 
     @Test
+    void candidates_ofAnAlbumsSong_namesTheAlbumSearchItsFoldersCameFrom() {
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(song("DOWNLOAD_INIT", List.of(), List.of(), null)));
+        when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(album("DONE", "WHOLE_FOLDER",
+                List.of(folder("bob", "music/bob", Map.of(taskId, candidate("bob")))))));
+
+        TaskCandidatesView view = service.candidates(id, taskId).block();
+
+        assertEquals("Definitely Maybe", view.query(), "the album's wording, not the song's, which was never searched");
+        assertEquals("s-album", view.searchId());
+        assertEquals(NOW, view.searchedAt());
+    }
+
+    @Test
+    void candidates_nameTheSearchTheListCameFrom_notTheLoopsLatestWording() {
+        // The title alone found files; "title - artist" then found nothing and left them (SAVE_SEARCH_RESULTS_SQL).
+        DownloadTaskRepository.CachedSearch song = new DownloadTaskRepository.CachedSearch(taskId, "FAILED",
+                "Zebra Tune - Nobody", 2, List.of(), 0, null, null, candidates("alice"), NOW, "s-third", "NO_CANDIDATES",
+                "Zebra Tune", "s-first");
+        when(repository.cachedSearch(id, taskId)).thenReturn(Mono.just(song));
+
+        TaskCandidatesView view = service.candidates(id, taskId).block();
+
+        assertEquals("Zebra Tune", view.query());
+        assertEquals("s-first", view.searchId());
+    }
+
+    @Test
+    void albumCandidates_nameTheSearchTheFoldersCameFrom_whenStored() {
+        DownloadTaskRepository.CachedAlbumSearch stored = new DownloadTaskRepository.CachedAlbumSearch(DownloadType.ALBUM,
+                "DONE", "WHOLE_FOLDER", 0, "Definitely Maybe", List.of("Oasis"),
+                List.of(folder("bob", "music/bob", Map.of(taskId, candidate("bob")))), NOW, "s-album", ENDED,
+                "Definitely Maybe 1994 flac", "s-mine");
+        when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(stored));
+        when(repository.songPicks(id)).thenReturn(Flux.empty());
+
+        AlbumCandidatesView view = service.albumCandidates(id).block();
+
+        assertEquals("Definitely Maybe 1994 flac", view.query());
+        assertEquals("s-mine", view.searchId());
+    }
+
+    @Test
     void candidates_ofAnUnknownSong_isEmpty() {
         when(repository.cachedSearch(id, taskId)).thenReturn(Mono.empty());
         assertTrue(service.candidates(id, taskId).blockOptional().isEmpty());
@@ -330,7 +372,7 @@ class DownloadServiceTest {
     @Test
     void albumCandidates_ofASongDownload_isNotAnAlbum() {
         when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(new DownloadTaskRepository.CachedAlbumSearch(
-                DownloadType.PLAYLIST, null, null, null, "Britpop", List.of(), List.of(), null, null, null)));
+                DownloadType.PLAYLIST, null, null, null, "Britpop", List.of(), List.of(), null, null, null, null, null)));
 
         assertThrows(DownloadService.NotAnAlbumException.class, () -> service.albumCandidates(id).block());
         verify(repository, never()).songPicks(any());
@@ -458,7 +500,7 @@ class DownloadServiceTest {
     @Test
     void albumPick_ofAPlaylist_isNotAnAlbum_andAnUnknownDownloadIsEmpty() {
         when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(new DownloadTaskRepository.CachedAlbumSearch(
-                DownloadType.PLAYLIST, null, null, null, "Britpop", List.of(), List.of(), null, null, null)));
+                DownloadType.PLAYLIST, null, null, null, "Britpop", List.of(), List.of(), null, null, null, null, null)));
         assertThrows(DownloadService.NotAnAlbumException.class, () -> service.albumPick(id, "bob", "x", NOW).block());
 
         when(repository.cachedAlbumSearch(id)).thenReturn(Mono.empty());
@@ -470,7 +512,7 @@ class DownloadServiceTest {
         when(repository.songPicks(id)).thenReturn(Flux.empty());
 
         when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(new DownloadTaskRepository.CachedAlbumSearch(
-                DownloadType.ALBUM, null, null, null, "Old", List.of("Band"), List.of(), null, null, null)));
+                DownloadType.ALBUM, null, null, null, "Old", List.of("Band"), List.of(), null, null, null, null, null)));
         assertEquals("NO_ALBUM_SEARCH", service.albumCandidates(id).block().reason());
 
         when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(album("SEARCH_POLL", null, List.of())));
@@ -492,7 +534,7 @@ class DownloadServiceTest {
         // the outcome as it is: a refused search is not "nobody shared enough" (09-10-2026)
         for (String outcome : List.of("SEARCH_FAILED", "NOTHING_TO_SEARCH", "CANCELLED")) {
             when(repository.cachedAlbumSearch(id)).thenReturn(Mono.just(new DownloadTaskRepository.CachedAlbumSearch(
-                    DownloadType.ALBUM, "DONE", outcome, 0, "Blood Bank", List.of("Bon Iver"), List.of(), null, null, ENDED)));
+                    DownloadType.ALBUM, "DONE", outcome, 0, "Blood Bank", List.of("Bon Iver"), List.of(), null, null, ENDED, null, null)));
             AlbumCandidatesView view = service.albumCandidates(id).block();
             assertEquals(PickListStatus.NONE, view.status());
             assertEquals(outcome, view.reason());
