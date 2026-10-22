@@ -133,6 +133,36 @@ public class JellyfinClient {
                 .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
     }
 
+    /**
+     * The song in Jellyfin that is the file naviseerr filed ({@link SongFinder#byPath}, exact):
+     * {@code GET /Items?includeItemTypes=Audio&recursive=true&searchTerm=<term>&fields=Path&limit=50} for each of
+     * {@link SongFinder#searchTerms}, the first term that gives a pick wins. Empty when none does.
+     */
+    public Mono<SongFinder.Found> findSong(SongFinder.Wanted wanted) {
+        Connection c = current;
+        return Flux.fromIterable(SongFinder.searchTerms(wanted))
+                .concatMap(term -> c.http().get()
+                        .uri(b -> b.path("/Items").queryParam("includeItemTypes", "Audio").queryParam("recursive", "true")
+                                .queryParam("searchTerm", "{q}").queryParam("fields", "Path").queryParam("limit", "50")
+                                .build(term))
+                        .retrieve()
+                        .bodyToMono(JsonNode.class)
+                        .mapNotNull(body -> SongFinder.byPath(wanted, songs(body)).orElse(null)))
+                .next()
+                .timeout(timeout)
+                .onErrorMap(error -> !(error instanceof MediaServerException), error -> translate(c.url(), error));
+    }
+
+    /** The items of a Jellyfin {@code Items} answer as songs (id, album, path). */
+    static List<SongFinder.Candidate> songs(JsonNode body) {
+        List<SongFinder.Candidate> songs = new ArrayList<>();
+        for (JsonNode item : body.path("Items")) {
+            songs.add(new SongFinder.Candidate(item.path("Id").asString(null), item.path("AlbumId").asString(null),
+                    item.path("Path").asString(null), null, null, null));
+        }
+        return songs;
+    }
+
     /** {@code POST /Items/{id}/Images/Primary}: Jellyfin takes the picture as base64 text with the image's content type. */
     public Mono<Void> setPrimaryImage(String itemId, byte[] jpeg) {
         Connection c = current;

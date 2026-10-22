@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import tools.jackson.databind.JsonNode;
 
@@ -12,7 +13,11 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Navidrome through its Subsonic API: {@code startScan}, the call behind its own "Rescan" button. Auth
@@ -102,26 +107,91 @@ public class NavidromeClient {
     }
 
     private Mono<Void> rescan(Connection c) {
+        return call(c, "startScan", Map.of())
+                .onErrorMap(SubsonicError.class, e -> new MediaServerException(e.code == NOT_AUTHORISED
+                        ? "Navidrome only lets an admin start a scan: use an admin account." : describe("rescan", e)))
+                .then();
+    }
+
+    /**
+     * The song in Navidrome that is the file naviseerr filed ({@link SongFinder#byPathOrTags}): {@code search3} for
+     * each of {@link SongFinder#searchTerms}, the first term that gives a pick wins. Empty when none does.
+     */
+    public Mono<SongFinder.Found> findSong(SongFinder.Wanted wanted) {
+        Connection c = current;
+        return Flux.fromIterable(SongFinder.searchTerms(wanted))
+                .concatMap(term -> call(c, "search3", Map.of("query", term, "songCount", "50", "artistCount", "0",
+                        "albumCount", "0"))
+                        .mapNotNull(response -> SongFinder.byPathOrTags(wanted, songs(response.path("searchResult3"))).orElse(null)))
+                .next()
+                .onErrorMap(SubsonicError.class, e -> new MediaServerException(describe("search", e)));
+    }
+
+    /** The songs of a Subsonic answer ({@code searchResult3}, a playlist), with every artist text each one carries. */
+    static List<SongFinder.Candidate> songs(JsonNode parent) {
+        List<SongFinder.Candidate> songs = new ArrayList<>();
+        for (JsonNode song : parent.path(parent.has("song") ? "song" : "entry")) {
+            StringBuilder artists = new StringBuilder();
+            for (String field : List.of("artist", "displayArtist", "albumArtist", "displayAlbumArtist")) {
+                artists.append(song.path(field).asString("")).append(" / ");
+            }
+            for (String list : List.of("artists", "albumArtists")) {
+                for (JsonNode a : song.path(list)) {
+                    artists.append(a.path("name").asString("")).append(" / ");
+                }
+            }
+            songs.add(new SongFinder.Candidate(song.path("id").asString(null), song.path("albumId").asString(null),
+                    song.path("path").asString(null), artists.toString(),
+                    song.has("duration") ? song.path("duration").asInt() : null, song.path("created").asString(null)));
+        }
+        return songs;
+    }
+
+    /**
+     * One Subsonic call with the token auth: the {@code subsonic-response} when its status is "ok", else a
+     * {@link SubsonicError} with Navidrome's code; a transport failure is a {@link MediaServerException} sentence.
+     */
+    private Mono<JsonNode> call(Connection c, String endpoint, Map<String, String> params) {
         byte[] saltBytes = new byte[8];
         RANDOM.nextBytes(saltBytes);
         String salt = HexFormat.of().formatHex(saltBytes);
+        Map<String, Object> values = new HashMap<>(Map.of("u", c.username(), "t", token(c.password(), salt), "s", salt));
         return c.http().get()
-                .uri(b -> b.path("/rest/startScan")
-                        .queryParam("u", "{u}").queryParam("t", "{t}").queryParam("s", "{s}")
-                        .queryParam("v", SUBSONIC_VERSION).queryParam("c", CLIENT_NAME).queryParam("f", "json")
-                        .build(c.username(), token(c.password(), salt), salt))
+                .uri(b -> {
+                    b.path("/rest/" + endpoint)
+                            .queryParam("u", "{u}").queryParam("t", "{t}").queryParam("s", "{s}")
+                            .queryParam("v", SUBSONIC_VERSION).queryParam("c", CLIENT_NAME).queryParam("f", "json");
+                    params.forEach((name, value) -> {
+                        b.queryParam(name, "{p_" + name + "}");
+                        values.put("p_" + name, value);
+                    });
+                    return b.build(values);
+                })
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .timeout(timeout)
                 .flatMap(body -> {
                     JsonNode response = body.path("subsonic-response");
                     if ("ok".equals(response.path("status").asString(""))) {
-                        return Mono.<Void>empty();
+                        return Mono.just(response);
                     }
-                    return Mono.error(new MediaServerException(describe(response.path("error"))));
+                    return Mono.error(new SubsonicError(response.path("error").path("code").asInt(0),
+                            response.path("error").path("message").asString("no message")));
                 })
                 .onErrorMap(error -> !(error instanceof MediaServerException),
                         error -> MediaServerException.transport("Navidrome", c.url(), error));
+    }
+
+    /** Navidrome answered with a Subsonic error (subsonic.org/pages/api.jsp codes). */
+    static final class SubsonicError extends MediaServerException {
+        final int code;
+        final String detail;
+
+        SubsonicError(int code, String detail) {
+            super("Navidrome refused the request: " + detail + " (Subsonic error " + code + ")");
+            this.code = code;
+            this.detail = detail;
+        }
     }
 
     /** The Subsonic auth token: hex md5 of password + salt. */
@@ -134,13 +204,8 @@ public class NavidromeClient {
         }
     }
 
-    private static String describe(JsonNode error) {
-        int code = error.path("code").asInt(0);
-        String message = error.path("message").asString("no message");
-        return switch (code) {
-            case WRONG_CREDENTIALS -> "Navidrome refused the username or password.";
-            case NOT_AUTHORISED -> "Navidrome only lets an admin start a scan: use an admin account.";
-            default -> "Navidrome refused the rescan: " + message + " (Subsonic error " + code + ")";
-        };
+    private static String describe(String what, SubsonicError e) {
+        return e.code == WRONG_CREDENTIALS ? "Navidrome refused the username or password."
+                : "Navidrome refused the " + what + ": " + e.detail + " (Subsonic error " + e.code + ")";
     }
 }
