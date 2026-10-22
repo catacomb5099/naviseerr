@@ -31,7 +31,7 @@ class SearchLearningRepositoryIT {
 
     @BeforeEach
     void clean() {
-        for (String table : List.of("album_searches", "download_tasks", "downloads", "media_items", "song_albums")) {
+        for (String table : List.of("install_settings", "album_searches", "download_tasks", "downloads", "media_items", "song_albums")) {
             sql("DELETE FROM " + table);
         }
         sql("INSERT INTO media_items (youtube_id, title, artists, duration_seconds) VALUES ('hpSrLjc5SMs', 'Wonderwall', '{Oasis}', 259)");
@@ -79,5 +79,25 @@ class SearchLearningRepositoryIT {
         assertFalse(report.toString().contains("bob") || report.toString().contains("/music/"), report.toString());
 
         assertEquals(List.of(older), repository.newest(NOW, 10).map(SearchReport::id).collectList().block(), "paged back");
+    }
+
+    @Test
+    void unsent_isOnlyWhatFinishedSinceTheSwitchWentOn_andNotYetSent() {
+        String path = "/music/Oasis/Wonderwall.flac";
+        String file = "@@music\\bob\\Oasis\\Wonderwall.flac";
+        song(NOW.minusSeconds(3600), path, file, "[" + FILE + "]");                       // before the switch
+        assertTrue(repository.unsent(10).collectList().block().isEmpty(), "off: nothing to send");
+
+        sql("INSERT INTO install_settings (search_learning_since) VALUES ('" + NOW.minusSeconds(60) + "')");
+        UUID first = song(NOW.minusSeconds(30), path, file, "[" + FILE + "]");
+        UUID second = song(NOW, path, file, "[" + FILE + "]");
+
+        assertEquals(List.of(first, second), repository.unsent(10).map(SearchReport::id).collectList().block(), "oldest first");
+        assertEquals(2L, repository.waiting().block());
+
+        assertEquals(1L, repository.markSent(List.of(first), NOW).block());
+        assertEquals(List.of(second), repository.unsent(10).map(SearchReport::id).collectList().block());
+        assertEquals(1L, repository.sent().block());
+        assertEquals(1L, repository.waiting().block());
     }
 }

@@ -8,6 +8,7 @@ import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
@@ -50,6 +51,24 @@ public class SearchLearningRepository {
              LIMIT :limit
             """;
 
+    /**
+     * Not sent yet and finished since the switch went on. Per row rather than a time cursor: a song is filed after it
+     * finishes, so a "sent up to" time would skip songs filed late.
+     */
+    private static final String UNSENT = """
+               AND t.learning_sent_at IS NULL
+               AND s.search_learning_since IS NOT NULL AND t.finished_at >= s.search_learning_since
+            """;
+
+    /** The sender's batch, oldest first. */
+    private static final String UNSENT_SQL = REPORT_SQL + UNSENT + " ORDER BY t.finished_at, t.task_id LIMIT :limit";
+
+    private static final String WAITING_SQL = "SELECT COUNT(*) AS n FROM (" + REPORT_SQL + UNSENT + ") r";
+
+    private static final String SENT_SQL = "SELECT COUNT(*) AS n FROM download_tasks WHERE learning_sent_at IS NOT NULL";
+
+    private static final String MARK_SENT_SQL = "UPDATE download_tasks SET learning_sent_at = :now WHERE task_id = ANY(:ids)";
+
     private static final TypeReference<List<SearchLogEntry>> LOG = new TypeReference<>() {};
 
     private final DatabaseClient client;
@@ -65,6 +84,26 @@ public class SearchLearningRepository {
         DatabaseClient.GenericExecuteSpec spec = client.sql(NEWEST_SQL).bind("limit", limit);
         spec = before == null ? spec.bindNull("before", Instant.class) : spec.bind("before", before);
         return spec.map(this::report).all();
+    }
+
+    /** Up to {@code limit} reports the sender has not sent, oldest first; none while the switch is off. */
+    public Flux<SearchReport> unsent(int limit) {
+        return client.sql(UNSENT_SQL).bind("limit", limit).map(this::report).all();
+    }
+
+    /** Reports waiting for the next send. */
+    public Mono<Long> waiting() {
+        return client.sql(WAITING_SQL).map(row -> row.get("n", Long.class)).one();
+    }
+
+    /** Reports that reached the receiver, ever. */
+    public Mono<Long> sent() {
+        return client.sql(SENT_SQL).map(row -> row.get("n", Long.class)).one();
+    }
+
+    /** The receiver said yes to these: they are never sent again. */
+    public Mono<Long> markSent(List<UUID> ids, Instant now) {
+        return client.sql(MARK_SENT_SQL).bind("ids", ids.toArray(UUID[]::new)).bind("now", now).fetch().rowsUpdated();
     }
 
     private SearchReport report(Readable row) {

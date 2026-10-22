@@ -151,4 +151,19 @@ class InstallSettingsRepositoryIT {
         assertNull(repository.find().block().slskdApiKey());
         assertEquals(1L, rows());
     }
+
+    @Test
+    void searchLearning_isOffOnAFreshInstall_staysOnSinceTheFirstSwitch_andOffClearsIt() {
+        assertNull(repository.searchLearningSince().block(), "off until someone says yes");
+
+        repository.setSearchLearning(true).block();
+        java.time.Instant since = repository.searchLearningSince().block();
+        assertNotNull(since);
+        repository.setSearchLearning(true).block();
+        assertEquals(since, repository.searchLearningSince().block(), "a second on does not move the start");
+
+        repository.setSearchLearning(false).block();
+        assertNull(repository.searchLearningSince().block());
+        assertEquals(1, rows());
+    }
 }
