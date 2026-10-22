@@ -12,6 +12,8 @@ import org.jaudiotagger.tag.id3.AbstractID3v2Frame;
 import org.jaudiotagger.tag.id3.AbstractID3v2Tag;
 import org.jaudiotagger.tag.id3.ID3v24Tag;
 import org.jaudiotagger.tag.id3.framebody.FrameBodyTXXX;
+import org.jaudiotagger.tag.images.Artwork;
+import org.jaudiotagger.tag.images.ArtworkFactory;
 import org.jaudiotagger.tag.mp4.Mp4Tag;
 import org.jaudiotagger.tag.wav.WavTag;
 import org.junit.jupiter.api.Test;
@@ -280,6 +282,28 @@ class SongTaggerTest {
         Tag tag = read(flac);
         assertEquals("Definitely Maybe", tag.getFirst(FieldKey.ALBUM), "was 'Definitely Maybe [Deluxe]'");
         assertEquals("Supersonic", tag.getFirst(FieldKey.TITLE));
+        assertArrayEquals(jpeg(Color.RED), tag.getFirstArtwork().getBinaryData());
+    }
+
+    @Test
+    void underATrustedAlbum_aFlacsPictureInsideItsVorbisComment_goesToo() throws Exception {
+        // Some taggers and Ogg-to-FLAC converters keep the picture as a METADATA_BLOCK_PICTURE comment.
+        Path flac = copy("seeded.flac", "06 Supersonic.flac");
+        AudioFile file = AudioFileIO.read(flac.toFile());
+        FlacTag seeded = (FlacTag) file.getTag();
+        Artwork sharers = ArtworkFactory.getNew();
+        sharers.setBinaryData(jpeg(Color.BLUE));
+        sharers.setMimeType("image/jpeg");
+        sharers.setPictureType(3);
+        seeded.getVorbisCommentTag().setField(sharers);
+        file.commit();
+        assertEquals(1, ((FlacTag) read(flac)).getVorbisCommentTag().getArtworkList().size(), "the sharer's picture, as a comment");
+
+        tagger.tag(flac, definitelyMaybe("Supersonic", 6), jpeg(Color.RED));
+
+        FlacTag tag = (FlacTag) read(flac);
+        assertEquals(List.of(), tag.getVorbisCommentTag().getArtworkList(), "no sharer's picture left anywhere");
+        assertEquals(1, tag.getArtworkList().size());
         assertArrayEquals(jpeg(Color.RED), tag.getFirstArtwork().getBinaryData());
     }
 

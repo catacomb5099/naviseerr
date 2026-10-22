@@ -130,6 +130,8 @@ public class SongTagger {
     private static final String COVER_SIZE = "=w1200-h1200-l90-rj";
     private static final Duration COVER_TIMEOUT = Duration.ofSeconds(10);
     private static final int COVER_MAX_BYTES = 4 * 1024 * 1024;
+    /** A cover that did not load is not asked for again sooner: one log line per album per 30 s, not per pass. */
+    private static final Duration COVER_RETRY = Duration.ofSeconds(30);
 
     // jaudiotagger logs routine steps at SEVERE through java.util.logging; application.yaml turns its
     // loggers off in the app, this keeps tests quiet too. JUL holds loggers weakly: a collected logger
@@ -161,8 +163,8 @@ public class SongTagger {
 
     /**
      * The cover to embed for a song: its album's art at 1200 px, fetched once per album and kept. Empty
-     * when there is none to use; a failed or non-JPEG answer is logged, not kept, and the song is filed
-     * without one.
+     * when there is none to use; a failed or non-JPEG answer is logged and asked again after
+     * {@link #COVER_RETRY} ({@link LibraryOrganiser#COVER_GRACE} holds an album's songs meanwhile).
      */
     public Mono<byte[]> cover(Tags tags) {
         return cover(tags == null ? null : tags.coverUrl());
@@ -184,10 +186,10 @@ public class SongTagger {
                 .timeout(COVER_TIMEOUT)
                 .filter(SongTagger::isJpeg)
                 .onErrorResume(error -> {
-                    log.info("Could not load the cover {}; songs are filed without it: {}", url, error.toString());
+                    log.info("Could not load the cover {}: {}", url, error.toString());
                     return Mono.empty();
                 })
-                .cache(bytes -> Duration.ofMillis(Long.MAX_VALUE), error -> Duration.ZERO, () -> Duration.ZERO);
+                .cache(bytes -> Duration.ofMillis(Long.MAX_VALUE), error -> Duration.ZERO, () -> COVER_RETRY);
     }
 
     /**
@@ -257,6 +259,8 @@ public class SongTagger {
                 art.setMimeType("image/jpeg");
                 art.setPictureType(PictureTypes.DEFAULT_ID);
                 tag.deleteArtworkField();
+                // FlacTag clears only the PICTURE blocks; some taggers put the sharer's picture in a comment too.
+                if (tag instanceof FlacTag flac) flac.getVorbisCommentTag().deleteArtworkField();
                 tag.setField(art);
             } catch (Exception e) {
                 log.info("Tagging {} without its cover: {}", file.getFileName(), e.toString());

@@ -402,6 +402,36 @@ class LibraryOrganiserTest {
     }
 
     @Test
+    void aTrustedAlbumsSong_waitsForYouTubesCover_thenIsFiledKeepingItsOwnPicture() throws Exception {
+        Path source = putFixture(downloads.resolve("Currents [2015]"), "seeded.flac", "01 Let It Happen.flac");
+        byte[] sharers = jpeg();
+        TAGGER.tag(source, new SongTagger.Tags("x", List.of("x"), null, List.of(), null, null, null, null), sharers);
+        SongTagger.Tags currents = new SongTagger.Tags("Let It Happen", List.of("Tame Impala"), "Currents",
+                List.of("Tame Impala"), 2015, 1, 13, "https://yt3.googleusercontent.com/J67cuSWAzG=w544-h544-l90-rj");
+        LibraryOrganiser.Job job = new LibraryOrganiser.Job(UUID.randomUUID(), DownloadType.ALBUM,
+                "x\\Currents [2015]\\01 Let It Happen.flac", NOW.minusSeconds(5), "Let It Happen",
+                List.of("Tame Impala"), "Currents", List.of("Tame Impala"), null, List.of(), currents);
+
+        assertNull(organiser.fileBlocking(job, SongTagger.NO_COVER, NOW), "the cover did not load: wait for it");
+        assertTrue(Files.exists(source), "left in slskd's folder for the next pass");
+        assertNull(organiser.fileBlocking(job, SongTagger.NO_COVER, NOW.plus(LibraryOrganiser.COVER_GRACE).minusSeconds(10)));
+
+        Path filed = organiser.fileBlocking(job, SongTagger.NO_COVER, NOW.plus(LibraryOrganiser.COVER_GRACE));
+
+        assertEquals(root.resolve("Tame Impala/Currents/01 Let It Happen.flac"), filed, "filed by its album all the same");
+        var tag = AudioFileIO.read(filed.toFile()).getTag();
+        assertEquals("Currents", tag.getFirst(FieldKey.ALBUM));
+        assertArrayEquals(sharers, tag.getFirstArtwork().getBinaryData(), "better the sharer's picture than none");
+    }
+
+    private static byte[] jpeg() throws IOException {
+        var image = new java.awt.image.BufferedImage(8, 8, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        var out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(image, "jpg", out);
+        return out.toByteArray();
+    }
+
+    @Test
     void aFileThatCannotBeTagged_isFiledExactlyAsItCame() throws IOException {
         Path opus = putFixture(downloads.resolve("e"), "song.opus", "Slide Away.opus");
         byte[] opusBytes = Files.readAllBytes(opus);
