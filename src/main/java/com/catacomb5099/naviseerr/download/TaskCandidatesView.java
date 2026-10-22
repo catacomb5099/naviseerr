@@ -25,10 +25,11 @@ import java.util.UUID;
  * @param searchedAt when the list was remembered; null when never searched
  * @param songStage  the song's own stage, as {@code GET /downloads/{id}} reports it
  * @param current    the file the song downloads (or downloaded) from; null before one was chosen
+ * @param searchError why the person's last own search failed, when it did ({@link ManualSearch#overlay}); null otherwise
  */
 public record TaskCandidatesView(UUID taskId, PickListStatus status, String reason, String query, String searchId,
                                  Instant searchedAt, DownloadStage songStage, Current current,
-                                 List<Candidate> candidates) {
+                                 List<Candidate> candidates, String searchError) {
 
     public record Current(String username, String filename) {
         static Current of(DownloadCandidate candidate) {

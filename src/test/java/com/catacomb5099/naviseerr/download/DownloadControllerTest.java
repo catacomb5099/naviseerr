@@ -53,6 +53,9 @@ class DownloadControllerTest {
         when(activeDownloadRepository.findCurrent(any(), any(), anyBoolean())).thenReturn(Mono.empty());
         // And whatever exists still has its files, unless a test says so (same null-Mono trap).
         when(downloadService.filesMissing(any())).thenReturn(Mono.just(false));
+        // No person's search runs unless a test says so: the candidate GETs pass their view through.
+        when(manualSearch.overlay(any(TaskCandidatesView.class))).thenAnswer(call -> call.getArgument(0));
+        when(manualSearch.overlay(any(AlbumCandidatesView.class))).thenAnswer(call -> call.getArgument(0));
     }
 
     private static ActiveDownloadView view() {
@@ -235,7 +238,7 @@ class DownloadControllerTest {
         TaskCandidatesView list = new TaskCandidatesView(taskId, PickListStatus.READY, null, "Live Forever", "s-1", NOW,
                 DownloadStage.DOWNLOADING, new TaskCandidatesView.Current("alice", "music/alice/song.flac"),
                 List.of(new TaskCandidatesView.Candidate("alice", "music/alice/song.flac", 1000L, null, 240, "flac",
-                        1_000_000, true, 0, "EXACT", true)));
+                        1_000_000, true, 0, "EXACT", true)), null);
         when(downloadService.candidates(id, taskId)).thenReturn(Mono.just(list));
 
         WebTestClient.bindToController(controller).build()
@@ -271,7 +274,7 @@ class DownloadControllerTest {
     void albumCandidates_isTheFolderList_or404_or409ForAnythingButAnAlbum() {
         UUID id = UUID.randomUUID();
         AlbumCandidatesView list = new AlbumCandidatesView(id, PickListStatus.NONE, "NO_WHOLE_FOLDER", "Definitely Maybe",
-                "s-2", NOW, 11, List.of());
+                "s-2", NOW, 11, List.of(), null);
         when(downloadService.albumCandidates(id)).thenReturn(Mono.just(list));
         WebTestClient http = WebTestClient.bindToController(controller).build();
 
@@ -305,7 +308,7 @@ class DownloadControllerTest {
         UUID taskId = UUID.randomUUID();
         TaskCandidatesView list = new TaskCandidatesView(taskId, PickListStatus.READY, null, "Common People Pulp 1995", "new-1", NOW,
                 DownloadStage.FAILED, null, List.of(new TaskCandidatesView.Candidate("alice", "music/alice/song.flac", 1000L,
-                null, 240, "flac", 1_000_000, true, 0, "EXACT", false)));
+                null, 240, "flac", 1_000_000, true, 0, "EXACT", false)), null);
         when(manualSearch.song(id, taskId, "Common People Pulp 1995")).thenReturn(Mono.just(list));
 
         WebTestClient.bindToController(controller).build()
@@ -347,6 +350,39 @@ class DownloadControllerTest {
                 .post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody().jsonPath("$.reason").isEqualTo("SEARCH_RUNNING").jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    void search_whileThePersonsPreviousSearchRuns_is409ManualSearchRunning() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        when(manualSearch.song(id, taskId, "x")).thenReturn(Mono.error(new ManualSearch.AlreadyRunningException()));
+        when(manualSearch.album(id, "x")).thenReturn(Mono.error(new ManualSearch.AlreadyRunningException()));
+        WebTestClient http = WebTestClient.bindToController(controller).build();
+
+        http.post().uri("/downloads/" + id + "/tasks/" + taskId + "/search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("MANUAL_SEARCH_RUNNING");
+        http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "x")).exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.reason").isEqualTo("MANUAL_SEARCH_RUNNING");
+    }
+
+    @Test
+    void candidates_showThePersonsRunningSearch_throughTheOverlay() {
+        UUID id = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        TaskCandidatesView stored = new TaskCandidatesView(taskId, PickListStatus.READY, null, "Common People", "s-1", NOW,
+                DownloadStage.FAILED, null, List.of(), null);
+        TaskCandidatesView running = new TaskCandidatesView(taskId, PickListStatus.SEARCHING, null, "Pulp b-sides", null, NOW,
+                DownloadStage.FAILED, null, List.of(), null);
+        when(downloadService.candidates(id, taskId)).thenReturn(Mono.just(stored));
+        when(manualSearch.overlay(stored)).thenReturn(running);
+
+        WebTestClient.bindToController(controller).build()
+                .get().uri("/downloads/" + id + "/tasks/" + taskId + "/candidates").exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.status").isEqualTo("SEARCHING").jsonPath("$.query").isEqualTo("Pulp b-sides");
     }
 
     @Test
@@ -394,7 +430,7 @@ class DownloadControllerTest {
     void albumSearch_answersTheFolders_andWordsNotAnAlbumAndNoAlbumSearchAs409() {
         UUID id = UUID.randomUUID();
         WebTestClient http = WebTestClient.bindToController(controller).build();
-        AlbumCandidatesView list = new AlbumCandidatesView(id, PickListStatus.READY, null, "Definitely Maybe 1994 flac", "new-2", NOW, 11, List.of());
+        AlbumCandidatesView list = new AlbumCandidatesView(id, PickListStatus.READY, null, "Definitely Maybe 1994 flac", "new-2", NOW, 11, List.of(), null);
         when(manualSearch.album(id, "Definitely Maybe 1994 flac")).thenReturn(Mono.just(list));
         http.post().uri("/downloads/" + id + "/album-search").bodyValue(Map.of("text", "Definitely Maybe 1994 flac")).exchange()
                 .expectStatus().isOk()
