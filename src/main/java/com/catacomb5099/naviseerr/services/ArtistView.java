@@ -15,9 +15,10 @@ import java.util.Objects;
  * An artist as the client browses it: header plus the shelves YouTube Music shows on the artist
  * page, expressed in the same {@code schema.response} DTOs the search routes already emit so the
  * client reuses its search cards unchanged. Every list is non-null and capped at {@value #MAX},
- * except {@code albums}, capped at {@value #MAX_ALBUMS}: since adapter 12-10-2026 it is the artist's
- * whole discography ordered by YouTube's popularity (Black Sabbath: 46, 'Paranoid' first) rather
- * than the page's ten newest releases, and a cap of ten would cut it back to the reissues.
+ * except {@code albums} and {@code singles}, capped at {@value #MAX_RELEASES}: since adapter 12-10-2026
+ * {@code albums} is the artist's whole discography ordered by YouTube's popularity (Black Sabbath: 46,
+ * 'Paranoid' first) rather than the page's ten newest releases, and since adapter 20-10-2026
+ * {@code singles} is every single and EP, newest first (Taylor Swift: 92), for the web app's "Show all".
  *
  * @param id             the id the client REQUESTED (the adapter echoes it back verbatim anyway).
  * @param iconURL        capital {@code URL}, like {@code Track}/{@code Album}; {@code ""} when none.
@@ -52,8 +53,8 @@ public record ArtistView(String id, String name, String iconURL, String descript
                          List<Playlist> playlists, List<Artist> similarArtists) {
 
     static final int MAX = 10;
-    /** The adapter sends at most 100 (its own page size for the discography). */
-    static final int MAX_ALBUMS = 100;
+    /** The adapter sends at most 100 of each (its own page size for the discography). */
+    static final int MAX_RELEASES = 100;
 
     static ArtistView from(YtMusicDetailResponse.Artist artist, List<Playlist> playlists, String requestedId) {
         List<String> ownName = artist.getName() == null ? List.of() : List.of(artist.getName());
@@ -75,7 +76,7 @@ public record ArtistView(String id, String name, String iconURL, String descript
         return new ArtistView(requestedId, orEmpty(artist.getName()), orEmpty(artist.getThumbnailUrl()),
                 artist.getDescription(), artist.getSubscribers(), topSongs,
                 artist.getSongsPlaylistId() == null ? null : artist.getSongsPlaylistId().replaceFirst("^VL", ""),
-                albums(artist.getAlbums(), ownName, ownId, MAX_ALBUMS), albums(artist.getSingles(), ownName, ownId, MAX),
+                albums(artist.getAlbums(), ownName, ownId, MAX_RELEASES), albums(artist.getSingles(), ownName, ownId, MAX_RELEASES),
                 orEmpty(playlists).stream().limit(MAX).toList(), similar);
     }
 
