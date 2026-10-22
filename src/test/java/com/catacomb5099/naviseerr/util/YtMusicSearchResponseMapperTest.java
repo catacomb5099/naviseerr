@@ -195,6 +195,27 @@ class YtMusicSearchResponseMapperTest {
     }
 
     @Test
+    void songs_carryLengthAlbumNameAndExplicit() {
+        Track track = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(songItem())).build()).getTracks().get(0);
+
+        assertEquals(259, track.getDurationSeconds());
+        assertEquals("(What's The Story) Morning Glory?", track.getAlbum());
+        assertEquals(false, track.getExplicit());
+    }
+
+    @Test
+    void songs_unknownLengthAlbumAndExplicit_stayNull() {
+        YtMusicSearchResponse.Item item = songItem().toBuilder().album(null).durationSeconds(null).explicit(null).build();
+        Track track = YtMusicSearchResponseMapper.mapToSearchResponse(
+                YtMusicSearchResponse.builder().items(List.of(item)).build()).getTracks().get(0);
+
+        assertNull(track.getDurationSeconds());
+        assertNull(track.getAlbum());
+        assertNull(track.getExplicit());
+    }
+
+    @Test
     void songs_missingThumbnail_iconURLIsEmptyNotNull() {
         YtMusicSearchResponse.Item item = songItem().toBuilder().thumbnailUrl(null).build();
         SearchResponse result = YtMusicSearchResponseMapper.mapToSearchResponse(

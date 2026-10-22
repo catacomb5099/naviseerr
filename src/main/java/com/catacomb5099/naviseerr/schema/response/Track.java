@@ -26,4 +26,13 @@ public class Track {
      * an artist's top songs carry one. Null when YouTube gave none (the Top result card, an older adapter).
      */
     String plays;
+    /** Search songs only: length, album name and explicit mark as YouTube gave them; null = not known. */
+    Integer durationSeconds;
+    String album;
+    Boolean explicit;
+
+    public Track(String id, String iconURL, String streamURL, String name, List<String> artists,
+                 List<String> artistIds, String albumId, int year, String plays) {
+        this(id, iconURL, streamURL, name, artists, artistIds, albumId, year, plays, null, null, null);
+    }
 }
