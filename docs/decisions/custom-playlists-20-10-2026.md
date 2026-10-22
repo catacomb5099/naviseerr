@@ -41,6 +41,15 @@ list you own and edit, no way to collect songs from several albums into one play
   database. No picture = the 2x2 mosaic of the first four different song pictures (Spotify, YouTube Music; Navidrome and
   Jellyfin draw the same). A created playlist keeps its picture (409). Flip: `MAX_COVER_BYTES` in `PlaylistController`.
 
+- **"Create" is the existing download request** (`POST /download/collection/{id}?type=CUSTOM`) with one step first:
+  it freezes the draft (`downloaded_at`), so the list that downloads is the list you saw even if admission runs
+  seconds later. An empty playlist cannot be created (400). Admission reads the saved songs, never YouTube. In the
+  Downloads list your playlist counts as a playlist (`type=PLAYLIST` matches `CUSTOM`).
+- **Its picture reaches the music servers** the way a YouTube playlist's does: the uploaded JPEG is written as
+  `Playlists/<title>.jpg` beside the `.m3u8` (Navidrome 0.61+ shows it) and pushed to Jellyfin after its rescan. No
+  picture = no sidecar, so Navidrome and Jellyfin draw their own mosaic, as the app does. Flip: pass the first song's
+  album art as `imageUrl` in `TrackLists` (the `asCollection` image) to give them that instead.
+
 ## Not decided here
 
 - Two playlists with one title (two of yours, or yours and a YouTube one) write the same `Playlists/<title>.m3u8`, the

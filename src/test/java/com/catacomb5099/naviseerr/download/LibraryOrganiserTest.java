@@ -544,7 +544,7 @@ class LibraryOrganiserTest {
         Path track = put(root.resolve("Pixies/Debaser"), "01 - Débaser.flac");
         List<LibraryOrganiser.Entry> entries = List.of(entry(track, "Débaser", 170, "Pixies"));
 
-        Path written = organiser.writePlaylist("Mix: 1989?", null, entries).block();
+        Path written = organiser.writePlaylist("Mix: 1989?", null, null, entries).block();
 
         assertEquals(root.resolve("Playlists/Mix - 1989_.m3u8"), written);
         byte[] bytes = Files.readAllBytes(written);
@@ -555,7 +555,7 @@ class LibraryOrganiserTest {
         assertTrue(text.startsWith("#EXTM3U\n#PLAYLIST:Mix: 1989?\n"), "the display name keeps its punctuation");
 
         // Second write of the same playlist replaces the file; no ' (2)', no leftover staging file.
-        Path again = organiser.writePlaylist("Mix: 1989?", null, entries).block();
+        Path again = organiser.writePlaylist("Mix: 1989?", null, null, entries).block();
         assertEquals(written, again);
         assertEquals(1, Files.list(root.resolve("Playlists")).count());
     }
@@ -600,7 +600,7 @@ class LibraryOrganiserTest {
         Path track = put(root.resolve("A/B"), "c.flac");
 
         // i.ytimg.com is a video frame, not album art: SongTagger.cover refuses it before any fetch.
-        Path written = organiser.writePlaylist("Curated", "https://i.ytimg.com/vi/abc/hqdefault.jpg",
+        Path written = organiser.writePlaylist("Curated", "https://i.ytimg.com/vi/abc/hqdefault.jpg", null,
                 List.of(entry(track, "c", 1, "A"))).block();
 
         assertEquals(root.resolve("Playlists/Curated.m3u8"), written);
@@ -608,10 +608,20 @@ class LibraryOrganiserTest {
     }
 
     @Test
+    void writePlaylist_withYourOwnPicture_writesThoseBytes_andFetchesNothing() throws IOException {
+        Path track = put(root.resolve("A/B"), "c.flac");
+
+        // A path on this server, not album art: only the uploaded bytes can make the sidecar.
+        organiser.writePlaylist("Road trip", "/playlists/x/cover?v=1", JPEG, List.of(entry(track, "c", 1, "A"))).block();
+
+        assertArrayEquals(JPEG, Files.readAllBytes(root.resolve("Playlists/Road trip.jpg")));
+    }
+
+    @Test
     void writePlaylist_skipsEntriesOutsideTheLibrary_andFallsBackToAName() throws IOException {
         Path inside = put(root.resolve("A/B"), "c.flac");
 
-        Path written = organiser.writePlaylist(null, null, List.of(
+        Path written = organiser.writePlaylist(null, null, null, List.of(
                 entry(tmp.resolve("elsewhere.flac"), "x", 1, "y"),
                 entry(inside, "c", 1, "A"))).block();
 

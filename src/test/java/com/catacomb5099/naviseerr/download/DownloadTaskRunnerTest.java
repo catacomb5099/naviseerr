@@ -300,14 +300,14 @@ class DownloadTaskRunnerTest {
     void aFinishedPlaylist_getsItsPlaylistFileWritten_thenIsStampedOrganised() {
         UUID playlistId = UUID.randomUUID();
         LibraryOrganiser.Collection playlist = new LibraryOrganiser.Collection(playlistId,
-                DownloadType.PLAYLIST, "Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj");
+                DownloadType.PLAYLIST, "Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", null);
         LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(playlist));
         when(repository.playlistEntries(playlistId)).thenReturn(Flux.just(entry));
-        when(organiser.writePlaylist("Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", List.of(entry)))
+        when(organiser.writePlaylist("Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", null, List.of(entry)))
                 .thenReturn(Mono.just(java.nio.file.Path.of("/music/Playlists/Alt Nation 1989.m3u8")));
         when(repository.setOrganisedAt(playlistId, T0)).thenReturn(Mono.just(1L));
 
@@ -315,7 +315,7 @@ class DownloadTaskRunnerTest {
 
         // The picture the playlist had in the app goes with the file: the organiser writes it beside the .m3u8,
         // and the written file is handed to the notifier, which sends the picture to Jellyfin after its rescan.
-        verify(organiser).writePlaylist("Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", List.of(entry));
+        verify(organiser).writePlaylist("Alt Nation 1989", "https://yt3.googleusercontent.com/pic=w544-h544-l90-rj", null, List.of(entry));
         verify(mediaServers).playlistWritten(java.nio.file.Path.of("/music/Playlists/Alt Nation 1989.m3u8"));
         verify(repository).setOrganisedAt(playlistId, T0);
         verify(mediaServers).libraryChanged();
@@ -350,12 +350,12 @@ class DownloadTaskRunnerTest {
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
-                new LibraryOrganiser.Collection(albumId, DownloadType.ALBUM, "Doolittle", null)));
+                new LibraryOrganiser.Collection(albumId, DownloadType.ALBUM, "Doolittle", null, null)));
         when(repository.setOrganisedAt(albumId, T0)).thenReturn(Mono.just(1L));
 
         runner.pass().block();
 
-        verify(organiser, never()).writePlaylist(any(), any(), any());
+        verify(organiser, never()).writePlaylist(any(), any(), any(), any());
         verify(repository, never()).playlistEntries(any());
         verify(repository).setOrganisedAt(albumId, T0);
     }
@@ -367,9 +367,9 @@ class DownloadTaskRunnerTest {
         when(organiser.cutoff(any())).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(anyInt(), any())).thenReturn(Flux.just(
-                new LibraryOrganiser.Collection(playlistId, DownloadType.PLAYLIST, "Mix", null)));
+                new LibraryOrganiser.Collection(playlistId, DownloadType.PLAYLIST, "Mix", null, null)));
         when(repository.playlistEntries(playlistId)).thenReturn(Flux.empty());
-        when(organiser.writePlaylist(any(), any(), any())).thenReturn(Mono.error(new java.io.IOException("read-only")));
+        when(organiser.writePlaylist(any(), any(), any(), any())).thenReturn(Mono.error(new java.io.IOException("read-only")));
 
         assertDoesNotThrow(() -> runner.pass().block());
 
@@ -1049,23 +1049,61 @@ class DownloadTaskRunnerTest {
     }
 
     @Test
+    void yourPlaylist_isAdmittedFromItsSavedSongs_inYourOrder_withNoYouTubeCall() {
+        UUID playlistId = UUID.randomUUID();
+        Download request = pendingRequest(DownloadType.CUSTOM, playlistId.toString());
+        when(repository.admitDownloads(anyInt())).thenReturn(Flux.just(request));
+        when(playlists.find(playlistId)).thenReturn(Mono.just(new PlaylistRepository.Playlist(playlistId, "Road trip", "",
+                List.of(new YoutubeSongInfo("z", List.of("Blur"), "Song 2", null, 122),
+                        new YoutubeSongInfo("a", List.of("Pulp"), "Common People", null, 351)),
+                null, T0, T0)));
+
+        runner.pass().block();
+
+        verify(repository).createTasks(eq(request.getDownloadId()), argThat(tasks -> tasks.stream().map(DownloadTask::youtubeId).toList()
+                .equals(List.of("z", "a"))), eq(T0), isNull());
+        verifyNoInteractions(ytMusicService);
+    }
+
+    @Test
+    void aFinishedPlaylistOfYourOwn_getsYourPictureBesideItsFile() {
+        UUID downloadId = UUID.randomUUID();
+        byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 1};
+        LibraryOrganiser.Collection mine = new LibraryOrganiser.Collection(downloadId, DownloadType.CUSTOM, "Road trip", null, jpeg);
+        LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
+        when(organiser.isEnabled()).thenReturn(true);
+        when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
+        when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
+        when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(mine));
+        when(repository.playlistEntries(downloadId)).thenReturn(Flux.just(entry));
+        when(organiser.writePlaylist("Road trip", null, jpeg, List.of(entry)))
+                .thenReturn(Mono.just(java.nio.file.Path.of("/music/Playlists/Road trip.m3u8")));
+        when(repository.setOrganisedAt(downloadId, T0)).thenReturn(Mono.just(1L));
+
+        runner.pass().block();
+
+        verify(organiser).writePlaylist("Road trip", null, jpeg, List.of(entry));
+        verify(mediaServers).playlistWritten(java.nio.file.Path.of("/music/Playlists/Road trip.m3u8"));
+    }
+
+    @Test
     void aFinishedCuratedPlaylist_getsItsPlaylistFileWritten_likeAYouTubePlaylist() {
         UUID downloadId = UUID.randomUUID();
         LibraryOrganiser.Collection curated = new LibraryOrganiser.Collection(downloadId,
-                DownloadType.CURATED, "80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg");
+                DownloadType.CURATED, "80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg", null);
         LibraryOrganiser.Entry entry = new LibraryOrganiser.Entry("/music/A/b/c.flac", "c", List.of("A"), 100);
         when(organiser.isEnabled()).thenReturn(true);
         when(organiser.cutoff(T0)).thenReturn(T0.minusSeconds(600));
         when(repository.tasksToOrganise(anyInt(), any(), any())).thenReturn(Flux.empty());
         when(repository.downloadsToFinalise(10, T0.minusSeconds(600))).thenReturn(Flux.just(curated));
         when(repository.playlistEntries(downloadId)).thenReturn(Flux.just(entry));
-        when(organiser.writePlaylist("80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg", List.of(entry)))
+        when(organiser.writePlaylist("80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg", null, List.of(entry)))
                 .thenReturn(Mono.just(java.nio.file.Path.of("/music/Playlists/80s indie pop.m3u8")));
         when(repository.setOrganisedAt(downloadId, T0)).thenReturn(Mono.just(1L));
 
         runner.pass().block();
 
-        verify(organiser).writePlaylist("80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg", List.of(entry));
+        verify(organiser).writePlaylist("80s indie pop", "https://i.ytimg.com/vi/kkxixKRfEnk/hqdefault.jpg", null, List.of(entry));
         verify(repository).setOrganisedAt(downloadId, T0);
     }
 

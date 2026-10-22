@@ -1238,6 +1238,25 @@ class DownloadTaskRepositoryIT {
         assertEquals("Alt Nation 1989", ready.getFirst().title());
         assertEquals("https://yt3.googleusercontent.com/alt=w544-h544-l90-rj", ready.getFirst().imageUrl(),
                 "the picture the playlist had in the app, for its sidecar");
+        assertNull(ready.getFirst().cover(), "only your own playlists have an uploaded picture");
+    }
+
+    @Test
+    void downloadsToFinalise_carriesYourOwnPlaylistsUploadedPicture() {
+        UUID playlistId = UUID.randomUUID();
+        byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 1, 2};
+        template.getDatabaseClient().sql("INSERT INTO playlists (playlist_id, title, cover, cover_updated_at, downloaded_at) "
+                        + "VALUES (:id, 'Road trip', :cover, now(), now())")
+                .bind("id", playlistId).bind("cover", jpeg).fetch().rowsUpdated().block();
+        UUID download = insertDownload("SUCCEEDED", "CUSTOM", playlistId.toString());
+        repository.setLibraryPath(succeededSong(download, "a", "x\\a.flac", NOW), "/music/A/a/a.flac").block();
+
+        LibraryOrganiser.Collection ready = repository.downloadsToFinalise(10, NOW.minusSeconds(600))
+                .filter(collection -> collection.downloadId().equals(download)).blockFirst();
+
+        assertNotNull(ready);
+        assertEquals(DownloadType.CUSTOM, ready.type());
+        assertArrayEquals(jpeg, ready.cover());
     }
 
     @Test
