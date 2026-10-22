@@ -171,6 +171,37 @@ class ArtistControllerTest {
                 .jsonPath("$.topSongs[1].plays").isEmpty();
     }
 
+    /** "Playlists by Tame Impala": the artist's own, mapped like albums (the artist's name and id as author). */
+    @Test
+    void artistPlaylists_areTheArtistsOwn_withYouTubesViewWording_andEmptyFromAnOlderAdapter() {
+        YtMusicDetailResponse.Artist artist = pixies();
+        artist.setPlaylists(List.of(
+                YtMusicDetailResponse.PlaylistStub.builder().playlistId("PLown1").title("Doolittle").thumbnailUrl("https://img/1").views("2.1M views").build(),
+                YtMusicDetailResponse.PlaylistStub.builder().title("no id, dropped").build(),
+                YtMusicDetailResponse.PlaylistStub.builder().playlistId("PLown2").title("Music Videos").build()));
+        when(ytMusicService.getArtistInfo(PIXIES)).thenReturn(Mono.just(artist), Mono.just(pixies()));
+        when(ytMusicService.getResults(anyString(), any(), anyInt())).thenReturn(Mono.just(playlists(0)));
+
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.artistPlaylists.length()").isEqualTo(2)
+                .jsonPath("$.artistPlaylists[0].id").isEqualTo("PLown1")
+                .jsonPath("$.artistPlaylists[0].name").isEqualTo("Doolittle")
+                .jsonPath("$.artistPlaylists[0].iconURL").isEqualTo("https://img/1")
+                .jsonPath("$.artistPlaylists[0].artists").isEqualTo(List.of("Pixies"))
+                .jsonPath("$.artistPlaylists[0].artistIds").isEqualTo(List.of(PIXIES))
+                .jsonPath("$.artistPlaylists[0].trackCount").isEqualTo(0)
+                .jsonPath("$.artistPlaylists[0].views").isEqualTo("2.1M views")
+                .jsonPath("$.artistPlaylists[1].iconURL").isEqualTo("")
+                .jsonPath("$.artistPlaylists[1].views").isEmpty()
+                .jsonPath("$.playlists.length()").isEqualTo(0);
+        client.get().uri("/artists/{id}", PIXIES).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.artistPlaylists.length()").isEqualTo(0);
+    }
+
     /** The "Show all" link opens the playlist page, which takes the bare id every Playlist carries. */
     @Test
     void topSongsPlaylistId_isTheBareIdOfYouTubesTopSongsPlaylist_andNullFromAnOlderAdapter() {
