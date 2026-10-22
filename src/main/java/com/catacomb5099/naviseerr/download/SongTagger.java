@@ -301,7 +301,8 @@ public class SongTagger {
         return m != null && m.matches() ? m.group(1) + COVER_SIZE : null;
     }
 
-    static boolean isJpeg(byte[] bytes) {
+    /** Starts with the JPEG marker: the only picture type the tags, the playlist sidecar and Jellyfin's push take. */
+    public static boolean isJpeg(byte[] bytes) {
         return bytes.length > 3 && (bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xFF) == 0xD8 && (bytes[2] & 0xFF) == 0xFF;
     }
 

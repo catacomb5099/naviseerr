@@ -2,13 +2,19 @@ package com.catacomb5099.naviseerr.services;
 
 import com.catacomb5099.naviseerr.curator.CuratorException;
 import com.catacomb5099.naviseerr.download.DownloadType;
+import com.catacomb5099.naviseerr.download.SongTagger;
 import com.catacomb5099.naviseerr.download.TrackLists;
 import com.catacomb5099.naviseerr.services.ytmusic.YtMusicBadRequestException;
 import com.catacomb5099.naviseerr.services.ytmusic.model.YoutubeSongInfo;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.buffer.DataBufferLimitException;
+import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,6 +28,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +50,8 @@ public class PlaylistController {
     /** Spotify's limits. */
     static final int MAX_TITLE = 100;
     static final int MAX_DESCRIPTION = 300;
+    /** The web app sends a 1200 px square JPEG of 150-400 KB; this only stops a mistake. Spotify's apps take 4 MB too. */
+    static final int MAX_COVER_BYTES = 4 * 1024 * 1024;
 
     private final PlaylistRepository repository;
     private final TrackLists trackLists;
@@ -149,6 +158,44 @@ public class PlaylistController {
     Mono<ResponseEntity<?>> delete(@PathVariable UUID id) {
         return repository.delete(id).flatMap(rows -> rows > 0 ? Mono.just(ResponseEntity.noContent().build())
                 : refused(id, ResponseEntity.notFound().build()));
+    }
+
+    /**
+     * Sets the picture: the body is the JPEG itself ({@code Content-Type: image/jpeg}). The web app crops and
+     * re-encodes in the browser, so the server stores and serves JPEG only and never decodes an image.
+     */
+    @PutMapping(value = "/playlists/{id}/cover", consumes = MediaType.IMAGE_JPEG_VALUE)
+    Mono<ResponseEntity<?>> setCover(@PathVariable UUID id, ServerHttpRequest request) {
+        // Joined by hand: WebFlux's codecs stop at 256 KB.
+        return DataBufferUtils.join(request.getBody(), MAX_COVER_BYTES)
+                .map(buffer -> {
+                    byte[] bytes = new byte[buffer.readableByteCount()];
+                    buffer.read(bytes);
+                    DataBufferUtils.release(buffer);
+                    return bytes;
+                })
+                .filter(SongTagger::isJpeg)
+                .flatMap(jpeg -> edited(id, repository.setCover(id, jpeg)))
+                .switchIfEmpty(Mono.fromSupplier(() -> badRequest("Send the picture as a JPEG.")))
+                .onErrorResume(DataBufferLimitException.class, tooBig -> Mono.just(badRequest("A picture can be at most 4 MB.")));
+    }
+
+    /** Back to the mosaic. */
+    @DeleteMapping("/playlists/{id}/cover")
+    Mono<ResponseEntity<?>> clearCover(@PathVariable UUID id) {
+        return edited(id, repository.clearCover(id));
+    }
+
+    /** The picture, or 404. Its URL carries a version ({@code ?v=}), so a browser may keep it for good. */
+    @GetMapping("/playlists/{id}/cover")
+    Mono<ResponseEntity<byte[]>> cover(@PathVariable UUID id) {
+        return repository.cover(id)
+                .map(jpeg -> ResponseEntity.ok()
+                        .contentType(MediaType.IMAGE_JPEG)
+                        .cacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePrivate().immutable())
+                        .header("X-Content-Type-Options", "nosniff")
+                        .body(jpeg))
+                .defaultIfEmpty(ResponseEntity.notFound().build());
     }
 
     /** The source's songs with an id, only {@code songIds} when given, each once, without album-only fields. */

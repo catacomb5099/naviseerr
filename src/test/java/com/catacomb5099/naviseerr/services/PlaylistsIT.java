@@ -10,11 +10,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,7 +41,8 @@ class PlaylistsIT {
     private WebTestClient client() {
         if (client == null) {
             client = WebTestClient.bindToController(new PlaylistController(repository, trackLists))
-                    .controllerAdvice(new YtMusicUnavailableAdvice()).build();
+                    .controllerAdvice(new YtMusicUnavailableAdvice()).configureClient()
+                    .codecs(codecs -> codecs.defaultCodecs().maxInMemorySize(8 * 1024 * 1024)).build();   // reads a picture back
         }
         return client;
     }
@@ -230,5 +233,60 @@ class PlaylistsIT {
         assertEquals(List.of("b", "a"), list.songs().stream().map(YoutubeSongInfo::id).toList());
         assertEquals(List.of(), list.authorNames(), "no user names on a download");
         assertEquals(List.of(), realTrackLists.of(DownloadType.CUSTOM, "not-a-uuid").block().songs());
+    }
+
+    private static byte[] jpeg(int size) {
+        byte[] bytes = new byte[size];
+        Arrays.fill(bytes, (byte) 7);
+        bytes[0] = (byte) 0xFF; bytes[1] = (byte) 0xD8; bytes[2] = (byte) 0xFF;
+        return bytes;
+    }
+
+    private WebTestClient.ResponseSpec putCover(UUID id, MediaType type, byte[] body) {
+        return client().put().uri("/playlists/" + id + "/cover").contentType(type).bodyValue(body).exchange();
+    }
+
+    @Test
+    void aPictureIsStoredAndServedAsAJpeg_withANewAddressEachTime_andCanBeRemoved() {
+        UUID id = newDraft("Pictured");
+        byte[] picture = jpeg(300 * 1024);   // past WebFlux's 256 KB codec limit, as a real upload is
+
+        PlaylistView set = putCover(id, MediaType.IMAGE_JPEG, picture).expectStatus().isOk()
+                .expectBody(PlaylistView.class).returnResult().getResponseBody();
+        assertNotNull(set);
+        assertTrue(set.coverUrl().startsWith("/playlists/" + id + "/cover?v="), set.coverUrl());
+
+        byte[] served = client().get().uri(set.coverUrl()).exchange().expectStatus().isOk()
+                .expectHeader().contentType(MediaType.IMAGE_JPEG)
+                .expectHeader().valueEquals("X-Content-Type-Options", "nosniff")
+                .expectHeader().valueEquals("Cache-Control", "max-age=31536000, private, immutable")
+                .expectBody(byte[].class).returnResult().getResponseBody();
+        assertArrayEquals(picture, served);
+
+        String second = putCover(id, MediaType.IMAGE_JPEG, jpeg(1000)).expectStatus().isOk()
+                .expectBody(PlaylistView.class).returnResult().getResponseBody().coverUrl();
+        assertNotEquals(set.coverUrl(), second, "a new picture is a new address, so no browser shows the old one");
+
+        PlaylistView copy = client().post().uri("/playlists/" + id + "/copy").exchange().expectStatus().isCreated()
+                .expectBody(PlaylistView.class).returnResult().getResponseBody();
+        assertNotNull(copy.coverUrl(), "Duplicate keeps the picture");
+
+        client().delete().uri("/playlists/" + id + "/cover").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.coverUrl").isEmpty();
+        client().get().uri("/playlists/" + id + "/cover").exchange().expectStatus().isNotFound();
+    }
+
+    @Test
+    void anythingButAJpegUnder4MbIsRefused_andACreatedPlaylistKeepsItsPicture() {
+        UUID id = newDraft("Picky");
+        putCover(id, MediaType.IMAGE_JPEG, "<svg/>".getBytes()).expectStatus().isBadRequest();
+        putCover(id, MediaType.IMAGE_JPEG, new byte[0]).expectStatus().isBadRequest();
+        putCover(id, MediaType.IMAGE_PNG, jpeg(1000)).expectStatus().isEqualTo(415);
+        putCover(id, MediaType.IMAGE_JPEG, jpeg(PlaylistController.MAX_COVER_BYTES + 1)).expectStatus().isBadRequest();
+        assertNull(get(id).coverUrl());
+
+        db.sql("UPDATE playlists SET downloaded_at = now() WHERE playlist_id = :id").bind("id", id).fetch().rowsUpdated().block();
+        putCover(id, MediaType.IMAGE_JPEG, jpeg(1000)).expectStatus().isEqualTo(409);
+        client().delete().uri("/playlists/" + id + "/cover").exchange().expectStatus().isEqualTo(409);
     }
 }
