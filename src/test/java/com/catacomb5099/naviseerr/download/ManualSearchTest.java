@@ -59,6 +59,7 @@ class ManualSearchTest {
         when(settings.downloadQuality()).thenReturn(Mono.just(DownloadQuality.DEFAULT));
         when(repository.cachedSearch(downloadId, taskId)).thenReturn(Mono.just(song()));
         when(repository.saveSearchResults(eq(taskId), any(), any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.logSearch(eq(taskId), any())).thenReturn(Mono.empty());
         when(slskd.searchResults("Common People Pulp 1995")).thenReturn(Mono.just(SlskdFixtures.searchState("new-1", false, "InProgress")));
     }
 
@@ -89,6 +90,8 @@ class ManualSearchTest {
         verify(repository).saveSearchResults(eq(taskId), argThat(files -> files.size() == 1
                 && files.getFirst().filename().equals(file.getFilename())), eq(NOW), eq("Common People Pulp 1995"), eq("new-1"));
         assertEquals(0, search.inFlight(), "the slot is given back when the search ends");
+        // A person's typed words go on the search log as manual (no wording number), with the counts.
+        verify(repository).logSearch(taskId, new SearchLogEntry("Common People Pulp 1995", null, true, 1, 1, 1, 0, 0, 0, NOW));
     }
 
     @Test

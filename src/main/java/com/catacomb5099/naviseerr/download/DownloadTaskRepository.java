@@ -1043,6 +1043,13 @@ public class DownloadTaskRepository {
                AND (search_results_at IS NULL OR jsonb_array_length(:files::jsonb) > 0)
             """;
 
+    /** One more completed search on the song's search log (V22); a retry keeps the earlier entries. */
+    private static final String APPEND_SEARCH_LOG_SQL = """
+            UPDATE download_tasks
+               SET search_log = search_log || jsonb_build_array(:entry::jsonb)
+             WHERE task_id = :id
+            """;
+
     /** One song with what the manual picker shows: its own state and the files its search found. */
     private static final String CACHED_SEARCH_SQL = """
             SELECT task_id, phase, song_name, search_tier, candidates, candidate_index, library_path,
@@ -1715,6 +1722,20 @@ public class DownloadTaskRepository {
                 .bind("now", now), "query", query), "searchId", searchId)
                 .fetch()
                 .rowsUpdated();
+    }
+
+    /**
+     * Adds one completed search to the song's search log (search learning, V22). Never fails the caller: a log that
+     * misses an entry costs a report its detail, a failed write here must not cost a search or a song.
+     */
+    public Mono<Void> logSearch(UUID taskId, SearchLogEntry entry) {
+        return Mono.fromCallable(() -> objectMapper.writeValueAsString(entry))
+                .flatMap(json -> client.sql(APPEND_SEARCH_LOG_SQL).bind("id", taskId).bind("entry", json).fetch().rowsUpdated())
+                .onErrorResume(error -> {
+                    log.warn("Could not add search '{}' to the search log of song {}", entry.wording(), taskId, error);
+                    return Mono.empty();
+                })
+                .then();
     }
 
     /** One song of one download with its remembered files; empty when the ids do not match a row. */
