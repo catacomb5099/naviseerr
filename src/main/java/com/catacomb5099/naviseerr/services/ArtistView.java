@@ -28,7 +28,12 @@ import java.util.Objects;
  *                       but gives no browseId for it. {@code iconURL} is YouTube's predictable
  *                       per-video thumbnail, since the adapter's artist answer carries no artwork for them.
  *                       {@code plays} is YouTube's wording ("1.7B plays"), null from an adapter that
- *                       sends none.
+ *                       sends none. Up to {@value #MAX}: since adapter 20-10-2026 the first ten rows of
+ *                       YouTube's "Top songs" playlist, the page's five from an older adapter.
+ * @param topSongsPlaylistId that "Top songs" playlist's bare id ({@code OLAK5uy_...}, the {@code VL} browse
+ *                       prefix stripped like every {@code Playlist.id}), for the web app's "Show all"; it
+ *                       opens through {@code /collections/{id}?type=PLAYLIST}. Null from an older adapter
+ *                       and for an artist whose page has no songs shelf.
  * @param albums         {@code artists} is {@code [this artist's name]} and {@code artistIds} is
  *                       {@code [the requested id]}: the shelf lists only the artist's own releases
  *                       and the adapter gives no per-album artists. In the adapter's order, which is
@@ -43,7 +48,7 @@ import java.util.Objects;
  *                       (no extra call); {@code ""} when the adapter sends none.
  */
 public record ArtistView(String id, String name, String iconURL, String description, String subscribers,
-                         List<Track> topSongs, List<Album> albums, List<Album> singles,
+                         List<Track> topSongs, String topSongsPlaylistId, List<Album> albums, List<Album> singles,
                          List<Playlist> playlists, List<Artist> similarArtists) {
 
     static final int MAX = 10;
@@ -69,6 +74,7 @@ public record ArtistView(String id, String name, String iconURL, String descript
                 .toList();
         return new ArtistView(requestedId, orEmpty(artist.getName()), orEmpty(artist.getThumbnailUrl()),
                 artist.getDescription(), artist.getSubscribers(), topSongs,
+                artist.getSongsPlaylistId() == null ? null : artist.getSongsPlaylistId().replaceFirst("^VL", ""),
                 albums(artist.getAlbums(), ownName, ownId, MAX_ALBUMS), albums(artist.getSingles(), ownName, ownId, MAX),
                 orEmpty(playlists).stream().limit(MAX).toList(), similar);
     }

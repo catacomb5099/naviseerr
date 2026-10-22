@@ -171,8 +171,9 @@ public final class YtMusicDetailResponse {
          */
         private Integer trackNumber;
         /**
-         * YouTube's own wording ("28M plays"). Present on album tracks and an artist's top songs, null
-         * on playlist rows. Passed through, never parsed: the adapter warns the figure is lossy upstream.
+         * YouTube's own wording ("28M plays"). Present on album tracks, an artist's top songs and the rows
+         * of an artist's "Top songs" playlist, null on other playlists' rows. Passed through, never parsed:
+         * the adapter warns the figure is lossy upstream.
          */
         private String views;
         /**
@@ -201,6 +202,12 @@ public final class YtMusicDetailResponse {
         private String subscribers;
         private String thumbnailUrl;
         private List<Track> topSongs;
+        /**
+         * YouTube's own "Top songs" playlist for the artist ({@code VLOLAK5uy_...}, about 150 songs), whose
+         * first rows are {@code topSongs}. Null from an adapter older than 20-10-2026 and for an artist
+         * whose page has no songs shelf.
+         */
+        private String songsPlaylistId;
         private List<AlbumStub> albums;
         private List<AlbumStub> singles;
         private List<RelatedArtist> related;
