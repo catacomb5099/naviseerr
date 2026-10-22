@@ -38,6 +38,7 @@ public class NavidromeClient {
     /** Subsonic error codes (subsonic.org/pages/api.jsp): wrong credentials, and not allowed for this user. */
     static final int WRONG_CREDENTIALS = 40;
     static final int NOT_AUTHORISED = 50;
+    static final int NOT_FOUND = 70;
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -125,6 +126,39 @@ public class NavidromeClient {
                         .mapNotNull(response -> SongFinder.byPathOrTags(wanted, songs(response.path("searchResult3"))).orElse(null)))
                 .next()
                 .onErrorMap(SubsonicError.class, e -> new MediaServerException(describe("search", e)));
+    }
+
+    /**
+     * {@code getPlaylist}: its songs, and "not editable" when Navidrome marks it read-only for naviseerr's own
+     * account and that account owns it (an imported or smart playlist; for another user's playlist an admin sees
+     * read-only too, yet may add to it). Empty when Navidrome has no such playlist.
+     */
+    public Mono<MediaPlaylist> playlist(String playlistId) {
+        Connection c = current;
+        return call(c, "getPlaylist", Map.of("id", playlistId))
+                .map(response -> {
+                    JsonNode playlist = response.path("playlist");
+                    boolean ours = c.username().equals(playlist.path("owner").asString(""));
+                    return new MediaPlaylist(ours && playlist.path("readonly").asBoolean(false),
+                            songs(playlist).stream().map(SongFinder.Candidate::id).toList());
+                })
+                .onErrorResume(SubsonicError.class, e -> e.code == NOT_FOUND ? Mono.empty()
+                        : Mono.error(new MediaServerException(describe("playlist", e))));
+    }
+
+    /**
+     * {@code updatePlaylist?songIdToAdd=}: allowed for any user's playlist with an admin login; refused (Subsonic 50)
+     * for an imported or smart one, and "not found" (70) once the playlist is gone. Measured on Navidrome 0.64.2.
+     */
+    public Mono<Void> addToPlaylist(String playlistId, String songId) {
+        return call(current, "updatePlaylist", Map.of("playlistId", playlistId, "songIdToAdd", songId))
+                .onErrorMap(SubsonicError.class, e -> switch (e.code) {
+                    case NOT_FOUND -> new PlaylistProblem(PlaylistProblem.Reason.PLAYLIST_GONE, "Navidrome has no such playlist any more.");
+                    case NOT_AUTHORISED -> new PlaylistProblem(PlaylistProblem.Reason.NOT_EDITABLE,
+                            "Navidrome does not let songs be added to this playlist (imported or smart).");
+                    default -> new MediaServerException(describe("playlist change", e));
+                })
+                .then();
     }
 
     /** The songs of a Subsonic answer ({@code searchResult3}, a playlist), with every artist text each one carries. */

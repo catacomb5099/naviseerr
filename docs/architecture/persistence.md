@@ -315,6 +315,17 @@ latest wording; null on older rows, which fall back to the derived wording and t
 statement. (V20 belongs to custom playlists in the same sweep.) Decision:
 [persistent-manual-search-20-10-2026.md](../decisions/persistent-manual-search-20-10-2026.md).
 
+### V23: `playlist_additions` (add to your own playlist once downloaded, 21-10-2026)
+
+[V23__playlist_additions.sql](../../src/main/resources/db/migration/V23__playlist_additions.sql) adds one row per song
+and media-server playlist someone chose before they had the song (`POST /playlist-additions`, for Feishin):
+`media_server` (`NAVIDROME`/`JELLYFIN`), the server's own `playlist_id`, `jellyfin_user_id` (the owner, Jellyfin only),
+the `download_id` + `youtube_id` that name the song's task, `position` (album order), `requested_at`, `next_try_at` and
+`tries` (the adder's back-off), `last_error`, `media_item_id`, `added_at`, `gave_up_at` + `gave_up_reason`. Unique on
+(server, playlist, song): asked again = the same row, re-armed. A partial index on `next_try_at` for rows neither added
+nor given up keeps the idle 15 s pass to an empty index scan. Read and written only by
+`mediaserver/PlaylistAdditionRepository`. Decision: [playlist-additions-21-10-2026.md](../decisions/playlist-additions-21-10-2026.md).
+
 ## Entity and status
 
 - [Download.java](../../src/main/java/com/catacomb5099/naviseerr/download/Download.java) - `@Table("downloads")`, `@Id @Column("download_id") UUID downloadId`, plus `youtubeId`, `downloadType` (`DownloadType`), `songName`, `status` (`DownloadStatus`), `createdAt` (`Instant`). Lombok `@Data/@Builder`. One `@Id` only, on `downloadId`; a second would make R2DBC treat that column as the identity.
